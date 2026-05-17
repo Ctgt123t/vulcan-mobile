@@ -1,0 +1,26 @@
+export const colors = {
+  bg: "#0f1117",
+  surface: "#16181f",
+  surface2: "#1a1d27",
+  accent: "#e07d2a",
+  accentHover: "#f08a35",
+  accentFade: "rgba(224, 125, 42, 0.12)",
+  text: "#d1d5db",
+  muted: "#6b7280",
+  heading: "#ffffff",
+  border: "#2a2d38",
+  borderStrong: "#353846",
+  userBg: "#162420",
+  userBorder: "#2a4030",
+  dangerBg: "#2a161a",
+  dangerBorder: "#4a2229",
+  dangerText: "#f4a8a8",
+  warnBg: "#2a2218",
+  warnBorder: "#4a3a22",
+  warnText: "#e8b365",
+  okBg: "#15241c",
+  okBorder: "#2a4030",
+  okText: "#7fcf9f",
+};
+
+export const HIT_TARGET = 48;
