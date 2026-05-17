@@ -143,8 +143,26 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+function buildRecallBlock(recalls) {
+  const lines = ["Active NHTSA recalls for this vehicle (year/make/model):", ""];
+  recalls.forEach((r, i) => {
+    const header = `${i + 1}. ${r.component || "(component unspecified)"}${
+      r.campaignNumber ? ` — campaign ${r.campaignNumber}` : ""
+    }`;
+    lines.push(header);
+    if (r.summary) lines.push(`   Summary: ${r.summary}`);
+    if (r.consequence) lines.push(`   Consequence: ${r.consequence}`);
+    if (r.remedy) lines.push(`   Remedy: ${r.remedy}`);
+    lines.push("");
+  });
+  lines.push(
+    "If any of these recalls plausibly relate to the technician's presenting complaint, call them out explicitly in your response — reference the campaign number and explain why it may be relevant. Do not invent recalls beyond this list.",
+  );
+  return lines.join("\n");
+}
+
 app.post("/api/diagnose", async (req, res) => {
-  const { vehicle, messages } = req.body ?? {};
+  const { vehicle, messages, recalls } = req.body ?? {};
 
   if (!vehicle || typeof vehicle !== "object") {
     return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
@@ -156,17 +174,26 @@ app.post("/api/diagnose", async (req, res) => {
     return res.status(400).json({ error: "First message must be from the user." });
   }
 
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const systemBlocks = [
+    {
+      type: "text",
+      text: SYSTEM_PROMPT,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+  if (recallsArr.length > 0) {
+    systemBlocks.push({
+      type: "text",
+      text: buildRecallBlock(recallsArr),
+    });
+  }
+
   try {
     const response = await client.messages.create({
       model: "claude-opus-4-7",
       max_tokens: 8192,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
+      system: systemBlocks,
       tools: TOOLS,
       tool_choice: { type: "any" },
       messages: buildMessages(vehicle, messages),
