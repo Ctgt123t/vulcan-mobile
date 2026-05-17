@@ -12,28 +12,31 @@ export interface ChatMessage {
   content: string;
 }
 
-export interface CostRange {
-  min: number;
-  max: number;
-  currency: string;
-}
-
 export interface FinalDiagnosis {
   root_cause: string;
   reasoning: string;
   urgency: "low" | "medium" | "high";
-  estimated_cost_range: CostRange;
-  repair_procedure: string[];
   safety_warnings: string[];
+  relevant_recall_campaigns: string[];
 }
 
 export type AssistantTurn =
   | { kind: "question"; question: string; diagnosis: null }
   | { kind: "diagnosis"; question: null; diagnosis: FinalDiagnosis };
 
+export interface Recall {
+  campaignNumber: string;
+  component: string;
+  summary: string;
+  consequence: string;
+  remedy: string;
+  reportReceivedDate?: string;
+}
+
 export interface DiagnoseRequest {
   vehicle: VehicleInfo;
   messages: ChatMessage[];
+  recalls?: Recall[];
 }
 
 export interface DiagnoseResponse {

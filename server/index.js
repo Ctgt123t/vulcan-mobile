@@ -20,12 +20,12 @@ Every turn you must do exactly one of the following:
 
 1. If you do not yet have enough information to commit, call ask_followup_question with one focused, high-signal question — a specific test result, a clarifying symptom detail, or a hypothesis you want to rule out. Ask one thing at a time. Do not ask for information the technician already provided.
 
-2. Once the picture is clear enough to commit, call provide_diagnosis with the most likely root cause, your reasoning, urgency, estimated cost range, an ordered repair procedure, and any hazards specific to this repair.
+2. Once the picture is clear enough to commit, call provide_diagnosis with the most likely root cause, your reasoning, urgency, any hazards specific to this repair, and the NHTSA campaign numbers of any recalls (from the recall list, if one was provided) that are directly related to the diagnosed root cause.
 
 Guidelines:
 - Reason like a working mechanic. Prefer simpler, common failure modes first, but follow the evidence wherever it points.
-- Cost estimates should be realistic USD ranges reflecting typical independent shop labor and parts unless context suggests otherwise.
 - Safety warnings cover hazards specific to this diagnosis or repair (hot exhaust, fuel under pressure, suspended loads, airbag/SRS, refrigerant). Return an empty array if none apply.
+- relevant_recall_campaigns must only include campaign numbers from the recall list provided to you in a separate system block. Only include a recall if it shares the same component or failure mode as your diagnosed root cause. Be conservative — when in doubt, exclude. Return an empty array if no recall list was provided or no recalls are directly related.
 - You MUST respond by calling exactly one of the two tools. Never produce a plain-text response.`;
 
 const TOOLS = [
@@ -47,7 +47,7 @@ const TOOLS = [
   {
     name: "provide_diagnosis",
     description:
-      "Commit to a final diagnosis with root cause, reasoning, urgency, cost estimate, ordered repair procedure, and any safety warnings.",
+      "Commit to a final diagnosis with root cause, reasoning, urgency, any safety warnings, and the NHTSA campaign numbers of recalls directly related to the diagnosis.",
     input_schema: {
       type: "object",
       properties: {
@@ -65,37 +65,25 @@ const TOOLS = [
           enum: ["low", "medium", "high"],
           description: "How quickly the customer should address this.",
         },
-        estimated_cost_range: {
-          type: "object",
-          properties: {
-            min: { type: "number" },
-            max: { type: "number" },
-            currency: {
-              type: "string",
-              description: "Three-letter ISO currency code, e.g. USD.",
-            },
-          },
-          required: ["min", "max", "currency"],
-        },
-        repair_procedure: {
-          type: "array",
-          items: { type: "string" },
-          description: "Ordered list of repair steps in plain language.",
-        },
         safety_warnings: {
           type: "array",
           items: { type: "string" },
           description:
             "Hazards specific to this diagnosis or repair. Empty array if none.",
         },
+        relevant_recall_campaigns: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "NHTSA campaign numbers, taken verbatim from the recall list provided in the system context, that are directly related to this diagnosis. Only include recalls whose component or failure mode matches the diagnosed root cause. Empty array if none or if no recall list was provided.",
+        },
       },
       required: [
         "root_cause",
         "reasoning",
         "urgency",
-        "estimated_cost_range",
-        "repair_procedure",
         "safety_warnings",
+        "relevant_recall_campaigns",
       ],
     },
   },
@@ -156,7 +144,7 @@ function buildRecallBlock(recalls) {
     lines.push("");
   });
   lines.push(
-    "If any of these recalls plausibly relate to the technician's presenting complaint, call them out explicitly in your response — reference the campaign number and explain why it may be relevant. Do not invent recalls beyond this list.",
+    "When you commit to a final diagnosis via provide_diagnosis, populate relevant_recall_campaigns with the NHTSA campaign numbers (taken verbatim from the list above) of recalls that are DIRECTLY related to your diagnosed root cause — same component or same failure mode. Be conservative: when in doubt, exclude. Return an empty array if none are directly related. Do not invent recalls beyond this list.",
   );
   return lines.join("\n");
 }

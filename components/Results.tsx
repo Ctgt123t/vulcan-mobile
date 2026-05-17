@@ -2,11 +2,6 @@ import { StyleSheet, Text, View } from "react-native";
 import type { FinalDiagnosis } from "../lib/types";
 import { colors } from "../lib/theme";
 
-function formatCost(min: number, max: number, currency: string): string {
-  const symbol = currency === "USD" ? "$" : `${currency} `;
-  return `${symbol}${min.toLocaleString()} – ${symbol}${max.toLocaleString()}`;
-}
-
 const URGENCY_STYLES: Record<
   FinalDiagnosis["urgency"],
   { bg: string; border: string; text: string }
@@ -45,38 +40,8 @@ export default function Results({ data }: { data: FinalDiagnosis }) {
               Urgency: {data.urgency}
             </Text>
           </View>
-          <View
-            style={[
-              styles.badge,
-              {
-                backgroundColor: colors.surface2,
-                borderColor: colors.borderStrong,
-              },
-            ]}
-          >
-            <Text style={[styles.badgeText, { color: colors.accent }]}>
-              Est. cost:{" "}
-              {formatCost(
-                data.estimated_cost_range.min,
-                data.estimated_cost_range.max,
-                data.estimated_cost_range.currency,
-              )}
-            </Text>
-          </View>
         </View>
       </View>
-
-      {data.repair_procedure.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>REPAIR PROCEDURE</Text>
-          {data.repair_procedure.map((step, i) => (
-            <View key={i} style={styles.stepRow}>
-              <Text style={styles.stepNumber}>{i + 1}.</Text>
-              <Text style={styles.stepText}>{step}</Text>
-            </View>
-          ))}
-        </View>
-      )}
 
       {data.safety_warnings.length > 0 && (
         <View style={[styles.card, styles.safetyCard]}>
@@ -148,23 +113,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.5,
     textTransform: "uppercase",
-  },
-  stepRow: {
-    flexDirection: "row",
-    marginBottom: 6,
-    gap: 8,
-  },
-  stepNumber: {
-    color: colors.accent,
-    fontWeight: "600",
-    fontSize: 14,
-    minWidth: 22,
-  },
-  stepText: {
-    flex: 1,
-    color: colors.text,
-    fontSize: 14,
-    lineHeight: 21,
   },
   warningRow: {
     flexDirection: "row",
