@@ -15,7 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import Results from "../components/Results";
 import VehicleBar from "../components/VehicleBar";
-import { DiagnoseError, diagnose } from "../lib/api";
+import { DiagnoseError, diagnose, healthCheck, type HealthResult } from "../lib/api";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type { AssistantTurn, ChatMessage, VehicleInfo } from "../lib/types";
 
@@ -38,8 +38,17 @@ export default function Screen() {
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [health, setHealth] = useState<HealthResult | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
 
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
+
+  useEffect(() => {
+    console.log(
+      "[app] startup EXPO_PUBLIC_API_BASE_URL =",
+      JSON.stringify(process.env.EXPO_PUBLIC_API_BASE_URL),
+    );
+  }, []);
 
   useEffect(() => {
     if (phase === "chat") {
@@ -49,6 +58,14 @@ export default function Screen() {
       return () => clearTimeout(id);
     }
   }, [messages.length, loading, phase]);
+
+  async function onTestHealth() {
+    setHealthLoading(true);
+    setHealth(null);
+    const result = await healthCheck();
+    setHealth(result);
+    setHealthLoading(false);
+  }
 
   function updateVehicle<K extends keyof VehicleInfo>(
     field: K,
@@ -149,6 +166,42 @@ export default function Screen() {
               Technician-side diagnostic assistant. Enter the vehicle and the
               presenting complaint to begin.
             </Text>
+
+            <View style={styles.debugCard}>
+              <Text style={styles.debugLabel}>BACKEND</Text>
+              <Text style={styles.debugUrl} numberOfLines={2}>
+                {process.env.EXPO_PUBLIC_API_BASE_URL ?? "(unset)"}
+              </Text>
+              <TouchableOpacity
+                style={[styles.debugBtn, healthLoading && styles.submitDisabled]}
+                onPress={onTestHealth}
+                disabled={healthLoading}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.debugBtnText}>
+                  {healthLoading ? "Pinging /health…" : "Test /health"}
+                </Text>
+              </TouchableOpacity>
+              {health && (
+                <View
+                  style={[
+                    styles.debugResult,
+                    health.ok ? styles.debugOk : styles.debugFail,
+                  ]}
+                >
+                  <Text style={styles.debugResultText}>
+                    {health.ok
+                      ? `OK ${health.status} — ${health.body}`
+                      : health.error
+                        ? `FAIL — ${health.error}`
+                        : `FAIL ${health.status} — ${health.body || "(empty body)"}`}
+                  </Text>
+                  <Text style={styles.debugResultUrl} numberOfLines={2}>
+                    {health.url}
+                  </Text>
+                </View>
+              )}
+            </View>
 
             <View style={styles.card}>
               <View style={styles.row3}>
@@ -425,6 +478,68 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 8,
     padding: 16,
+  },
+  debugCard: {
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14,
+  },
+  debugLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.8,
+    color: colors.muted,
+    marginBottom: 6,
+  },
+  debugUrl: {
+    fontSize: 12,
+    color: colors.text,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    marginBottom: 10,
+  },
+  debugBtn: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  debugBtnText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  debugResult: {
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+  },
+  debugOk: {
+    backgroundColor: colors.surface2,
+    borderColor: colors.border,
+  },
+  debugFail: {
+    backgroundColor: colors.dangerBg,
+    borderColor: colors.dangerBorder,
+  },
+  debugResultText: {
+    fontSize: 12,
+    color: colors.text,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  debugResultUrl: {
+    marginTop: 4,
+    fontSize: 11,
+    color: colors.muted,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   row3: {
     flexDirection: "row",

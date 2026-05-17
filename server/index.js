@@ -160,7 +160,6 @@ app.post("/api/diagnose", async (req, res) => {
     const response = await client.messages.create({
       model: "claude-opus-4-7",
       max_tokens: 8192,
-      thinking: { type: "adaptive" },
       system: [
         {
           type: "text",
