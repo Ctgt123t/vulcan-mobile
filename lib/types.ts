@@ -18,6 +18,7 @@ export interface FinalDiagnosis {
   urgency: "low" | "medium" | "high";
   safety_warnings: string[];
   relevant_recall_campaigns: string[];
+  relevant_tsb_numbers: string[];
 }
 
 export type AssistantTurn =
@@ -33,11 +34,28 @@ export interface Recall {
   reportReceivedDate?: string;
 }
 
+export interface Tsb {
+  number: string;
+  component: string;
+  summary: string;
+  date?: string;
+}
+
 export interface DiagnoseRequest {
   vehicle: VehicleInfo;
   messages: ChatMessage[];
   recalls?: Recall[];
 }
+
+export type ItemStatus = "good" | "attention" | "urgent" | null;
+
+export interface InspectionItem {
+  status: ItemStatus;
+  notes: string;
+  photoUri?: string;
+}
+
+export type InspectionItems = Record<string, InspectionItem>;
 
 export interface DiagnoseResponse {
   turn: AssistantTurn;

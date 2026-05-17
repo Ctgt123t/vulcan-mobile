@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -20,6 +20,7 @@ import QuickReplies, {
 } from "../components/QuickReplies";
 import RecallList from "../components/RecallList";
 import Results from "../components/Results";
+import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import {
@@ -27,11 +28,10 @@ import {
   VinDecodeError,
   decodeVin,
   diagnose,
-  healthCheck,
   isLikelyVin,
-  type HealthResult,
 } from "../lib/api";
 import { fetchRecalls } from "../lib/recalls";
+import { fetchTsbs } from "../lib/tsbs";
 import {
   type DiagnosticRecord,
   type RecordOutcome,
@@ -44,6 +44,7 @@ import type {
   ChatMessage,
   FinalDiagnosis,
   Recall,
+  Tsb,
   VehicleInfo,
 } from "../lib/types";
 
@@ -66,8 +67,6 @@ export default function Screen() {
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<HealthResult | null>(null);
-  const [healthLoading, setHealthLoading] = useState(false);
 
   const [vin, setVin] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -81,16 +80,10 @@ export default function Screen() {
   const [savingRecord, setSavingRecord] = useState(false);
 
   const [recalls, setRecalls] = useState<Recall[]>([]);
-  const lastRecallKeyRef = useRef<string>("");
+  const [tsbs, setTsbs] = useState<Tsb[]>([]);
+  const lastIssuesKeyRef = useRef<string>("");
 
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
-
-  useEffect(() => {
-    console.log(
-      "[app] startup EXPO_PUBLIC_API_BASE_URL =",
-      JSON.stringify(process.env.EXPO_PUBLIC_API_BASE_URL),
-    );
-  }, []);
 
   useEffect(() => {
     if (phase === "chat") {
@@ -107,12 +100,13 @@ export default function Screen() {
     const mo = vehicle.model.trim();
     if (!y || !m || !mo) {
       setRecalls([]);
-      lastRecallKeyRef.current = "";
+      setTsbs([]);
+      lastIssuesKeyRef.current = "";
       return;
     }
     const key = `${y}|${m.toLowerCase()}|${mo.toLowerCase()}`;
-    if (lastRecallKeyRef.current === key) return;
-    lastRecallKeyRef.current = key;
+    if (lastIssuesKeyRef.current === key) return;
+    lastIssuesKeyRef.current = key;
     let cancelled = false;
     fetchRecalls(y, m, mo)
       .then((rs) => {
@@ -120,6 +114,13 @@ export default function Screen() {
       })
       .catch(() => {
         if (!cancelled) setRecalls([]);
+      });
+    fetchTsbs(y, m, mo)
+      .then((ts) => {
+        if (!cancelled) setTsbs(ts);
+      })
+      .catch(() => {
+        if (!cancelled) setTsbs([]);
       });
     return () => {
       cancelled = true;
@@ -158,22 +159,7 @@ export default function Screen() {
       .finally(() => setDecoding(false));
   }, [vin]);
 
-  async function onTestHealth() {
-    setHealthLoading(true);
-    setHealth(null);
-    const result = await healthCheck();
-    setHealth(result);
-    setHealthLoading(false);
-  }
-
-  function updateVehicle<K extends keyof VehicleInfo>(
-    field: K,
-    value: VehicleInfo[K],
-  ) {
-    setVehicle((v) => ({ ...v, [field]: value }));
-  }
-
-  function lastAssistantTurn(): AssistantTurn | null {
+  const latestTurn = useMemo<AssistantTurn | null>(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "assistant") {
         try {
@@ -184,13 +170,35 @@ export default function Screen() {
       }
     }
     return null;
+  }, [messages]);
+  const isFinal = latestTurn?.kind === "diagnosis";
+  const showQuickReplies =
+    latestTurn?.kind === "question" &&
+    typeof latestTurn.question === "string" &&
+    looksLikeYesNo(latestTurn.question);
+  const relevantRecalls = useMemo(() => {
+    if (latestTurn?.kind !== "diagnosis") return [];
+    const ids = new Set(latestTurn.diagnosis.relevant_recall_campaigns ?? []);
+    return recalls.filter((r) => ids.has(r.campaignNumber));
+  }, [latestTurn, recalls]);
+  const relevantTsbs = useMemo(() => {
+    if (latestTurn?.kind !== "diagnosis") return [];
+    const ids = new Set(latestTurn.diagnosis.relevant_tsb_numbers ?? []);
+    return tsbs.filter((t) => ids.has(t.number));
+  }, [latestTurn, tsbs]);
+
+  function updateVehicle<K extends keyof VehicleInfo>(
+    field: K,
+    value: VehicleInfo[K],
+  ) {
+    setVehicle((v) => ({ ...v, [field]: value }));
   }
 
   async function callApi(nextMessages: ChatMessage[]): Promise<void> {
     setLoading(true);
     setError(null);
     try {
-      const turn = await diagnose(vehicle, nextMessages, recalls);
+      const turn = await diagnose(vehicle, nextMessages, recalls, tsbs);
       setMessages([
         ...nextMessages,
         { role: "assistant", content: JSON.stringify(turn) },
@@ -256,6 +264,7 @@ export default function Screen() {
     snapshot: ChatMessage[],
   ) {
     const record: DiagnosticRecord = {
+      type: "diagnosis",
       id: makeRecordId(),
       date: new Date().toISOString(),
       vehicle,
@@ -276,16 +285,14 @@ export default function Screen() {
   }
 
   async function onConfirmDiagnosis() {
-    const turn = lastAssistantTurn();
-    if (turn?.kind !== "diagnosis" || !turn.diagnosis) return;
-    await persistRecord("confirmed", turn.diagnosis, messages);
+    if (latestTurn?.kind !== "diagnosis") return;
+    await persistRecord("confirmed", latestTurn.diagnosis, messages);
     setConfirmedDone(true);
   }
 
   async function onRejectDiagnosis() {
-    const turn = lastAssistantTurn();
-    if (turn?.kind !== "diagnosis" || !turn.diagnosis) return;
-    await persistRecord("incorrect", turn.diagnosis, messages);
+    if (latestTurn?.kind !== "diagnosis") return;
+    await persistRecord("incorrect", latestTurn.diagnosis, messages);
     const rejection =
       "That diagnosis was not correct — the indicated fix did not resolve the issue. Continue investigating: ask any additional clarifying questions you need, then commit to a different diagnosis.";
     await sendUserMessage(rejection);
@@ -304,25 +311,10 @@ export default function Screen() {
     setVehicle(EMPTY_VEHICLE);
     setConfirmedDone(false);
     setRecalls([]);
+    setTsbs([]);
     lastDecodedRef.current = "";
-    lastRecallKeyRef.current = "";
+    lastIssuesKeyRef.current = "";
   }
-
-  const latestTurn = lastAssistantTurn();
-  const isFinal = latestTurn?.kind === "diagnosis";
-  const showQuickReplies =
-    latestTurn?.kind === "question" &&
-    typeof latestTurn.question === "string" &&
-    looksLikeYesNo(latestTurn.question);
-  const relevantRecalls =
-    isFinal && latestTurn?.kind === "diagnosis"
-      ? (() => {
-          const ids = new Set(
-            latestTurn.diagnosis.relevant_recall_campaigns ?? [],
-          );
-          return recalls.filter((r) => ids.has(r.campaignNumber));
-        })()
-      : [];
 
   if (phase === "intake") {
     return (
@@ -342,42 +334,6 @@ export default function Screen() {
               Scan the VIN on the driver door jamb sticker, or enter it
               manually. Vehicle details auto-populate from NHTSA.
             </Text>
-
-            <View style={styles.debugCard}>
-              <Text style={styles.debugLabel}>BACKEND</Text>
-              <Text style={styles.debugUrl} numberOfLines={2}>
-                {process.env.EXPO_PUBLIC_API_BASE_URL ?? "(unset)"}
-              </Text>
-              <TouchableOpacity
-                style={[styles.debugBtn, healthLoading && styles.submitDisabled]}
-                onPress={onTestHealth}
-                disabled={healthLoading}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.debugBtnText}>
-                  {healthLoading ? "Pinging /health…" : "Test /health"}
-                </Text>
-              </TouchableOpacity>
-              {health && (
-                <View
-                  style={[
-                    styles.debugResult,
-                    health.ok ? styles.debugOk : styles.debugFail,
-                  ]}
-                >
-                  <Text style={styles.debugResultText}>
-                    {health.ok
-                      ? `OK ${health.status} — ${health.body}`
-                      : health.error
-                        ? `FAIL — ${health.error}`
-                        : `FAIL ${health.status} — ${health.body || "(empty body)"}`}
-                  </Text>
-                  <Text style={styles.debugResultUrl} numberOfLines={2}>
-                    {health.url}
-                  </Text>
-                </View>
-              )}
-            </View>
 
             <View style={styles.card}>
               <Text style={styles.label}>VIN</Text>
@@ -584,6 +540,7 @@ export default function Screen() {
               {relevantRecalls.length > 0 && (
                 <RecallList recalls={relevantRecalls} />
               )}
+              {relevantTsbs.length > 0 && <TsbList tsbs={relevantTsbs} />}
               {error && (
                 <View style={styles.errorBox}>
                   <Text style={styles.errorText}>{error}</Text>
@@ -693,7 +650,9 @@ function MessageRow({ message }: { message: ChatMessage }) {
     return (
       <View style={styles.userWrap}>
         <View style={[styles.bubble, styles.bubbleUser]}>
-          <Text style={styles.bubbleText}>{message.content}</Text>
+          <Text style={[styles.bubbleText, styles.bubbleTextUser]}>
+            {message.content}
+          </Text>
         </View>
       </View>
     );
@@ -764,68 +723,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 8,
     padding: 16,
-  },
-  debugCard: {
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 14,
-  },
-  debugLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    color: colors.muted,
-    marginBottom: 6,
-  },
-  debugUrl: {
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    marginBottom: 10,
-  },
-  debugBtn: {
-    minHeight: 36,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    backgroundColor: colors.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  debugBtnText: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  debugResult: {
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-  },
-  debugOk: {
-    backgroundColor: colors.surface2,
-    borderColor: colors.border,
-  },
-  debugFail: {
-    backgroundColor: colors.dangerBg,
-    borderColor: colors.dangerBorder,
-  },
-  debugResultText: {
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  debugResultUrl: {
-    marginTop: 4,
-    fontSize: 11,
-    color: colors.muted,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   row3: {
     flexDirection: "row",
@@ -1023,6 +920,9 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     lineHeight: 22,
+  },
+  bubbleTextUser: {
+    color: colors.userText,
   },
   loadingRow: {
     flexDirection: "row",

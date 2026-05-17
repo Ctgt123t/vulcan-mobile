@@ -20,12 +20,14 @@ Every turn you must do exactly one of the following:
 
 1. If you do not yet have enough information to commit, call ask_followup_question with one focused, high-signal question — a specific test result, a clarifying symptom detail, or a hypothesis you want to rule out. Ask one thing at a time. Do not ask for information the technician already provided.
 
-2. Once the picture is clear enough to commit, call provide_diagnosis with the most likely root cause, your reasoning, urgency, any hazards specific to this repair, and the NHTSA campaign numbers of any recalls (from the recall list, if one was provided) that are directly related to the diagnosed root cause.
+2. Once the picture is clear enough to commit, call provide_diagnosis with the most likely root cause, your reasoning, urgency, any hazards specific to this repair, the NHTSA campaign numbers of any recalls (from the recall list, if one was provided) that are directly related to the diagnosed root cause, and the NHTSA item numbers of any TSBs (from the TSB list, if provided) that are directly related.
 
 Guidelines:
 - Reason like a working mechanic. Prefer simpler, common failure modes first, but follow the evidence wherever it points.
 - Safety warnings cover hazards specific to this diagnosis or repair (hot exhaust, fuel under pressure, suspended loads, airbag/SRS, refrigerant). Return an empty array if none apply.
 - relevant_recall_campaigns must only include campaign numbers from the recall list provided to you in a separate system block. Only include a recall if it shares the same component or failure mode as your diagnosed root cause. Be conservative — when in doubt, exclude. Return an empty array if no recall list was provided or no recalls are directly related.
+- relevant_tsb_numbers must only include NHTSA item numbers from the TSB list provided to you. Only include a TSB if it shares the same component or symptom as the diagnosed root cause. Be conservative.
+- If a TSB plausibly matches the presenting complaint, mention it briefly in your question or reasoning text so the technician can investigate the documented fix early — reference the TSB number explicitly. Do not invent TSBs beyond the list.
 - You MUST respond by calling exactly one of the two tools. Never produce a plain-text response.`;
 
 const TOOLS = [
@@ -77,6 +79,12 @@ const TOOLS = [
           description:
             "NHTSA campaign numbers, taken verbatim from the recall list provided in the system context, that are directly related to this diagnosis. Only include recalls whose component or failure mode matches the diagnosed root cause. Empty array if none or if no recall list was provided.",
         },
+        relevant_tsb_numbers: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "NHTSA item numbers, taken verbatim from the TSB list provided in the system context, that are directly related to this diagnosis. Only include TSBs whose component or symptom matches the diagnosed root cause. Empty array if none or if no TSB list was provided.",
+        },
       },
       required: [
         "root_cause",
@@ -84,6 +92,7 @@ const TOOLS = [
         "urgency",
         "safety_warnings",
         "relevant_recall_campaigns",
+        "relevant_tsb_numbers",
       ],
     },
   },
@@ -149,8 +158,28 @@ function buildRecallBlock(recalls) {
   return lines.join("\n");
 }
 
+function buildTsbBlock(tsbs) {
+  const lines = [
+    "NHTSA Technical Service Bulletins (TSBs) on file for this vehicle:",
+    "",
+  ];
+  tsbs.forEach((t, i) => {
+    const header = `${i + 1}. TSB ${t.number || "(unknown)"}${
+      t.component ? ` — ${t.component}` : ""
+    }`;
+    lines.push(header);
+    if (t.summary) lines.push(`   Summary: ${t.summary}`);
+    if (t.date) lines.push(`   Issued: ${t.date}`);
+    lines.push("");
+  });
+  lines.push(
+    "If any of these TSBs match the technician's presenting complaint, mention the TSB by number in your question or reasoning so the documented manufacturer fix can be checked early. When you commit to a final diagnosis, populate relevant_tsb_numbers with the item numbers (taken verbatim from the list above) of TSBs whose component or symptom matches your diagnosed root cause. Be conservative — when in doubt, exclude. Return an empty array if none are directly related. Do not invent TSBs beyond this list.",
+  );
+  return lines.join("\n");
+}
+
 app.post("/api/diagnose", async (req, res) => {
-  const { vehicle, messages, recalls } = req.body ?? {};
+  const { vehicle, messages, recalls, tsbs } = req.body ?? {};
 
   if (!vehicle || typeof vehicle !== "object") {
     return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
@@ -163,6 +192,7 @@ app.post("/api/diagnose", async (req, res) => {
   }
 
   const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
   const systemBlocks = [
     {
       type: "text",
@@ -174,6 +204,12 @@ app.post("/api/diagnose", async (req, res) => {
     systemBlocks.push({
       type: "text",
       text: buildRecallBlock(recallsArr),
+    });
+  }
+  if (tsbsArr.length > 0) {
+    systemBlocks.push({
+      type: "text",
+      text: buildTsbBlock(tsbsArr),
     });
   }
 

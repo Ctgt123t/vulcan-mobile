@@ -2,65 +2,140 @@ import type {
   AssistantTurn,
   ChatMessage,
   DiagnoseResponse,
+  Recall,
+  Tsb,
   VehicleInfo,
 } from "./types";
 
-const RAW_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "";
-const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
-
-console.log(
-  "[api] EXPO_PUBLIC_API_BASE_URL (raw) =",
-  JSON.stringify(RAW_BASE_URL),
+const BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(
+  /\/+$/,
+  "",
 );
-console.log("[api] BASE_URL (normalized) =", JSON.stringify(BASE_URL));
-if (BASE_URL && !/^https?:\/\//i.test(BASE_URL)) {
-  console.warn(
-    "[api] BASE_URL is missing the 'http://' or 'https://' scheme — fetch will throw.",
-  );
+
+// Cap the conversation length we send to Claude. The first message carries the
+// vehicle context built server-side, so we always keep it; the trailing window
+// must start with an assistant turn to preserve user/assistant alternation.
+const HISTORY_LIMIT = 20;
+
+function truncateForApi(messages: ChatMessage[]): ChatMessage[] {
+  if (messages.length <= HISTORY_LIMIT) return messages;
+  const first = messages[0];
+  let tail = messages.slice(-(HISTORY_LIMIT - 1));
+  while (tail.length > 0 && tail[0].role === "user") {
+    tail = tail.slice(1);
+  }
+  return [first, ...tail];
 }
 
 export class DiagnoseError extends Error {}
+export class VinDecodeError extends Error {}
 
-export type HealthResult = {
-  ok: boolean;
-  status: number;
-  body: string;
-  url: string;
-  error?: string;
-};
+export interface VinDecoded {
+  year: string;
+  make: string;
+  model: string;
+  trim: string;
+  engineType: string;
+}
 
-export async function healthCheck(): Promise<HealthResult> {
-  const url = `${BASE_URL}/health`;
-  console.log("[health] GET", url);
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { "ngrok-skip-browser-warning": "true" },
-    });
-    const body = await res.text();
-    console.log("[health] status =", res.status, res.statusText);
-    console.log("[health] body =", body);
-    return { ok: res.ok, status: res.status, body, url };
-  } catch (err) {
-    const e = err as Error;
-    console.log("[health] fetch threw:", e.name, "-", e.message);
-    return {
-      ok: false,
-      status: 0,
-      body: "",
-      url,
-      error: `${e.name}: ${e.message}`,
-    };
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i;
+
+export function isLikelyVin(value: string): boolean {
+  return VIN_RE.test(value.trim());
+}
+
+function titleCase(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (m) => m.toUpperCase())
+    .trim();
+}
+
+function buildEngineType(displacementL: string, cyl: string): string {
+  const parts: string[] = [];
+  if (displacementL) {
+    const n = Number(displacementL);
+    if (Number.isFinite(n) && n > 0) parts.push(`${n.toFixed(1)}L`);
   }
+  if (cyl) {
+    const n = Number(cyl);
+    if (Number.isFinite(n) && n > 0) parts.push(`${n}-cyl`);
+  }
+  return parts.join(" ");
+}
+
+export async function decodeVin(vin: string): Promise<VinDecoded> {
+  const clean = vin.trim().toUpperCase();
+  if (!isLikelyVin(clean)) {
+    throw new VinDecodeError(
+      "That doesn't look like a 17-character VIN. Check for typos.",
+    );
+  }
+  const url = `https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/${clean}?format=json`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET" });
+  } catch {
+    throw new VinDecodeError(
+      "Couldn't reach NHTSA. Check your connection and try again.",
+    );
+  }
+
+  if (!res.ok) {
+    throw new VinDecodeError(`NHTSA returned ${res.status}.`);
+  }
+
+  type NhtsaRow = {
+    ModelYear?: string;
+    Make?: string;
+    Model?: string;
+    Trim?: string;
+    Trim2?: string;
+    EngineCylinders?: string;
+    DisplacementL?: string;
+    ErrorCode?: string;
+    ErrorText?: string;
+  };
+
+  let payload: { Results?: NhtsaRow[] };
+  try {
+    payload = await res.json();
+  } catch {
+    throw new VinDecodeError("NHTSA returned an unreadable response.");
+  }
+
+  const row = payload.Results?.[0];
+  if (!row) {
+    throw new VinDecodeError("NHTSA returned no results for that VIN.");
+  }
+
+  if (!row.Make && !row.Model && !row.ModelYear) {
+    const err = (row.ErrorText ?? "Could not decode VIN.").split(";")[0];
+    throw new VinDecodeError(err);
+  }
+
+  return {
+    year: (row.ModelYear ?? "").trim(),
+    make: row.Make ? titleCase(row.Make) : "",
+    model: row.Model ? titleCase(row.Model) : "",
+    trim: row.Trim ? titleCase(row.Trim) : row.Trim2 ? titleCase(row.Trim2) : "",
+    engineType: buildEngineType(
+      row.DisplacementL ?? "",
+      row.EngineCylinders ?? "",
+    ),
+  };
 }
 
 export async function diagnose(
   vehicle: VehicleInfo,
   messages: ChatMessage[],
+  recalls: Recall[] = [],
+  tsbs: Tsb[] = [],
 ): Promise<AssistantTurn> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
-      "EXPO_PUBLIC_API_BASE_URL is not set. See DEV_SETUP.md.",
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
     );
   }
 
@@ -69,44 +144,35 @@ export async function diagnose(
     "Content-Type": "application/json",
     "ngrok-skip-browser-warning": "true",
   };
-  const bodyStr = JSON.stringify({ vehicle, messages });
-
-  console.log("[diagnose] POST", url);
-  console.log("[diagnose] headers =", headers);
-  console.log("[diagnose] body bytes =", bodyStr.length);
+  const bodyStr = JSON.stringify({
+    vehicle,
+    messages: truncateForApi(messages),
+    recalls,
+    tsbs,
+  });
 
   let res: Response;
   try {
     res = await fetch(url, { method: "POST", headers, body: bodyStr });
-  } catch (err) {
-    const e = err as Error;
-    console.log("[diagnose] fetch threw:", e.name, "-", e.message);
+  } catch {
     throw new DiagnoseError(
-      `Network error (${e.name}: ${e.message}). URL: ${url}`,
+      "Network error. Check your connection and try again.",
     );
   }
-
-  console.log("[diagnose] status =", res.status, res.statusText);
 
   let raw: string;
   try {
     raw = await res.text();
-  } catch (err) {
-    const e = err as Error;
-    console.log("[diagnose] read body threw:", e.message);
-    throw new DiagnoseError(`Could not read response body (${res.status}).`);
+  } catch {
+    throw new DiagnoseError(`Couldn't read server response (${res.status}).`);
   }
-  console.log(
-    "[diagnose] body =",
-    raw.length > 500 ? `${raw.slice(0, 500)}… (${raw.length} bytes)` : raw,
-  );
 
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch {
     throw new DiagnoseError(
-      `Invalid JSON from server (${res.status}). First bytes: ${raw.slice(0, 120)}`,
+      `Server returned an unexpected response (${res.status}).`,
     );
   }
 
