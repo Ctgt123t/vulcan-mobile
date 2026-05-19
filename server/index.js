@@ -14,6 +14,53 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 const client = new Anthropic();
 
+const OVERLOAD_STATUS = 529;
+const OVERLOAD_RETRY_DELAY_MS = 3000;
+const OVERLOAD_MAX_RETRIES = 3;
+const OVERLOAD_USER_MESSAGE =
+  "Vulcan is experiencing high demand right now. Please try again in a moment.";
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Wraps an Anthropic messages.create() call and retries on 529 overloaded
+// responses with a fixed 3s delay, up to OVERLOAD_MAX_RETRIES additional
+// attempts. Non-overload errors are re-thrown immediately. The mobile client
+// stays in its `loading` state for the entire wait so the "Thinking…"
+// indicator remains visible during retries.
+async function callAnthropicWithRetry(fn) {
+  let lastErr;
+  for (let attempt = 0; attempt <= OVERLOAD_MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const overloaded =
+        err instanceof Anthropic.APIError && err.status === OVERLOAD_STATUS;
+      if (!overloaded || attempt === OVERLOAD_MAX_RETRIES) {
+        throw err;
+      }
+      console.warn(
+        `[anthropic] overloaded (529), retry ${attempt + 1}/${OVERLOAD_MAX_RETRIES} in ${OVERLOAD_RETRY_DELAY_MS}ms`,
+      );
+      await sleep(OVERLOAD_RETRY_DELAY_MS);
+    }
+  }
+  throw lastErr;
+}
+
+function respondWithError(res, err, contextLabel) {
+  console.error(`${contextLabel} error:`, err);
+  if (err instanceof Anthropic.APIError && err.status === OVERLOAD_STATUS) {
+    return res.status(503).json({ error: OVERLOAD_USER_MESSAGE });
+  }
+  if (err instanceof Anthropic.APIError) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+  return res.status(500).json({ error: "Internal error." });
+}
+
 const SYSTEM_PROMPT = `You are a senior master automotive technician working alongside a qualified technician on a real vehicle. The technician describes the customer's complaint and the inspection results they have collected so far. Your job is to reach a correct diagnosis in the fewest steps possible, starting with the least invasive and most accessible checks first — exactly how a working master tech triages.
 
 Every turn you must do exactly one of the following:
@@ -231,14 +278,16 @@ app.post("/api/diagnose", async (req, res) => {
   }
 
   try {
-    const response = await client.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 8192,
-      system: systemBlocks,
-      tools: TOOLS,
-      tool_choice: { type: "any" },
-      messages: buildMessages(vehicle, messages),
-    });
+    const response = await callAnthropicWithRetry(() =>
+      client.messages.create({
+        model: "claude-opus-4-7",
+        max_tokens: 8192,
+        system: systemBlocks,
+        tools: TOOLS,
+        tool_choice: { type: "any" },
+        messages: buildMessages(vehicle, messages),
+      }),
+    );
 
     const toolUse = response.content.find((b) => b.type === "tool_use");
     if (!toolUse) {
@@ -269,11 +318,7 @@ app.post("/api/diagnose", async (req, res) => {
 
     return res.status(502).json({ error: `Unexpected tool: ${toolUse.name}` });
   } catch (err) {
-    console.error("diagnose error:", err);
-    if (err instanceof Anthropic.APIError) {
-      return res.status(err.status ?? 500).json({ error: err.message });
-    }
-    return res.status(500).json({ error: "Internal error." });
+    return respondWithError(res, err, "diagnose");
   }
 });
 
@@ -332,12 +377,14 @@ app.post("/api/ask", async (req, res) => {
   }
 
   try {
-    const response = await client.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 2048,
-      system: systemBlocks,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    });
+    const response = await callAnthropicWithRetry(() =>
+      client.messages.create({
+        model: "claude-opus-4-7",
+        max_tokens: 2048,
+        system: systemBlocks,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      }),
+    );
 
     const text = response.content
       .filter((b) => b.type === "text")
@@ -347,11 +394,7 @@ app.post("/api/ask", async (req, res) => {
 
     return res.json({ text });
   } catch (err) {
-    console.error("ask error:", err);
-    if (err instanceof Anthropic.APIError) {
-      return res.status(err.status ?? 500).json({ error: err.message });
-    }
-    return res.status(500).json({ error: "Internal error." });
+    return respondWithError(res, err, "ask");
   }
 });
 
