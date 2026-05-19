@@ -260,6 +260,84 @@ app.post("/api/diagnose", async (req, res) => {
   }
 });
 
+const ASK_SYSTEM_PROMPT = `You are Vulcan, a knowledgeable master automotive technician acting as a colleague to a working tech. You help with any automotive question — specs, procedures, fluid capacities, technical service bulletins, recalls, how systems work, and informal diagnostic guidance when the conversation goes there.
+
+Be conversational, friendly, and practical. You are a colleague, not a formal diagnostic system.
+
+Guidelines:
+- Answer any automotive-related question freely and conversationally.
+- If a question requires a specific vehicle and no vehicle context has been provided, ask the technician for the year, make, model, and any other relevant details before answering.
+- If you don't know something or aren't confident, say so clearly. Use phrases like "I'm not certain on that one — I'd recommend verifying with an OEM source." Do not guess.
+- If the conversation naturally moves toward diagnosing a specific problem, follow it and offer diagnostic guidance, but do not force a formal final diagnosis unless the technician explicitly asks for one.
+- If a vehicle has been provided and the question touches on recalls or TSBs, reference any matching items from the recall/TSB context blocks by their campaign or item number. Do not invent recalls or TSBs beyond what is provided.
+- Respond in plain text. No tools, no JSON, no structured output. Just a helpful answer.`;
+
+app.post("/api/ask", async (req, res) => {
+  const { messages, vehicle, recalls, tsbs } = req.body ?? {};
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "Missing or empty 'messages'." });
+  }
+  if (messages[0].role !== "user") {
+    return res
+      .status(400)
+      .json({ error: "First message must be from the user." });
+  }
+
+  const systemBlocks = [
+    {
+      type: "text",
+      text: ASK_SYSTEM_PROMPT,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+
+  if (vehicle && typeof vehicle === "object") {
+    const head = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
+      .filter((s) => s && String(s).trim().length > 0)
+      .join(" ");
+    if (head.length > 0) {
+      const lines = ["Vehicle context provided by the technician:"];
+      lines.push(`Vehicle: ${head}`);
+      if (vehicle.engineType) lines.push(`Engine: ${vehicle.engineType}`);
+      if (vehicle.mileage) lines.push(`Mileage: ${vehicle.mileage}`);
+      systemBlocks.push({ type: "text", text: lines.join("\n") });
+    }
+  }
+
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  if (recallsArr.length > 0) {
+    systemBlocks.push({ type: "text", text: buildRecallBlock(recallsArr) });
+  }
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
+  if (tsbsArr.length > 0) {
+    systemBlocks.push({ type: "text", text: buildTsbBlock(tsbsArr) });
+  }
+
+  try {
+    const response = await client.messages.create({
+      model: "claude-opus-4-7",
+      max_tokens: 2048,
+      system: systemBlocks,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    });
+
+    const text = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+
+    return res.json({ text });
+  } catch (err) {
+    console.error("ask error:", err);
+    if (err instanceof Anthropic.APIError) {
+      return res.status(err.status ?? 500).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Internal error." });
+  }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Vulcan backend listening on http://0.0.0.0:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);

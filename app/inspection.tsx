@@ -108,7 +108,7 @@ export default function Screen() {
     return () => clearTimeout(t);
   }, [draftLoaded, phase, vehicle, vin, items]);
 
-  // VIN decode effect — same pattern as troubleshoot.
+  // VIN decode effect — same pattern as the Diagnose screen.
   useEffect(() => {
     const trimmed = vin.trim().toUpperCase();
     if (!isLikelyVin(trimmed)) {
@@ -351,9 +351,9 @@ export default function Screen() {
             contentContainerStyle={styles.intakeContent}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.h1}>Inspection</Text>
+            <Text style={styles.h1}>Inspection Report</Text>
             <Text style={styles.subtitle}>
-              Identify the vehicle to begin a multi-point inspection.
+              Identify the vehicle to begin a multi-point inspection report.
             </Text>
 
             <View style={styles.card}>
@@ -488,7 +488,7 @@ export default function Screen() {
                 disabled={!intakeValid()}
                 activeOpacity={0.85}
               >
-                <Text style={styles.submitText}>Begin inspection</Text>
+                <Text style={styles.submitText}>Begin inspection report</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -512,9 +512,10 @@ export default function Screen() {
           <View style={styles.doneIconWrap}>
             <Ionicons name="checkmark" size={48} color="#FFFFFF" />
           </View>
-          <Text style={styles.doneTitle}>Inspection saved</Text>
+          <Text style={styles.doneTitle}>Inspection report saved</Text>
           <Text style={styles.doneBody}>
-            The report PDF has been generated and the inspection is in Records.
+            The report PDF has been generated and the inspection report is in
+            Records.
           </Text>
           {shareUri && (
             <TouchableOpacity
@@ -536,7 +537,7 @@ export default function Screen() {
             onPress={resetSession}
             activeOpacity={0.85}
           >
-            <Text style={styles.newBtnText}>Start new inspection</Text>
+            <Text style={styles.newBtnText}>Start new inspection report</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

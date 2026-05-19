@@ -186,3 +186,63 @@ export async function diagnose(
 
   return (json as DiagnoseResponse).turn;
 }
+
+export async function ask(
+  messages: ChatMessage[],
+  vehicle?: VehicleInfo,
+  recalls: Recall[] = [],
+  tsbs: Tsb[] = [],
+): Promise<string> {
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new DiagnoseError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+
+  const url = `${BASE_URL}/api/ask`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "ngrok-skip-browser-warning": "true",
+  };
+  const bodyStr = JSON.stringify({
+    messages: truncateForApi(messages),
+    vehicle,
+    recalls,
+    tsbs,
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: bodyStr });
+  } catch {
+    throw new DiagnoseError(
+      "Network error. Check your connection and try again.",
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch {
+    throw new DiagnoseError(`Couldn't read server response (${res.status}).`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new DiagnoseError(
+      `Server returned an unexpected response (${res.status}).`,
+    );
+  }
+
+  if (!res.ok) {
+    const msg =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : `Request failed (${res.status}).`;
+    throw new DiagnoseError(msg);
+  }
+
+  return (json as { text: string }).text ?? "";
+}

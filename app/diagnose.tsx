@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -30,6 +31,7 @@ import {
   diagnose,
   isLikelyVin,
 } from "../lib/api";
+import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { fetchRecalls } from "../lib/recalls";
 import { fetchTsbs } from "../lib/tsbs";
 import {
@@ -60,6 +62,7 @@ const EMPTY_VEHICLE: VehicleInfo = {
 type Phase = "intake" | "chat";
 
 export default function Screen() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("intake");
   const [vehicle, setVehicle] = useState<VehicleInfo>(EMPTY_VEHICLE);
   const [symptom, setSymptom] = useState("");
@@ -84,6 +87,22 @@ export default function Screen() {
   const lastIssuesKeyRef = useRef<string>("");
 
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
+
+  // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill the
+  // intake. We don't auto-submit — the technician confirms the vehicle and
+  // symptom before the diagnostic conversation starts.
+  useEffect(() => {
+    let active = true;
+    consumeHandoff("to_diagnose").then((h) => {
+      if (!active || !h) return;
+      if (h.vehicle) setVehicle((v) => ({ ...v, ...h.vehicle }));
+      if (h.vin) setVin(h.vin);
+      if (h.symptom) setSymptom(h.symptom);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (phase === "chat") {
@@ -258,6 +277,39 @@ export default function Screen() {
     setScannerOpen(false);
   }
 
+  async function onSwitchToAsk() {
+    // Carry vehicle context + the diagnostic conversation (rendered as plain
+    // text for Ask Vulcan's flat format) so the technician can ask a general
+    // question without dropping the thread.
+    const askMessages: ChatMessage[] = messages.map((m) => {
+      if (m.role === "user") return m;
+      try {
+        const turn = JSON.parse(m.content) as AssistantTurn;
+        if (turn.kind === "question") {
+          return { role: "assistant", content: turn.question };
+        }
+        if (turn.kind === "diagnosis") {
+          return {
+            role: "assistant",
+            content: `${turn.diagnosis.root_cause}\n\n${turn.diagnosis.reasoning}`,
+          };
+        }
+      } catch {
+        // fall through
+      }
+      return { role: "assistant", content: m.content };
+    });
+    await setHandoff({
+      type: "to_ask",
+      vehicle,
+      vin: vin.trim() || undefined,
+      messages: askMessages,
+      recalls,
+      tsbs,
+    });
+    router.replace("/ask");
+  }
+
   async function persistRecord(
     outcome: RecordOutcome,
     diagnosis: FinalDiagnosis,
@@ -329,7 +381,7 @@ export default function Screen() {
             contentContainerStyle={styles.intakeContent}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.h1}>Troubleshoot</Text>
+            <Text style={styles.h1}>Diagnose</Text>
             <Text style={styles.subtitle}>
               Scan the VIN on the driver door jamb sticker, or enter it
               manually. Vehicle details auto-populate from NHTSA.
@@ -580,6 +632,17 @@ export default function Screen() {
               {showQuickReplies && (
                 <QuickReplies onSelect={onQuickReply} disabled={loading} />
               )}
+              <TouchableOpacity
+                style={styles.switchLink}
+                onPress={onSwitchToAsk}
+                activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel="Switch to Ask Vulcan"
+              >
+                <Text style={styles.switchLinkText}>
+                  Switch to Ask Vulcan ›
+                </Text>
+              </TouchableOpacity>
               <View style={styles.answerRow}>
                 <TextInput
                   style={styles.answerInput}
@@ -970,6 +1033,20 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 15,
     letterSpacing: 0.3,
+  },
+  switchLink: {
+    minHeight: HIT_TARGET - 12,
+    alignSelf: "flex-end",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+    marginTop: 4,
+  },
+  switchLinkText: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
   },
   answerRow: {
     flexDirection: "row",
