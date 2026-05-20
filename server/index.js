@@ -2,6 +2,20 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  dtcStats,
+  extractDtcCodes,
+  formatDtcAnswer,
+  formatDtcContextBlock,
+  lookupDtc,
+} from "./dtcDatabase.js";
+import {
+  buildCacheKey,
+  cacheStats,
+  getCached,
+  isCacheableQuestion,
+  setCached,
+} from "./cache.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -204,6 +218,13 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/metrics", (_req, res) => {
+  res.json({
+    cache: cacheStats(),
+    dtc: dtcStats(),
+  });
+});
+
 function buildRecallBlock(recalls) {
   const lines = ["Active NHTSA recalls for this vehicle (year/make/model):", ""];
   recalls.forEach((r, i) => {
@@ -376,6 +397,85 @@ app.post("/api/ask", async (req, res) => {
     systemBlocks.push({ type: "text", text: buildTsbBlock(tsbsArr) });
   }
 
+  // ------------------------------------------------------------------------
+  // Hybrid retrieval layer (Ask Vulcan only — Diagnose is untouched).
+  //
+  //   1. DTC lookup — extract any DTC codes from the latest user message.
+  //      If the message is essentially a code lookup ("P0300?"), return
+  //      the database entry directly without touching Claude.
+  //
+  //   2. DTC + question — if the message has a code AND a real question,
+  //      inject verified definitions into the system context so Claude
+  //      can't hallucinate them, then fall through to Claude.
+  //
+  //   3. Response cache — for single-turn factual questions with a known
+  //      vehicle, look up a previous answer in the 30-day cache. If hit,
+  //      return without calling Claude. If miss, call Claude and store
+  //      the response.
+  //
+  // To extend with new sources (fluid capacities, torque specs, etc.),
+  // add another retrieval step before the Claude call below and follow
+  // the same pattern: lookup → return directly if exhaustive, or inject
+  // context and continue.
+  // ------------------------------------------------------------------------
+
+  const lastUserMsg = messages[messages.length - 1];
+  const lastUserText =
+    lastUserMsg && lastUserMsg.role === "user" ? String(lastUserMsg.content) : "";
+
+  // 1 & 2: DTC lookup
+  const dtcCodes = extractDtcCodes(lastUserText);
+  const dtcEntries = dtcCodes
+    .map((c) => lookupDtc(c))
+    .filter((e) => e !== null);
+
+  if (dtcEntries.length > 0) {
+    // Strip the DTC tokens to see what remains of the question. If the
+    // remainder is essentially empty or just filler ("what is", "explain"),
+    // we can answer entirely from the database.
+    const stripped = lastUserText
+      .replace(/\b([PBCU])([0-9A-F])([0-9A-F]{3})\b/gi, "")
+      .replace(/\b(what|is|does|mean|the|code|explain|tell|me|about|a|an)\b/gi, "")
+      .replace(/[?.!,]/g, "")
+      .trim();
+
+    if (stripped.length < 8) {
+      const text = dtcEntries.map(formatDtcAnswer).join("\n\n---\n\n");
+      console.log(
+        `[retrieval] DTC direct-answer: ${dtcCodes.join(", ")} (no Claude call)`,
+      );
+      return res.json({ text });
+    }
+
+    // Mixed: DTC + real question. Inject verified definitions and continue.
+    systemBlocks.push({
+      type: "text",
+      text: formatDtcContextBlock(dtcEntries),
+    });
+    console.log(
+      `[retrieval] DTC context injected: ${dtcCodes.join(", ")} (Claude still called)`,
+    );
+  }
+
+  // 3: Response cache (only single-turn factual questions with a vehicle)
+  const cacheEligible =
+    messages.length === 1 &&
+    vehicle &&
+    typeof vehicle === "object" &&
+    vehicle.year &&
+    vehicle.make &&
+    vehicle.model &&
+    isCacheableQuestion(lastUserText);
+
+  let cacheKey = null;
+  if (cacheEligible) {
+    cacheKey = buildCacheKey(vehicle, lastUserText);
+    const hit = getCached(cacheKey);
+    if (hit) {
+      return res.json({ text: hit });
+    }
+  }
+
   try {
     const response = await callAnthropicWithRetry(() =>
       client.messages.create({
@@ -391,6 +491,10 @@ app.post("/api/ask", async (req, res) => {
       .map((b) => b.text)
       .join("")
       .trim();
+
+    if (cacheKey && text.length > 0) {
+      setCached(cacheKey, vehicle, lastUserText, text);
+    }
 
     return res.json({ text });
   } catch (err) {
