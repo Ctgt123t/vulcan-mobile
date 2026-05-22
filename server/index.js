@@ -7,6 +7,7 @@ import {
   extractDtcCodes,
   formatDtcAnswer,
   formatDtcContextBlock,
+  isDtcCode,
   lookupDtc,
 } from "./dtcDatabase.js";
 import {
@@ -223,6 +224,21 @@ app.get("/metrics", (_req, res) => {
     cache: cacheStats(),
     dtc: dtcStats(),
   });
+});
+
+// Single-code DTC lookup against the curated SAE database. Returns 404 when
+// the code isn't in the database OR a pattern handler — callers can then
+// fall back to Claude for interpretation.
+app.get("/api/dtc/:code", (req, res) => {
+  const raw = String(req.params.code || "").toUpperCase();
+  if (!isDtcCode(raw)) {
+    return res.status(400).json({ error: "Invalid DTC format." });
+  }
+  const entry = lookupDtc(raw);
+  if (!entry) {
+    return res.status(404).json({ error: "Code not in database." });
+  }
+  return res.json(entry);
 });
 
 function buildRecallBlock(recalls) {

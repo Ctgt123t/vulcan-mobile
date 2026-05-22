@@ -41,6 +41,15 @@ export interface Tsb {
   date?: string;
 }
 
+export interface DtcDefinition {
+  code: string;
+  shortDescription: string;
+  detailedDescription: string;
+  system: string;
+  commonCauses: string[];
+  urgency: "low" | "medium" | "high";
+}
+
 export interface DiagnoseRequest {
   vehicle: VehicleInfo;
   messages: ChatMessage[];

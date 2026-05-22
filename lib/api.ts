@@ -2,6 +2,7 @@ import type {
   AssistantTurn,
   ChatMessage,
   DiagnoseResponse,
+  DtcDefinition,
   Recall,
   Tsb,
   VehicleInfo,
@@ -245,4 +246,44 @@ export async function ask(
   }
 
   return (json as { text: string }).text ?? "";
+}
+
+// Looks up a DTC against the backend's curated SAE database (plus pattern
+// handlers for cylinder-specific codes). Returns the entry if found, null on
+// 404. All other failures throw — callers may want to distinguish "not in
+// database" (legitimate miss, fall back to Claude) from "couldn't reach
+// the backend".
+export async function fetchDtcDefinition(
+  code: string,
+): Promise<DtcDefinition | null> {
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new DiagnoseError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+  const clean = code.trim().toUpperCase();
+  const url = `${BASE_URL}/api/dtc/${encodeURIComponent(clean)}`;
+  const headers: Record<string, string> = {
+    "ngrok-skip-browser-warning": "true",
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", headers });
+  } catch {
+    throw new DiagnoseError(
+      "Network error. Check your connection and try again.",
+    );
+  }
+
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new DiagnoseError(`DTC lookup failed (${res.status}).`);
+  }
+
+  try {
+    return (await res.json()) as DtcDefinition;
+  } catch {
+    throw new DiagnoseError("Server returned an unexpected response.");
+  }
 }
