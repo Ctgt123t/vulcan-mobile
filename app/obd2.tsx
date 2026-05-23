@@ -111,10 +111,21 @@ export default function Obd2Screen() {
   }, [isConnected]);
 
   async function onScanForAdapters() {
+    obd2.clearDiscovered();
     setScanning(true);
     setPickerOpen(true);
     try {
-      await obd2.startScan(12000);
+      await obd2.startScan(20000);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function onScanAgain() {
+    obd2.clearDiscovered();
+    setScanning(true);
+    try {
+      await obd2.startScan(20000);
     } finally {
       setScanning(false);
     }
@@ -514,6 +525,7 @@ export default function Obd2Screen() {
         obdDevices={visibleObd}
         otherDevices={visibleOther}
         onSelect={onSelectDevice}
+        onScanAgain={onScanAgain}
         onClose={() => {
           setPickerOpen(false);
           obd2.stopScan();
@@ -758,6 +770,12 @@ function FreezeCell({ label, value }: { label: string; value: string }) {
 
 // ---------- Device picker modal ----------
 
+type PickerRow =
+  | { kind: "obd-header" }
+  | { kind: "other-header" }
+  | { kind: "other-note" }
+  | { kind: "device"; device: DiscoveredDevice };
+
 function DevicePicker({
   visible,
   scanning,
@@ -765,6 +783,7 @@ function DevicePicker({
   obdDevices,
   otherDevices,
   onSelect,
+  onScanAgain,
   onClose,
 }: {
   visible: boolean;
@@ -773,8 +792,21 @@ function DevicePicker({
   obdDevices: DiscoveredDevice[];
   otherDevices: DiscoveredDevice[];
   onSelect: (d: DiscoveredDevice) => void;
+  onScanAgain: () => void;
   onClose: () => void;
 }) {
+  const rows: PickerRow[] = [
+    ...(obdDevices.length > 0 ? [{ kind: "obd-header" as const }] : []),
+    ...obdDevices.map((d) => ({ kind: "device" as const, device: d })),
+    ...(otherDevices.length > 0
+      ? [
+          { kind: "other-header" as const },
+          { kind: "other-note" as const },
+        ]
+      : []),
+    ...otherDevices.map((d) => ({ kind: "device" as const, device: d })),
+  ];
+
   return (
     <Modal
       visible={visible}
@@ -796,24 +828,18 @@ function DevicePicker({
         </View>
 
         <FlatList
-          data={[
-            ...(obdDevices.length > 0
-              ? [{ kind: "header" as const, title: "Likely OBD2 adapters" }]
-              : []),
-            ...obdDevices.map((d) => ({ kind: "device" as const, device: d })),
-            ...(otherDevices.length > 0
-              ? [{ kind: "header" as const, title: "Other devices" }]
-              : []),
-            ...otherDevices.map((d) => ({ kind: "device" as const, device: d })),
-          ]}
-          keyExtractor={(item, i) =>
-            item.kind === "header" ? `h-${item.title}` : item.device.id + i
-          }
+          data={rows}
+          keyExtractor={(item, i) => {
+            if (item.kind === "device") return `d-${item.device.id}-${i}`;
+            return `h-${item.kind}`;
+          }}
           ListHeaderComponent={
             scanning ? (
               <View style={styles.scanRow}>
                 <ActivityIndicator size="small" color={colors.accent} />
-                <Text style={styles.scanRowText}>Scanning…</Text>
+                <Text style={styles.scanRowText}>
+                  Scanning Bluetooth for up to 20 seconds…
+                </Text>
               </View>
             ) : null
           }
@@ -827,20 +853,87 @@ function DevicePicker({
               </View>
             ) : null
           }
-          renderItem={({ item }) =>
-            item.kind === "header" ? (
-              <Text style={styles.listHeader}>{item.title}</Text>
-            ) : (
+          ListFooterComponent={
+            <View style={styles.scanAgainWrap}>
+              <TouchableOpacity
+                style={[
+                  styles.scanAgainBtn,
+                  scanning && styles.btnDisabled,
+                ]}
+                onPress={onScanAgain}
+                disabled={scanning}
+                activeOpacity={0.85}
+              >
+                {scanning ? (
+                  <View style={styles.btnLoadingRow}>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                    <Text style={styles.scanAgainText}>Scanning…</Text>
+                  </View>
+                ) : (
+                  <>
+                    <Ionicons
+                      name="refresh"
+                      size={16}
+                      color={colors.accent}
+                    />
+                    <Text style={styles.scanAgainText}>Scan again</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          }
+          renderItem={({ item }) => {
+            if (item.kind === "obd-header") {
+              return (
+                <View style={styles.sectionHeaderRow}>
+                  <Ionicons
+                    name="construct"
+                    size={14}
+                    color={colors.accent}
+                  />
+                  <Text style={styles.sectionHeaderText}>OBD2 ADAPTERS</Text>
+                </View>
+              );
+            }
+            if (item.kind === "other-header") {
+              return (
+                <View style={styles.sectionHeaderRow}>
+                  <Ionicons
+                    name="bluetooth"
+                    size={14}
+                    color={colors.muted}
+                  />
+                  <Text
+                    style={[
+                      styles.sectionHeaderText,
+                      { color: colors.muted },
+                    ]}
+                  >
+                    OTHER BLUETOOTH DEVICES
+                  </Text>
+                </View>
+              );
+            }
+            if (item.kind === "other-note") {
+              return (
+                <Text style={styles.sectionHeaderNote}>
+                  Not sure? Select your OBD2 adapter from this list if it
+                  doesn't appear above.
+                </Text>
+              );
+            }
+            return (
               <TouchableOpacity
                 style={styles.deviceRow}
                 onPress={() => onSelect(item.device)}
                 disabled={!!connecting}
                 activeOpacity={0.7}
               >
+                <SignalBars rssi={item.device.rssi} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.deviceName}>{item.device.name}</Text>
                   <Text style={styles.deviceMeta}>
-                    {item.device.id}
+                    {signalLabel(item.device.rssi)}
                     {item.device.rssi != null
                       ? `  ·  ${item.device.rssi} dBm`
                       : ""}
@@ -852,13 +945,37 @@ function DevicePicker({
                   <Text style={styles.deviceChev}>›</Text>
                 )}
               </TouchableOpacity>
-            )
-          }
-          contentContainerStyle={{ paddingBottom: 40 }}
+            );
+          }}
+          contentContainerStyle={{ paddingBottom: 16 }}
         />
       </SafeAreaView>
     </Modal>
   );
+}
+
+function SignalBars({ rssi }: { rssi: number | null }) {
+  const strength = rssi == null ? 0 : rssi >= -60 ? 3 : rssi >= -75 ? 2 : 1;
+  return (
+    <View style={styles.signalCol}>
+      <View
+        style={[styles.signalBar, styles.signalBar3, strength >= 3 && styles.signalActive]}
+      />
+      <View
+        style={[styles.signalBar, styles.signalBar2, strength >= 2 && styles.signalActive]}
+      />
+      <View
+        style={[styles.signalBar, styles.signalBar1, strength >= 1 && styles.signalActive]}
+      />
+    </View>
+  );
+}
+
+function signalLabel(rssi: number | null): string {
+  if (rssi == null) return "Unknown signal";
+  if (rssi >= -60) return "Strong signal";
+  if (rssi >= -75) return "Medium signal";
+  return "Weak signal";
 }
 
 const styles = StyleSheet.create({
@@ -1274,15 +1391,75 @@ const styles = StyleSheet.create({
   emptyWrap: {
     padding: 24,
   },
-  listHeader: {
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  sectionHeaderText: {
     color: colors.accent,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.5,
+  },
+  sectionHeaderNote: {
+    color: colors.muted,
+    fontSize: 12,
     paddingHorizontal: 20,
-    paddingTop: 16,
     paddingBottom: 6,
-    textTransform: "uppercase",
+    lineHeight: 17,
+    fontStyle: "italic",
+  },
+  signalCol: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    width: 20,
+    height: 18,
+    justifyContent: "center",
+  },
+  signalBar: {
+    width: 4,
+    backgroundColor: colors.border,
+    borderRadius: 1,
+  },
+  signalBar1: {
+    height: 6,
+  },
+  signalBar2: {
+    height: 11,
+  },
+  signalBar3: {
+    height: 16,
+  },
+  signalActive: {
+    backgroundColor: colors.accent,
+  },
+  scanAgainWrap: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    paddingBottom: 32,
+  },
+  scanAgainBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    minHeight: HIT_TARGET,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    backgroundColor: colors.accentFade,
+  },
+  scanAgainText: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 0.3,
   },
   deviceRow: {
     flexDirection: "row",
