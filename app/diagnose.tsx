@@ -15,10 +15,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import DiagnosisActions from "../components/DiagnosisActions";
 import Navbar from "../components/Navbar";
-import QuickReplies, {
-  looksLikeYesNo,
-  type QuickReply,
-} from "../components/QuickReplies";
 import RecallList from "../components/RecallList";
 import Results from "../components/Results";
 import TsbList from "../components/TsbList";
@@ -97,7 +93,12 @@ export default function Screen() {
       if (!active || !h) return;
       if (h.vehicle) setVehicle((v) => ({ ...v, ...h.vehicle }));
       if (h.vin) setVin(h.vin);
-      if (h.symptom) setSymptom(h.symptom);
+      const dtcLine =
+        h.dtcs && h.dtcs.length > 0
+          ? `OBD2 scan returned the following DTCs: ${h.dtcs.join(", ")}.`
+          : "";
+      const combined = [dtcLine, h.symptom].filter((s) => s).join("\n\n");
+      if (combined) setSymptom(combined);
     });
     return () => {
       active = false;
@@ -191,10 +192,6 @@ export default function Screen() {
     return null;
   }, [messages]);
   const isFinal = latestTurn?.kind === "diagnosis";
-  const showQuickReplies =
-    latestTurn?.kind === "question" &&
-    typeof latestTurn.question === "string" &&
-    looksLikeYesNo(latestTurn.question);
   const relevantRecalls = useMemo(() => {
     if (latestTurn?.kind !== "diagnosis") return [];
     const ids = new Set(latestTurn.diagnosis.relevant_recall_campaigns ?? []);
@@ -265,11 +262,6 @@ export default function Screen() {
 
   async function onSubmitAnswer() {
     await sendUserMessage(answer);
-  }
-
-  function onQuickReply(r: QuickReply) {
-    if (loading) return;
-    void sendUserMessage(r);
   }
 
   function handleVinScanned(scanned: string) {
@@ -629,9 +621,6 @@ export default function Screen() {
             />
           ) : (
             <>
-              {showQuickReplies && (
-                <QuickReplies onSelect={onQuickReply} disabled={loading} />
-              )}
               <TouchableOpacity
                 style={styles.switchLink}
                 onPress={onSwitchToAsk}
