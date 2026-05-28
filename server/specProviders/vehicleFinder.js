@@ -242,14 +242,18 @@ export async function lookup(vehicle, specType, _params, fetcher) {
     throw new Error(`${resource} fetch ${res.status}`);
   }
   const body = await res.json();
-  const bodyKeys = body && typeof body === "object" && !Array.isArray(body)
-    ? Object.keys(body).slice(0, 12)
-    : Array.isArray(body)
-      ? `array(${body.length})`
-      : typeof body;
-  console.log(`[vehicle-finder] ${resource} body shape: ${JSON.stringify(bodyKeys)}`);
+  // Vehicle Finder wraps every response in { data, meta }; unwrap before
+  // handing to the mapper. Tolerant of un-wrapped responses too in case
+  // some endpoints return the payload directly.
+  const inner = body && typeof body === "object" && "data" in body ? body.data : body;
+  const innerKeys = inner && typeof inner === "object" && !Array.isArray(inner)
+    ? Object.keys(inner).slice(0, 12)
+    : Array.isArray(inner)
+      ? `array(${inner.length})`
+      : typeof inner;
+  console.log(`[vehicle-finder] ${resource} inner shape: ${JSON.stringify(innerKeys)}`);
   const mapper = MAPPERS[specType];
-  const data = mapper ? mapper(body) : body;
+  const data = mapper ? mapper(inner) : inner;
   if (!data) {
     console.log(
       `[vehicle-finder] ${resource} mapped to null — raw sample: ${JSON.stringify(body).slice(0, 400)}`,
