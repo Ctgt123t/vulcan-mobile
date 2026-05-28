@@ -11,6 +11,10 @@ import {
   lookupDtc,
 } from "./dtcDatabase.js";
 import {
+  dtcFallbackStats,
+  fetchDtcFallback,
+} from "./dtcFallback.js";
+import {
   buildCacheKey,
   cacheStats,
   getCached,
@@ -244,25 +248,38 @@ app.get("/metrics", (_req, res) => {
   res.json({
     cache: cacheStats(),
     dtc: dtcStats(),
+    dtcFallback: dtcFallbackStats(),
   });
 });
 
 // Single-code DTC lookup against the SAE + manufacturer database. Optional
 // `?make=Ford` query parameter prefers a manufacturer-specific definition
 // when one exists; otherwise falls back to the generic SAE definition.
-// Returns 404 when the code isn't in the database OR a pattern handler —
-// callers can then fall back to Claude for interpretation.
-app.get("/api/dtc/:code", (req, res) => {
+//
+// When the static database AND the pattern handlers both miss, fall through
+// to a one-shot Claude call (see dtcFallback.js). Results are persisted to
+// dtcCache.json so every missed code only hits Claude once — every later
+// lookup is served from cache. Claude failures surface as 5xx and are NOT
+// cached, so the next request retries.
+app.get("/api/dtc/:code", async (req, res) => {
   const raw = String(req.params.code || "").toUpperCase();
   if (!isDtcCode(raw)) {
     return res.status(400).json({ error: "Invalid DTC format." });
   }
   const make = typeof req.query.make === "string" ? req.query.make : null;
+
   const entry = lookupDtc(raw, make);
-  if (!entry) {
-    return res.status(404).json({ error: "Code not in database." });
+  if (entry) return res.json(entry);
+
+  // Fallback: ask Claude, cache, return.
+  try {
+    const fallbackEntry = await fetchDtcFallback(raw, make, (params) =>
+      callAnthropicWithRetry(() => client.messages.create(params)),
+    );
+    return res.json(fallbackEntry);
+  } catch (err) {
+    return respondWithError(res, err, "dtc-fallback");
   }
-  return res.json(entry);
 });
 
 function buildRecallBlock(recalls) {
