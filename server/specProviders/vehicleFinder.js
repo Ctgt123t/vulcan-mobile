@@ -252,6 +252,12 @@ export async function lookup(vehicle, specType, _params, fetcher) {
       ? `array(${inner.length})`
       : typeof inner;
   console.log(`[vehicle-finder] ${resource} inner shape: ${JSON.stringify(innerKeys)}`);
+  // One-shot: dump the full inner payload (truncated) so we can see nested
+  // field names and fix mappers without another deploy cycle. Remove once
+  // every supported resource has a verified mapper.
+  console.log(
+    `[vehicle-finder] ${resource} raw inner: ${JSON.stringify(inner).slice(0, 1500)}`,
+  );
   const mapper = MAPPERS[specType];
   const data = mapper ? mapper(inner) : inner;
   if (!data) {
