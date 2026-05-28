@@ -60,16 +60,39 @@ async function resolveVehicleId(vehicle, fetcher) {
     model: String(vehicle.model),
   });
   const url = `${BASE_URL}/vehicles?${params.toString()}`;
+  console.log(`[vehicle-finder] GET ${url}`);
   const res = await fetcher(url, {
     headers: { "X-API-Key": API_KEY, Accept: "application/json" },
   });
+  console.log(`[vehicle-finder] resolve status=${res.status}`);
   if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.log(`[vehicle-finder] resolve error body (truncated): ${text.slice(0, 300)}`);
     throw new Error(`vehicle resolve ${res.status}`);
   }
   const body = await res.json();
+  // Log the top-level shape of the response so we can see what keys the API
+  // actually returns vs the shapes we tolerate.
+  const topKeys = body && typeof body === "object" && !Array.isArray(body)
+    ? Object.keys(body).slice(0, 10)
+    : Array.isArray(body)
+      ? `array(${body.length})`
+      : typeof body;
+  console.log(`[vehicle-finder] resolve body shape: ${JSON.stringify(topKeys)}`);
   // Tolerant of either { results: [...] } or [...] response shapes.
   const rows = Array.isArray(body) ? body : Array.isArray(body?.results) ? body.results : [];
-  if (rows.length === 0) return null;
+  console.log(`[vehicle-finder] resolve rows=${rows.length}`);
+  if (rows.length === 0) {
+    // Print a small sample of the body to figure out the real shape — this
+    // is the most likely failure mode (different param names, or response
+    // wrapped under a different key like `data`/`vehicles`).
+    const sample = JSON.stringify(body).slice(0, 400);
+    console.log(`[vehicle-finder] resolve empty — body sample: ${sample}`);
+    return null;
+  }
+  console.log(
+    `[vehicle-finder] first row keys: ${JSON.stringify(Object.keys(rows[0] || {}).slice(0, 12))}`,
+  );
 
   // Prefer the trim match if we have one.
   let pick = rows[0];
@@ -79,7 +102,13 @@ async function resolveVehicleId(vehicle, fetcher) {
     if (exact) pick = exact;
   }
   const vid = pick.id ?? pick.vehicle_id ?? pick.vehicleId;
-  if (vid == null) return null;
+  if (vid == null) {
+    console.log(
+      `[vehicle-finder] row had no id field — sample row: ${JSON.stringify(pick).slice(0, 300)}`,
+    );
+    return null;
+  }
+  console.log(`[vehicle-finder] resolved id=${vid}`);
   idCache.set(key, vid);
   return vid;
 }
@@ -161,16 +190,36 @@ export async function lookup(vehicle, specType, _params, fetcher) {
   if (vehicleId == null) return null;
 
   const url = `${BASE_URL}/vehicles/${encodeURIComponent(vehicleId)}/${resource}`;
+  console.log(`[vehicle-finder] GET ${url}`);
   const res = await fetcher(url, {
     headers: { "X-API-Key": API_KEY, Accept: "application/json" },
   });
+  console.log(`[vehicle-finder] ${resource} status=${res.status}`);
   if (res.status === 404) return null;
   if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.log(
+      `[vehicle-finder] ${resource} error body (truncated): ${text.slice(0, 300)}`,
+    );
     throw new Error(`${resource} fetch ${res.status}`);
   }
   const body = await res.json();
+  const bodyKeys = body && typeof body === "object" && !Array.isArray(body)
+    ? Object.keys(body).slice(0, 12)
+    : Array.isArray(body)
+      ? `array(${body.length})`
+      : typeof body;
+  console.log(`[vehicle-finder] ${resource} body shape: ${JSON.stringify(bodyKeys)}`);
   const mapper = MAPPERS[specType];
   const data = mapper ? mapper(body) : body;
-  if (!data) return null;
+  if (!data) {
+    console.log(
+      `[vehicle-finder] ${resource} mapped to null — raw sample: ${JSON.stringify(body).slice(0, 400)}`,
+    );
+    return null;
+  }
+  console.log(
+    `[vehicle-finder] ${resource} mapped OK — keys: ${JSON.stringify(Object.keys(data).slice(0, 12))}`,
+  );
   return { data };
 }
