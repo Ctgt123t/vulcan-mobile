@@ -113,9 +113,9 @@ async function resolveVehicleId(vehicle, fetcher) {
 // that looks like a displacement (e.g. "3.5l", "2.7"), or a config tag
 // like "v6"/"v8"/"i4"/"ecoboost"/"diesel"/"hybrid".
 function engineTokens(s) {
-  if (typeof s !== "string") return [];
-  const lower = s.toLowerCase();
   const out = new Set();
+  if (typeof s !== "string") return out;
+  const lower = s.toLowerCase();
   // Displacement: 3.5l, 5.0, 6.7l, etc.
   const disp = lower.match(/\d\.\d\s*l?/g);
   if (disp) for (const d of disp) out.add(d.replace(/\s/g, "").replace(/l$/, ""));
