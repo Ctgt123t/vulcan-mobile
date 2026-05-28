@@ -284,8 +284,30 @@ function fmtMaintenance(d, v) {
   const head = `**${v.year} ${v.make} ${v.model} — Maintenance Schedule**`;
   const lines = [head, ""];
   const items = Array.isArray(d.items) ? d.items : [];
+  // Group consecutive tasks that share an interval so the schedule reads
+  // like an OEM service chart ("Every 5,000 mi / 6 mo:" then bullets).
+  let lastInterval = null;
   for (const i of items) {
-    lines.push(`• ${i.interval}: ${i.task}${i.notes ? ` — ${i.notes}` : ""}`);
+    const miles = i.mileageInterval != null
+      ? `${i.mileageInterval.toLocaleString()} mi`
+      : null;
+    const months = i.monthsInterval != null ? `${i.monthsInterval} mo` : null;
+    const interval = [miles, months].filter(Boolean).join(" / ") || "?";
+    if (interval !== lastInterval) {
+      if (lastInterval !== null) lines.push("");
+      lines.push(`**Every ${interval}:**`);
+      lastInterval = interval;
+    }
+    let line = `• ${i.task}`;
+    if (i.parts && i.parts.length > 0) {
+      const partsText = i.parts.map((p) => {
+        const label = [p.brand, p.partNumber].filter(Boolean).join(" ");
+        const qty = p.qty ? ` ×${p.qty}` : "";
+        return `${label}${qty}`;
+      }).join(", ");
+      line += ` — ${partsText}`;
+    }
+    lines.push(line);
   }
   return lines.join("\n");
 }

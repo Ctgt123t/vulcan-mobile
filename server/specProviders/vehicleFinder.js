@@ -190,50 +190,49 @@ function mapOil(raw) {
   };
 }
 
+// Verified against /v1/vehicles/{id}/torque-specs: bare array of rows with
+// snake_case torque values and a machine-readable `component` slug.
 function mapTorque(raw) {
-  // Expecting either an array of { fastener, ftLbs, nm, notes } or a
-  // grouped object. Normalize to { specs: [...] }.
-  if (Array.isArray(raw)) {
-    return { specs: raw.map(normalizeTorqueRow) };
-  }
-  if (raw && Array.isArray(raw.specs)) {
-    return { specs: raw.specs.map(normalizeTorqueRow) };
-  }
-  if (raw && typeof raw === "object") {
-    return {
-      specs: Object.entries(raw).map(([fastener, row]) => ({
-        fastener,
-        ...normalizeTorqueRow(row),
-      })),
-    };
-  }
-  return null;
-}
-
-function normalizeTorqueRow(row) {
-  if (!row || typeof row !== "object") return { fastener: String(row ?? "") };
+  if (!Array.isArray(raw)) return null;
   return {
-    fastener: row.fastener ?? row.name ?? row.bolt,
-    ftLbs: row.ft_lbs ?? row.ftLbs ?? row.lbf_ft,
-    nm: row.nm ?? row.newton_meters ?? row.newtonMeters,
-    notes: row.notes,
+    specs: raw.map((row) => ({
+      fastener: humanizeComponent(row.component),
+      ftLbs: row.torque_ft_lbs ?? null,
+      nm: row.torque_nm ?? null,
+      notes: row.notes ?? null,
+    })),
   };
 }
 
+function humanizeComponent(slug) {
+  if (typeof slug !== "string") return "";
+  return slug.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+// Verified against /v1/vehicles/{id}/maintenance: { schedules: [{
+//   mileage_interval, months_interval, description, parts: [{...}] }] }
 function mapMaintenance(raw) {
-  if (Array.isArray(raw)) return { items: raw.map(normalizeMaintRow) };
-  if (raw && Array.isArray(raw.items)) return { items: raw.items.map(normalizeMaintRow) };
-  if (raw && Array.isArray(raw.schedule)) return { items: raw.schedule.map(normalizeMaintRow) };
-  return null;
-}
-
-function normalizeMaintRow(row) {
-  if (!row || typeof row !== "object") return { interval: "?", task: String(row ?? "") };
-  return {
-    interval: row.interval ?? row.mileage ?? row.miles ?? row.km,
-    task: row.task ?? row.service ?? row.item ?? row.description,
-    notes: row.notes,
-  };
+  if (!raw || typeof raw !== "object") return null;
+  const schedules = Array.isArray(raw.schedules) ? raw.schedules : [];
+  if (schedules.length === 0) return null;
+  const items = schedules
+    .slice()
+    .sort((a, b) => (a.mileage_interval ?? 0) - (b.mileage_interval ?? 0))
+    .map((s) => ({
+      mileageInterval: s.mileage_interval ?? null,
+      monthsInterval: s.months_interval ?? null,
+      task: s.description ?? "",
+      parts: Array.isArray(s.parts)
+        ? s.parts.map((p) => ({
+            partType: p.part_type ?? null,
+            brand: p.brand ?? null,
+            partNumber: p.part_number ?? null,
+            description: p.description ?? null,
+            qty: p.qty ?? null,
+          }))
+        : [],
+    }));
+  return { items };
 }
 
 const MAPPERS = {
