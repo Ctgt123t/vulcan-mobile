@@ -79,28 +79,22 @@ async function resolveVehicleId(vehicle, fetcher) {
       ? `array(${body.length})`
       : typeof body;
   console.log(`[vehicle-finder] resolve body shape: ${JSON.stringify(topKeys)}`);
-  // Tolerant of either { results: [...] } or [...] response shapes.
-  const rows = Array.isArray(body) ? body : Array.isArray(body?.results) ? body.results : [];
+  // Vehicle Finder wraps the list under `data`; we also tolerate `results`
+  // and bare arrays in case other endpoints differ.
+  const rows = Array.isArray(body)
+    ? body
+    : Array.isArray(body?.data)
+      ? body.data
+      : Array.isArray(body?.results)
+        ? body.results
+        : [];
   console.log(`[vehicle-finder] resolve rows=${rows.length}`);
-  if (rows.length === 0) {
-    // Print a small sample of the body to figure out the real shape — this
-    // is the most likely failure mode (different param names, or response
-    // wrapped under a different key like `data`/`vehicles`).
-    const sample = JSON.stringify(body).slice(0, 400);
-    console.log(`[vehicle-finder] resolve empty — body sample: ${sample}`);
-    return null;
-  }
-  console.log(
-    `[vehicle-finder] first row keys: ${JSON.stringify(Object.keys(rows[0] || {}).slice(0, 12))}`,
-  );
+  if (rows.length === 0) return null;
 
-  // Prefer the trim match if we have one.
-  let pick = rows[0];
-  if (vehicle.trim) {
-    const t = String(vehicle.trim).toLowerCase().trim();
-    const exact = rows.find((r) => String(r.trim ?? "").toLowerCase().trim() === t);
-    if (exact) pick = exact;
-  }
+  // Pick the row best matching the vehicle's engineType (e.g. "3.5L V6"
+  // → row.engine "3.5L EcoBoost"). The API returns one row per engine
+  // option, so picking the right one matters for oil capacity / torque.
+  const pick = pickBestRow(rows, vehicle);
   const vid = pick.id ?? pick.vehicle_id ?? pick.vehicleId;
   if (vid == null) {
     console.log(
@@ -108,9 +102,53 @@ async function resolveVehicleId(vehicle, fetcher) {
     );
     return null;
   }
-  console.log(`[vehicle-finder] resolved id=${vid}`);
+  console.log(
+    `[vehicle-finder] resolved id=${vid} (engine=${pick.engine ?? "?"}, trim=${pick.trim ?? "?"})`,
+  );
   idCache.set(key, vid);
   return vid;
+}
+
+// Tokens we use to score row.engine against vehicle.engineType: anything
+// that looks like a displacement (e.g. "3.5l", "2.7"), or a config tag
+// like "v6"/"v8"/"i4"/"ecoboost"/"diesel"/"hybrid".
+function engineTokens(s) {
+  if (typeof s !== "string") return [];
+  const lower = s.toLowerCase();
+  const out = new Set();
+  // Displacement: 3.5l, 5.0, 6.7l, etc.
+  const disp = lower.match(/\d\.\d\s*l?/g);
+  if (disp) for (const d of disp) out.add(d.replace(/\s/g, "").replace(/l$/, ""));
+  // Config / fuel / variant keywords
+  for (const kw of ["v6", "v8", "v10", "v12", "i3", "i4", "i5", "i6", "h4", "h6",
+                    "ecoboost", "turbo", "diesel", "hybrid", "phev", "ev",
+                    "powerstroke", "duramax", "cummins", "hemi", "vtec"]) {
+    if (lower.includes(kw)) out.add(kw);
+  }
+  return out;
+}
+
+function pickBestRow(rows, vehicle) {
+  const wantEngine = engineTokens(vehicle.engineType);
+  const wantTrim = String(vehicle.trim ?? "").toLowerCase().trim();
+
+  let best = rows[0];
+  let bestScore = -1;
+  for (const row of rows) {
+    let score = 0;
+    if (wantEngine.size > 0) {
+      const rowEngine = engineTokens(row.engine);
+      for (const t of wantEngine) if (rowEngine.has(t)) score += 2;
+    }
+    if (wantTrim && String(row.trim ?? "").toLowerCase().trim() === wantTrim) {
+      score += 3;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  }
+  return best;
 }
 
 // Provider-agnostic shape mappers — convert Vehicle Finder's response into
