@@ -1,52 +1,61 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
 
 // ----------------------------------------------------------------------------
 // DTC database — sourced from the open-source Wal33D/dtc-database project
-// (MIT licensed). The SQLite file `dtc_codes.db` contains 18,805 entries
-// covering 33 manufacturers plus 9,415 generic SAE J2012 codes.
+// (MIT licensed). The original SQLite distribution is converted to a slim
+// JSON map at integration time and shipped here as `dtcData.json`. We dropped
+// the SQLite path because better-sqlite3 needs node-gyp + Python to compile
+// against unfamiliar Node patch versions on Railway's Nixpacks builder, and
+// our access pattern is a single primary-key lookup — no SQL needed.
 //
-// Schema:
-//   dtc_definitions(code, manufacturer, description, type, locale,
-//                   is_generic, source_file)
-//   PRIMARY KEY (code, manufacturer, locale)
+// JSON shape: { [code]: { [MANUFACTURER]: description } }
+//   - MANUFACTURER is "GENERIC" for SAE J2012 entries, otherwise an upper-
+//     case brand key (FORD, ACURA, ...).
+//   - description is the raw one-liner from the source database.
+//   - The code's `type` (P/B/C/U) is derivable from the first character,
+//     `is_generic` from the presence of the GENERIC key.
 //
 // Lookup order (lookupDtc):
-//   1. Manufacturer-specific entry if `make` was provided
-//   2. Pattern handler (cylinder/coil-specific copy — richer than the
+//   1. Manufacturer-specific entry if `make` was provided and resolves
+//   2. Pattern handler (cylinder/coil-specific copy is richer than the
 //      one-line generic description)
 //   3. Generic SAE entry
 //   4. null (caller can fall back to Claude interpretation)
 //
-// The source database provides only a single `description` field per entry.
-// We map onto the existing mobile response schema by reusing description for
-// both summary and detail, deriving `system` from the code type letter, and
-// defaulting `urgency` to "medium" / `commonCauses` to [] since the source
-// has no signal for either.
+// Field synthesis for the response: `shortDescription` and
+// `detailedDescription` both reuse the source description (it's typically
+// one phrase); `system` derived from the code type; `urgency` defaults to
+// "medium"; `commonCauses` defaults to []. Pattern handlers override all of
+// these with hand-written copy.
 // ----------------------------------------------------------------------------
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DB_PATH = path.join(__dirname, "dtc_codes.db");
+const DATA_PATH = path.join(__dirname, "dtcData.json");
 
-let db = null;
-let totalRows = 0;
+let DATA = {};
+let uniqueCodes = 0;
+let totalEntries = 0;
 let totalGeneric = 0;
 let totalManufacturer = 0;
 try {
-  db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
-  totalRows = db.prepare("SELECT COUNT(*) AS n FROM dtc_definitions").get().n;
-  totalGeneric = db
-    .prepare("SELECT COUNT(*) AS n FROM dtc_definitions WHERE is_generic = 1")
-    .get().n;
-  totalManufacturer = totalRows - totalGeneric;
+  DATA = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+  uniqueCodes = Object.keys(DATA).length;
+  for (const code in DATA) {
+    for (const mfr in DATA[code]) {
+      totalEntries++;
+      if (mfr === "GENERIC") totalGeneric++;
+      else totalManufacturer++;
+    }
+  }
   console.log(
-    `[dtc] loaded SQLite database: ${totalRows} entries ` +
+    `[dtc] loaded ${totalEntries} entries across ${uniqueCodes} unique codes ` +
       `(${totalGeneric} generic, ${totalManufacturer} manufacturer-specific)`,
   );
 } catch (err) {
-  console.warn("[dtc] failed to open dtc_codes.db:", err.message);
+  console.warn("[dtc] failed to load dtcData.json:", err.message);
 }
 
 // Separate counters so /metrics can report how often the manufacturer-specific
@@ -60,38 +69,14 @@ const stats = {
 export function dtcStats() {
   return {
     ...stats,
-    totalEntries: totalRows,
+    uniqueCodes,
+    totalEntries,
     genericEntries: totalGeneric,
     manufacturerEntries: totalManufacturer,
   };
 }
 
-// Prepared statements are created lazily so the module still imports cleanly
-// if the SQLite file is missing (the lookup just returns null in that case).
-let stmtSpecific = null;
-let stmtGeneric = null;
-
-function ensureStatements() {
-  if (!db) return;
-  if (!stmtSpecific) {
-    stmtSpecific = db.prepare(
-      "SELECT code, manufacturer, description, type " +
-        "FROM dtc_definitions " +
-        "WHERE code = ? AND manufacturer = ? AND locale = 'en' " +
-        "LIMIT 1",
-    );
-  }
-  if (!stmtGeneric) {
-    stmtGeneric = db.prepare(
-      "SELECT code, manufacturer, description, type " +
-        "FROM dtc_definitions " +
-        "WHERE code = ? AND is_generic = 1 AND locale = 'en' " +
-        "LIMIT 1",
-    );
-  }
-}
-
-// ----------- Code extraction (unchanged) -----------------------------------
+// ----------- Code extraction -----------------------------------------------
 
 const DTC_RE = /\b([PBCU])([0-9A-F])([0-9A-F]{3})\b/gi;
 
@@ -170,13 +155,14 @@ const SYSTEM_BY_TYPE = {
   U: "Network Communication",
 };
 
-function deriveEntry(row) {
-  const desc = row.description || "";
+function deriveEntry(code, description) {
+  const desc = description || "";
+  const type = code[0];
   return {
-    code: row.code,
+    code,
     shortDescription: desc,
     detailedDescription: desc,
-    system: SYSTEM_BY_TYPE[row.type] || "Unknown",
+    system: SYSTEM_BY_TYPE[type] || "Unknown",
     commonCauses: [],
     urgency: "medium",
   };
@@ -188,11 +174,7 @@ function normalizeManufacturer(make) {
   if (typeof make !== "string") return null;
   const upper = make.toUpperCase().trim();
   if (!upper) return null;
-  // Take the first word, strip non-letters. "Mercedes-Benz" → "MERCEDES",
-  // "Chevy Truck" → "CHEVY". Covers the brands present in the source DB.
   const first = upper.split(/\s+/)[0].replace(/[^A-Z]/g, "");
-  // Filter to brands that actually exist in the DB so we don't waste a query
-  // on unknown makes.
   const known = new Set([
     "ACURA", "AUDI", "BMW", "BUICK", "CADILLAC", "CHEVY", "CHRYSLER", "DODGE",
     "FORD", "GEO", "GM", "GMC", "HONDA", "INFINITI", "JAGUAR", "JEEP", "KIA",
@@ -201,8 +183,7 @@ function normalizeManufacturer(make) {
     "VOLKSWAGEN",
   ]);
   if (known.has(first)) return first;
-  // Common aliases
-  const aliases = { CHEVROLET: "CHEVY", VW: "VOLKSWAGEN", "MERCEDES-BENZ": "MERCEDES" };
+  const aliases = { CHEVROLET: "CHEVY", VW: "VOLKSWAGEN", "MERCEDESBENZ": "MERCEDES" };
   if (aliases[first]) return aliases[first];
   return null;
 }
@@ -211,16 +192,13 @@ function normalizeManufacturer(make) {
 
 export function lookupDtc(code, make = null) {
   const normalized = code.toUpperCase();
-  ensureStatements();
+  const entry = DATA[normalized];
 
   // 1. Manufacturer-specific lookup if a known make was provided.
   const mfr = normalizeManufacturer(make);
-  if (db && mfr) {
-    const row = stmtSpecific.get(normalized, mfr);
-    if (row) {
-      stats.manufacturerHits++;
-      return deriveEntry(row);
-    }
+  if (entry && mfr && entry[mfr]) {
+    stats.manufacturerHits++;
+    return deriveEntry(normalized, entry[mfr]);
   }
 
   // 2. Pattern handlers — cylinder/coil-specific copy beats the generic
@@ -233,12 +211,9 @@ export function lookupDtc(code, make = null) {
   }
 
   // 3. Generic fallback.
-  if (db) {
-    const row = stmtGeneric.get(normalized);
-    if (row) {
-      stats.genericHits++;
-      return deriveEntry(row);
-    }
+  if (entry && entry.GENERIC) {
+    stats.genericHits++;
+    return deriveEntry(normalized, entry.GENERIC);
   }
 
   return null;
