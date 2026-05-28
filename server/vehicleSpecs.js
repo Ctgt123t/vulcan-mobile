@@ -234,14 +234,36 @@ function fmtOil(d, v) {
   const lines = [head, ""];
   if (d.viscosity) lines.push(`• Viscosity: ${d.viscosity}`);
   if (d.oilType) lines.push(`• Oil type: ${d.oilType}`);
-  if (d.capacityQuarts != null)
-    lines.push(`• Capacity: ${d.capacityQuarts} qt${d.capacityLiters ? ` (${d.capacityLiters} L)` : ""} with filter`);
-  if (d.filterPartNumbers && d.filterPartNumbers.length) {
-    lines.push(`• Filter: ${d.filterPartNumbers.join(", ")}`);
+  if (d.capacityWithFilterQt != null) {
+    lines.push(`• Capacity with filter: ${d.capacityWithFilterQt} qt`);
   }
-  if (d.drainBoltTorque) lines.push(`• Drain bolt torque: ${d.drainBoltTorque}`);
-  if (d.changeIntervalMiles) lines.push(`• Change interval: every ${d.changeIntervalMiles.toLocaleString()} miles`);
-  if (d.notes) lines.push("", d.notes);
+  if (d.capacityWithoutFilterQt != null) {
+    lines.push(`• Capacity without filter: ${d.capacityWithoutFilterQt} qt`);
+  }
+  if (d.oemSpec) lines.push(`• OEM spec: ${d.oemSpec}`);
+
+  if (Array.isArray(d.filters) && d.filters.length > 0) {
+    lines.push("", "Filter part numbers:");
+    for (const f of d.filters) {
+      const label = [f.brand, f.partNumber].filter(Boolean).join(" ");
+      const oem = f.isOem ? " (OEM)" : "";
+      const desc = f.description ? ` — ${f.description}` : "";
+      lines.push(`• ${label}${oem}${desc}`);
+    }
+  }
+
+  const torqueBits = [];
+  if (d.drainBoltTorqueFtLb != null) torqueBits.push(`${d.drainBoltTorqueFtLb} ft-lb`);
+  if (d.drainBoltTorqueNm != null) torqueBits.push(`${d.drainBoltTorqueNm} Nm`);
+  if (torqueBits.length > 0) {
+    let line = `• Drain bolt torque: ${torqueBits.join(" / ")}`;
+    if (d.drainBoltNotes) line += ` — ${d.drainBoltNotes}`;
+    lines.push("", line);
+  } else if (d.drainBoltNotes) {
+    lines.push("", `• Drain bolt: ${d.drainBoltNotes}`);
+  }
+  if (d.drainBoltSocketSizeMm) lines.push(`• Drain bolt socket: ${d.drainBoltSocketSizeMm} mm`);
+  if (d.drainBoltThreadSize) lines.push(`• Drain bolt thread: ${d.drainBoltThreadSize}`);
   return lines.join("\n");
 }
 

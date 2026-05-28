@@ -152,18 +152,41 @@ function pickBestRow(rows, vehicle) {
 }
 
 // Provider-agnostic shape mappers — convert Vehicle Finder's response into
-// the keys our formatters expect. Unknown fields are passed through.
+// the keys our formatters expect.
 function mapOil(raw) {
   if (!raw || typeof raw !== "object") return null;
+  const spec = raw.oil_spec ?? {};
+  const drain = raw.drain_bolt ?? {};
+  const filters = Array.isArray(raw.filters) ? raw.filters : [];
+
+  // Filters land as structured rows so the formatter can present brand,
+  // part number, and the OEM flag separately.
+  const filterRows = filters.map((f) => ({
+    brand: f.brand ?? null,
+    partNumber: f.part_number ?? null,
+    description: f.description ?? null,
+    isOem: Boolean(f.is_oem),
+  }));
+
+  // Drain-bolt torque comes back in Nm — convert to ft-lb so the formatter
+  // can show both units like real OEM service literature does.
+  const torqueNm = typeof drain.torque_nm === "number" ? drain.torque_nm : null;
+  const torqueFtLb = torqueNm != null ? +(torqueNm * 0.737562).toFixed(1) : null;
+
   return {
-    viscosity: raw.viscosity ?? raw.oil_viscosity ?? raw.weight,
-    oilType: raw.oil_type ?? raw.type,
-    capacityQuarts: raw.capacity_quarts ?? raw.capacity_qt ?? raw.capacityQuarts,
-    capacityLiters: raw.capacity_liters ?? raw.capacity_l ?? raw.capacityLiters,
-    filterPartNumbers: raw.filter_part_numbers ?? raw.filterPartNumbers ?? raw.filters,
-    drainBoltTorque: raw.drain_bolt_torque ?? raw.drainBoltTorque,
-    changeIntervalMiles: raw.change_interval_miles ?? raw.changeIntervalMiles,
-    notes: raw.notes,
+    viscosity: spec.viscosity ?? null,
+    oilType: spec.oil_type ?? null,
+    capacityWithFilterQt: spec.capacity_with_filter ?? null,
+    capacityWithoutFilterQt: spec.capacity_without_filter ?? null,
+    oemSpec: spec.oem_spec ?? null,
+    filters: filterRows,
+    drainBoltTorqueNm: torqueNm,
+    drainBoltTorqueFtLb: torqueFtLb,
+    drainBoltSocketSizeMm: drain.socket_size_mm ?? null,
+    drainBoltThreadSize: drain.thread_size ?? null,
+    drainBoltNotes: drain.notes ?? null,
+    sourceConfidence: spec.source ?? null,
+    lastVerifiedAt: spec.last_verified_at ?? null,
   };
 }
 
@@ -252,12 +275,6 @@ export async function lookup(vehicle, specType, _params, fetcher) {
       ? `array(${inner.length})`
       : typeof inner;
   console.log(`[vehicle-finder] ${resource} inner shape: ${JSON.stringify(innerKeys)}`);
-  // One-shot: dump the full inner payload (truncated) so we can see nested
-  // field names and fix mappers without another deploy cycle. Remove once
-  // every supported resource has a verified mapper.
-  console.log(
-    `[vehicle-finder] ${resource} raw inner: ${JSON.stringify(inner).slice(0, 1500)}`,
-  );
   const mapper = MAPPERS[specType];
   const data = mapper ? mapper(inner) : inner;
   if (!data) {
