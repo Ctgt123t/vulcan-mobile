@@ -248,13 +248,16 @@ export async function ask(
   return (json as { text: string }).text ?? "";
 }
 
-// Looks up a DTC against the backend's curated SAE database (plus pattern
-// handlers for cylinder-specific codes). Returns the entry if found, null on
-// 404. All other failures throw — callers may want to distinguish "not in
+// Looks up a DTC against the backend's SAE + manufacturer-specific database
+// (plus pattern handlers for cylinder-specific codes). When `make` is
+// provided the backend prefers a manufacturer-specific definition and falls
+// back to the generic SAE entry. Returns the entry if found, null on 404.
+// All other failures throw — callers may want to distinguish "not in
 // database" (legitimate miss, fall back to Claude) from "couldn't reach
 // the backend".
 export async function fetchDtcDefinition(
   code: string,
+  make?: string | null,
 ): Promise<DtcDefinition | null> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
@@ -262,7 +265,10 @@ export async function fetchDtcDefinition(
     );
   }
   const clean = code.trim().toUpperCase();
-  const url = `${BASE_URL}/api/dtc/${encodeURIComponent(clean)}`;
+  const query = make && make.trim().length > 0
+    ? `?make=${encodeURIComponent(make.trim())}`
+    : "";
+  const url = `${BASE_URL}/api/dtc/${encodeURIComponent(clean)}${query}`;
   const headers: Record<string, string> = {
     "ngrok-skip-browser-warning": "true",
   };

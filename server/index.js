@@ -247,15 +247,18 @@ app.get("/metrics", (_req, res) => {
   });
 });
 
-// Single-code DTC lookup against the curated SAE database. Returns 404 when
-// the code isn't in the database OR a pattern handler — callers can then
-// fall back to Claude for interpretation.
+// Single-code DTC lookup against the SAE + manufacturer database. Optional
+// `?make=Ford` query parameter prefers a manufacturer-specific definition
+// when one exists; otherwise falls back to the generic SAE definition.
+// Returns 404 when the code isn't in the database OR a pattern handler —
+// callers can then fall back to Claude for interpretation.
 app.get("/api/dtc/:code", (req, res) => {
   const raw = String(req.params.code || "").toUpperCase();
   if (!isDtcCode(raw)) {
     return res.status(400).json({ error: "Invalid DTC format." });
   }
-  const entry = lookupDtc(raw);
+  const make = typeof req.query.make === "string" ? req.query.make : null;
+  const entry = lookupDtc(raw, make);
   if (!entry) {
     return res.status(404).json({ error: "Code not in database." });
   }
@@ -465,10 +468,10 @@ app.post("/api/ask", async (req, res) => {
   const lastUserText =
     lastUserMsg && lastUserMsg.role === "user" ? String(lastUserMsg.content) : "";
 
-  // 1 & 2: DTC lookup
+  // 1 & 2: DTC lookup (manufacturer-aware when a vehicle make is available)
   const dtcCodes = extractDtcCodes(lastUserText);
   const dtcEntries = dtcCodes
-    .map((c) => lookupDtc(c))
+    .map((c) => lookupDtc(c, vehicle?.make))
     .filter((e) => e !== null);
 
   if (dtcEntries.length > 0) {

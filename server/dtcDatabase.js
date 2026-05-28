@@ -1,35 +1,98 @@
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 
 // ----------------------------------------------------------------------------
-// DTC database — loaded from dtcData.json on startup and consulted by the
-// Ask Vulcan retrieval layer before any Claude call. To add codes, just
-// append entries to dtcData.json. Pattern-based entries (cylinder misfires,
-// per-coil codes, etc.) are generated at lookup time below.
+// DTC database — sourced from the open-source Wal33D/dtc-database project
+// (MIT licensed). The SQLite file `dtc_codes.db` contains 18,805 entries
+// covering 33 manufacturers plus 9,415 generic SAE J2012 codes.
+//
+// Schema:
+//   dtc_definitions(code, manufacturer, description, type, locale,
+//                   is_generic, source_file)
+//   PRIMARY KEY (code, manufacturer, locale)
+//
+// Lookup order (lookupDtc):
+//   1. Manufacturer-specific entry if `make` was provided
+//   2. Pattern handler (cylinder/coil-specific copy — richer than the
+//      one-line generic description)
+//   3. Generic SAE entry
+//   4. null (caller can fall back to Claude interpretation)
+//
+// The source database provides only a single `description` field per entry.
+// We map onto the existing mobile response schema by reusing description for
+// both summary and detail, deriving `system` from the code type letter, and
+// defaulting `urgency` to "medium" / `commonCauses` to [] since the source
+// has no signal for either.
 // ----------------------------------------------------------------------------
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_PATH = path.join(__dirname, "dtcData.json");
+const DB_PATH = path.join(__dirname, "dtc_codes.db");
 
-let DATA = {};
+let db = null;
+let totalRows = 0;
+let totalGeneric = 0;
+let totalManufacturer = 0;
 try {
-  DATA = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
-  console.log(`[dtc] loaded ${Object.keys(DATA).length} static codes`);
+  db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  totalRows = db.prepare("SELECT COUNT(*) AS n FROM dtc_definitions").get().n;
+  totalGeneric = db
+    .prepare("SELECT COUNT(*) AS n FROM dtc_definitions WHERE is_generic = 1")
+    .get().n;
+  totalManufacturer = totalRows - totalGeneric;
+  console.log(
+    `[dtc] loaded SQLite database: ${totalRows} entries ` +
+      `(${totalGeneric} generic, ${totalManufacturer} manufacturer-specific)`,
+  );
 } catch (err) {
-  console.warn("[dtc] failed to load dtcData.json:", err.message);
+  console.warn("[dtc] failed to open dtc_codes.db:", err.message);
 }
 
-// Module-level counter so /metrics can report DTC-database hit rate.
-let hitCount = 0;
+// Separate counters so /metrics can report how often the manufacturer-specific
+// path actually fires vs the generic fallback vs the pattern handlers.
+const stats = {
+  genericHits: 0,
+  manufacturerHits: 0,
+  patternHits: 0,
+};
+
 export function dtcStats() {
-  return { hits: hitCount, staticEntries: Object.keys(DATA).length };
+  return {
+    ...stats,
+    totalEntries: totalRows,
+    genericEntries: totalGeneric,
+    manufacturerEntries: totalManufacturer,
+  };
 }
 
-// SAE DTC format: a letter (P, B, C, U) followed by 4 hex digits. Real-world
-// codes are almost always decimal (P0301), but the standard allows hex
-// (P0A12 on hybrids). We accept both.
+// Prepared statements are created lazily so the module still imports cleanly
+// if the SQLite file is missing (the lookup just returns null in that case).
+let stmtSpecific = null;
+let stmtGeneric = null;
+
+function ensureStatements() {
+  if (!db) return;
+  if (!stmtSpecific) {
+    stmtSpecific = db.prepare(
+      "SELECT code, manufacturer, description, type " +
+        "FROM dtc_definitions " +
+        "WHERE code = ? AND manufacturer = ? AND locale = 'en' " +
+        "LIMIT 1",
+    );
+  }
+  if (!stmtGeneric) {
+    stmtGeneric = db.prepare(
+      "SELECT code, manufacturer, description, type " +
+        "FROM dtc_definitions " +
+        "WHERE code = ? AND is_generic = 1 AND locale = 'en' " +
+        "LIMIT 1",
+    );
+  }
+}
+
+// ----------- Code extraction (unchanged) -----------------------------------
+
 const DTC_RE = /\b([PBCU])([0-9A-F])([0-9A-F]{3})\b/gi;
 
 export function extractDtcCodes(text) {
@@ -47,14 +110,17 @@ export function isDtcCode(token) {
   return /^[PBCU][0-9A-F]{4}$/i.test(token);
 }
 
-// Pattern handlers — codes that follow predictable per-cylinder/per-bank
-// numbering. Order matters: first match wins.
+// ----------- Pattern handlers ----------------------------------------------
+//
+// Kept because their per-cylinder / per-coil copy is richer than the
+// one-line description in the source database.
+
 const PATTERN_HANDLERS = [
   {
     name: "cylinder-misfire",
     match: /^P03(0[1-9]|[12][0-9]|3[0-2])$/, // P0301 through P0332
     build: (code) => {
-      const cyl = parseInt(code.slice(2), 10);
+      const cyl = parseInt(code.slice(2), 10) - 300;
       return {
         code,
         shortDescription: `Cylinder ${cyl} Misfire Detected`,
@@ -95,23 +161,91 @@ const PATTERN_HANDLERS = [
   },
 ];
 
-export function lookupDtc(code) {
-  const normalized = code.toUpperCase();
-  if (DATA[normalized]) {
-    hitCount++;
-    return DATA[normalized];
-  }
-  for (const handler of PATTERN_HANDLERS) {
-    if (handler.match.test(normalized)) {
-      hitCount++;
-      return handler.build(normalized);
-    }
-  }
+// ----------- Field derivation -----------------------------------------------
+
+const SYSTEM_BY_TYPE = {
+  P: "Powertrain",
+  B: "Body",
+  C: "Chassis",
+  U: "Network Communication",
+};
+
+function deriveEntry(row) {
+  const desc = row.description || "";
+  return {
+    code: row.code,
+    shortDescription: desc,
+    detailedDescription: desc,
+    system: SYSTEM_BY_TYPE[row.type] || "Unknown",
+    commonCauses: [],
+    urgency: "medium",
+  };
+}
+
+// Normalize a free-form vehicle.make string ("Ford", "ford", "Ford Motor Co.")
+// to the uppercase manufacturer key used by the source database.
+function normalizeManufacturer(make) {
+  if (typeof make !== "string") return null;
+  const upper = make.toUpperCase().trim();
+  if (!upper) return null;
+  // Take the first word, strip non-letters. "Mercedes-Benz" → "MERCEDES",
+  // "Chevy Truck" → "CHEVY". Covers the brands present in the source DB.
+  const first = upper.split(/\s+/)[0].replace(/[^A-Z]/g, "");
+  // Filter to brands that actually exist in the DB so we don't waste a query
+  // on unknown makes.
+  const known = new Set([
+    "ACURA", "AUDI", "BMW", "BUICK", "CADILLAC", "CHEVY", "CHRYSLER", "DODGE",
+    "FORD", "GEO", "GM", "GMC", "HONDA", "INFINITI", "JAGUAR", "JEEP", "KIA",
+    "LEXUS", "LINCOLN", "MAZDA", "MERCEDES", "MERCURY", "MITSUBISHI", "NISSAN",
+    "OLDSMOBILE", "PLYMOUTH", "PONTIAC", "SATURN", "SUBARU", "SUZUKI", "TOYOTA",
+    "VOLKSWAGEN",
+  ]);
+  if (known.has(first)) return first;
+  // Common aliases
+  const aliases = { CHEVROLET: "CHEVY", VW: "VOLKSWAGEN", "MERCEDES-BENZ": "MERCEDES" };
+  if (aliases[first]) return aliases[first];
   return null;
 }
 
-// Format a DTC entry as a plain-text answer suitable for the Ask Vulcan
-// response body. Mobile renders this exactly like a Claude text reply.
+// ----------- Lookup ---------------------------------------------------------
+
+export function lookupDtc(code, make = null) {
+  const normalized = code.toUpperCase();
+  ensureStatements();
+
+  // 1. Manufacturer-specific lookup if a known make was provided.
+  const mfr = normalizeManufacturer(make);
+  if (db && mfr) {
+    const row = stmtSpecific.get(normalized, mfr);
+    if (row) {
+      stats.manufacturerHits++;
+      return deriveEntry(row);
+    }
+  }
+
+  // 2. Pattern handlers — cylinder/coil-specific copy beats the generic
+  //    one-liner from the database.
+  for (const handler of PATTERN_HANDLERS) {
+    if (handler.match.test(normalized)) {
+      stats.patternHits++;
+      return handler.build(normalized);
+    }
+  }
+
+  // 3. Generic fallback.
+  if (db) {
+    const row = stmtGeneric.get(normalized);
+    if (row) {
+      stats.genericHits++;
+      return deriveEntry(row);
+    }
+  }
+
+  return null;
+}
+
+// ----------- Formatters (unchanged shape, defensive against empty causes) ---
+
 export function formatDtcAnswer(entry) {
   const lines = [
     `**${entry.code} — ${entry.shortDescription}**`,
@@ -120,17 +254,14 @@ export function formatDtcAnswer(entry) {
     "",
     `System: ${entry.system}`,
     `Urgency: ${entry.urgency}`,
-    "",
-    "Common causes:",
-    ...entry.commonCauses.map((c) => `• ${c}`),
   ];
+  if (entry.commonCauses && entry.commonCauses.length > 0) {
+    lines.push("", "Common causes:");
+    lines.push(...entry.commonCauses.map((c) => `• ${c}`));
+  }
   return lines.join("\n");
 }
 
-// Format DTC entries as a context block to inject into Claude's system
-// prompt when the user's message contains a code but also asks a more
-// complex question. This anchors Claude's answer to the verified definition
-// rather than letting it hallucinate.
 export function formatDtcContextBlock(entries) {
   if (!entries.length) return "";
   const lines = [
@@ -142,7 +273,9 @@ export function formatDtcContextBlock(entries) {
     lines.push(`  Detailed: ${e.detailedDescription}`);
     lines.push(`  System: ${e.system}`);
     lines.push(`  Urgency: ${e.urgency}`);
-    lines.push(`  Common causes: ${e.commonCauses.join("; ")}`);
+    if (e.commonCauses && e.commonCauses.length > 0) {
+      lines.push(`  Common causes: ${e.commonCauses.join("; ")}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
