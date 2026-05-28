@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { cacheFile } from "./cacheDir.js";
 import * as vehicleFinder from "./specProviders/vehicleFinder.js";
 import * as openLabor from "./specProviders/openLabor.js";
 
@@ -31,9 +30,7 @@ import * as openLabor from "./specProviders/openLabor.js";
 // append to PROVIDERS. Order = priority.
 // ----------------------------------------------------------------------------
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CACHE_PATH = path.join(__dirname, "vehicleSpecCache.json");
+const CACHE_PATH = cacheFile("vehicleSpecCache.json");
 
 // Spec types the orchestrator understands. Each is a stable key used in
 // caching, metrics, and provider capability lists.
@@ -69,8 +66,11 @@ try {
       providerCalls: parsed.providerCalls ?? 0,
       providerErrors: parsed.providerErrors ?? 0,
     };
+    const total = cache.hits + cache.misses;
+    const hitRate = total > 0 ? `${((cache.hits / total) * 100).toFixed(1)}%` : "n/a";
     console.log(
-      `[vehicleSpecs] loaded ${Object.keys(cache.entries).length} cached spec entries`,
+      `[vehicleSpecs] loaded ${Object.keys(cache.entries).length} cached spec entries ` +
+        `(hits=${cache.hits}, misses=${cache.misses}, hitRate=${hitRate}, providerCalls=${cache.providerCalls})`,
     );
   }
 } catch (err) {

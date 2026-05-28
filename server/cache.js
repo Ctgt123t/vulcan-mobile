@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { cacheFile } from "./cacheDir.js";
 
 // ----------------------------------------------------------------------------
 // Response cache for Ask Vulcan factual answers.
@@ -20,9 +19,7 @@ import { fileURLToPath } from "node:url";
 // conversation context and would poison the cache.
 // ----------------------------------------------------------------------------
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CACHE_PATH = path.join(__dirname, "cache.json");
+const CACHE_PATH = cacheFile("cache.json");
 
 const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 

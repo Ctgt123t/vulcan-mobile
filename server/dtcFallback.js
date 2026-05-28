@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { cacheFile } from "./cacheDir.js";
 
 // ----------------------------------------------------------------------------
 // Claude fallback for DTC codes that aren't in the static database.
@@ -21,9 +20,7 @@ import { fileURLToPath } from "node:url";
 // requests for the same code don't duplicate the Claude call.
 // ----------------------------------------------------------------------------
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CACHE_PATH = path.join(__dirname, "dtcCache.json");
+const CACHE_PATH = cacheFile("dtcCache.json");
 
 let cache = {
   entries: {},
@@ -46,8 +43,11 @@ try {
       claudeCalls: parsed.claudeCalls ?? 0,
       claudeErrors: parsed.claudeErrors ?? 0,
     };
+    const total = cache.hits + cache.misses;
+    const hitRate = total > 0 ? `${((cache.hits / total) * 100).toFixed(1)}%` : "n/a";
     console.log(
-      `[dtc-fallback] loaded ${Object.keys(cache.entries).length} cached Claude definitions`,
+      `[dtc-fallback] loaded ${Object.keys(cache.entries).length} cached Claude definitions ` +
+        `(hits=${cache.hits}, misses=${cache.misses}, hitRate=${hitRate}, claudeCalls=${cache.claudeCalls})`,
     );
   }
 } catch (err) {

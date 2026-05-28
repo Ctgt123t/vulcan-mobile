@@ -638,6 +638,19 @@ app.post("/api/ask", async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
+  // Aggregate cache rollup — printed last so it stands out in deploy logs.
+  // If counts are non-zero on first startup after a redeploy, the Railway
+  // Volume (or CACHE_DIR) is wired correctly. If they reset to zero on
+  // every deploy, the cache is on the ephemeral filesystem.
+  const c = cacheStats();
+  const dfb = dtcFallbackStats();
+  const vs = vehicleSpecsStats();
+  console.log(
+    `[startup] cache rollup: ` +
+      `askVulcan=${c.entries}entries/hits=${c.hits}/misses=${c.misses} | ` +
+      `dtcFallback=${dfb.entries}entries/hits=${dfb.hits}/claudeCalls=${dfb.claudeCalls} | ` +
+      `vehicleSpecs=${vs.entries}entries/hits=${vs.hits}/providerCalls=${vs.providerCalls}`,
+  );
   console.log(`Vulcan backend listening on http://0.0.0.0:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 });
