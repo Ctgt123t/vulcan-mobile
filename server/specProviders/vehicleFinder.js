@@ -60,27 +60,19 @@ async function resolveVehicleId(vehicle, fetcher) {
     model: String(vehicle.model),
   });
   const url = `${BASE_URL}/vehicles?${params.toString()}`;
-  console.log(`[vehicle-finder] GET ${url}`);
   const res = await fetcher(url, {
     headers: { "X-API-Key": API_KEY, Accept: "application/json" },
   });
-  console.log(`[vehicle-finder] resolve status=${res.status}`);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.log(`[vehicle-finder] resolve error body (truncated): ${text.slice(0, 300)}`);
+    console.warn(
+      `[vehicle-finder] resolve ${res.status} for ${url} — body: ${text.slice(0, 300)}`,
+    );
     throw new Error(`vehicle resolve ${res.status}`);
   }
   const body = await res.json();
-  // Log the top-level shape of the response so we can see what keys the API
-  // actually returns vs the shapes we tolerate.
-  const topKeys = body && typeof body === "object" && !Array.isArray(body)
-    ? Object.keys(body).slice(0, 10)
-    : Array.isArray(body)
-      ? `array(${body.length})`
-      : typeof body;
-  console.log(`[vehicle-finder] resolve body shape: ${JSON.stringify(topKeys)}`);
-  // Vehicle Finder wraps the list under `data`; we also tolerate `results`
-  // and bare arrays in case other endpoints differ.
+  // Vehicle Finder wraps the list under `data`; tolerate `results` and bare
+  // arrays in case other endpoints differ.
   const rows = Array.isArray(body)
     ? body
     : Array.isArray(body?.data)
@@ -88,7 +80,6 @@ async function resolveVehicleId(vehicle, fetcher) {
       : Array.isArray(body?.results)
         ? body.results
         : [];
-  console.log(`[vehicle-finder] resolve rows=${rows.length}`);
   if (rows.length === 0) return null;
 
   // Pick the row best matching the vehicle's engineType (e.g. "3.5L V6"
@@ -97,14 +88,11 @@ async function resolveVehicleId(vehicle, fetcher) {
   const pick = pickBestRow(rows, vehicle);
   const vid = pick.id ?? pick.vehicle_id ?? pick.vehicleId;
   if (vid == null) {
-    console.log(
-      `[vehicle-finder] row had no id field — sample row: ${JSON.stringify(pick).slice(0, 300)}`,
+    console.warn(
+      `[vehicle-finder] resolve row had no id field — sample: ${JSON.stringify(pick).slice(0, 300)}`,
     );
     return null;
   }
-  console.log(
-    `[vehicle-finder] resolved id=${vid} (engine=${pick.engine ?? "?"}, trim=${pick.trim ?? "?"})`,
-  );
   idCache.set(key, vid);
   return vid;
 }
@@ -250,45 +238,29 @@ export async function lookup(vehicle, specType, _params, fetcher) {
   if (vehicleId == null) return null;
 
   const url = `${BASE_URL}/vehicles/${encodeURIComponent(vehicleId)}/${resource}`;
-  console.log(`[vehicle-finder] GET ${url}`);
   const res = await fetcher(url, {
     headers: { "X-API-Key": API_KEY, Accept: "application/json" },
   });
-  console.log(`[vehicle-finder] ${resource} status=${res.status}`);
   if (res.status === 404) return null;
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.log(
-      `[vehicle-finder] ${resource} error body (truncated): ${text.slice(0, 300)}`,
+    console.warn(
+      `[vehicle-finder] ${resource} ${res.status} for ${url} — body: ${text.slice(0, 300)}`,
     );
     throw new Error(`${resource} fetch ${res.status}`);
   }
   const body = await res.json();
   // Vehicle Finder wraps every response in { data, meta }; unwrap before
-  // handing to the mapper. Tolerant of un-wrapped responses too in case
-  // some endpoints return the payload directly.
+  // handing to the mapper. Tolerant of un-wrapped responses for any endpoint
+  // that might return the payload directly.
   const inner = body && typeof body === "object" && "data" in body ? body.data : body;
-  const innerKeys = inner && typeof inner === "object" && !Array.isArray(inner)
-    ? Object.keys(inner).slice(0, 12)
-    : Array.isArray(inner)
-      ? `array(${inner.length})`
-      : typeof inner;
-  console.log(`[vehicle-finder] ${resource} inner shape: ${JSON.stringify(innerKeys)}`);
-  // One-shot raw-body log so we can verify the torque + maintenance
-  // mappers against real data. Will be removed once both are confirmed.
-  console.log(
-    `[vehicle-finder] ${resource} raw inner: ${JSON.stringify(inner).slice(0, 2000)}`,
-  );
   const mapper = MAPPERS[specType];
   const data = mapper ? mapper(inner) : inner;
   if (!data) {
-    console.log(
+    console.warn(
       `[vehicle-finder] ${resource} mapped to null — raw sample: ${JSON.stringify(body).slice(0, 400)}`,
     );
     return null;
   }
-  console.log(
-    `[vehicle-finder] ${resource} mapped OK — keys: ${JSON.stringify(Object.keys(data).slice(0, 12))}`,
-  );
   return { data };
 }
