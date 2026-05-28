@@ -275,6 +275,11 @@ export async function lookup(vehicle, specType, _params, fetcher) {
       ? `array(${inner.length})`
       : typeof inner;
   console.log(`[vehicle-finder] ${resource} inner shape: ${JSON.stringify(innerKeys)}`);
+  // One-shot raw-body log so we can verify the torque + maintenance
+  // mappers against real data. Will be removed once both are confirmed.
+  console.log(
+    `[vehicle-finder] ${resource} raw inner: ${JSON.stringify(inner).slice(0, 2000)}`,
+  );
   const mapper = MAPPERS[specType];
   const data = mapper ? mapper(inner) : inner;
   if (!data) {
