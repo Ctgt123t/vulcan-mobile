@@ -21,6 +21,15 @@ import {
   isCacheableQuestion,
   setCached,
 } from "./cache.js";
+import {
+  SPEC_CAUTION_PREAMBLE,
+  detectAllSpecIntents,
+  detectSpecIntent,
+  formatSpecAnswer,
+  formatSpecContextBlock,
+  lookupSpec,
+  vehicleSpecsStats,
+} from "./vehicleSpecs.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -249,6 +258,7 @@ app.get("/metrics", (_req, res) => {
     cache: cacheStats(),
     dtc: dtcStats(),
     dtcFallback: dtcFallbackStats(),
+    vehicleSpecs: vehicleSpecsStats(),
   });
 });
 
@@ -355,9 +365,34 @@ app.post("/api/diagnose", async (req, res) => {
     });
   }
 
+  // Proactive spec injection: scan the presenting complaint (first user
+  // message) for spec-relevant categories (oil, brake fluid, torque, etc.).
+  // Query the provider chain for each hit and inject the verified values
+  // into Claude's context so reasoning that touches those specs is anchored
+  // to real data instead of model recollection.
+  const presentingComplaint = String(messages[0]?.content ?? "");
+  const specsToFetch = detectAllSpecIntents(presentingComplaint);
+  const verifiedSpecs = [];
+  if (specsToFetch.length > 0) {
+    const results = await Promise.all(
+      specsToFetch.map(async (specType) => {
+        const r = await lookupSpec(vehicle, specType);
+        return r ? { specType, data: r.data, source: r.source } : null;
+      }),
+    );
+    for (const r of results) if (r) verifiedSpecs.push(r);
+    if (verifiedSpecs.length > 0) {
+      systemBlocks.push({
+        type: "text",
+        text: formatSpecContextBlock(verifiedSpecs),
+      });
+    }
+  }
+
   console.log(
     `[diagnose] model=${DIAGNOSE_MODEL} messages=${messages.length} ` +
-      `recalls=${recallsArr.length} tsbs=${tsbsArr.length}`,
+      `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
+      `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length}`,
   );
 
   try {
@@ -519,7 +554,38 @@ app.post("/api/ask", async (req, res) => {
     );
   }
 
-  // 3: Response cache (only single-turn factual questions with a vehicle)
+  // 3: Vehicle spec lookup (oil capacity, torque, maintenance schedule, etc.)
+  // Spec questions need a vehicle context to be answerable. If a provider
+  // hits, return the answer directly. If not, fall through to Claude but
+  // prepend the anti-hallucination preamble so the model is explicit about
+  // uncertainty instead of confidently guessing values.
+  let specIntent = null;
+  let specWentToClaude = false;
+  if (vehicle && typeof vehicle === "object" && vehicle.year && vehicle.make && vehicle.model) {
+    specIntent = detectSpecIntent(lastUserText);
+    if (specIntent) {
+      const specResult = await lookupSpec(vehicle, specIntent.specType);
+      if (specResult) {
+        const text = formatSpecAnswer(specIntent.specType, specResult, vehicle);
+        console.log(
+          `[retrieval] spec direct-answer: ${specIntent.specType} from ${specResult.source}${specResult.fromCache ? " (cached)" : ""} (no Claude call)`,
+        );
+        return res.json({ text });
+      }
+      // Provider miss — prepend the spec caution preamble before going to
+      // Claude so it doesn't fabricate values.
+      systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
+      specWentToClaude = true;
+      console.log(
+        `[retrieval] spec MISS for ${specIntent.specType} — Claude with anti-hallucination preamble`,
+      );
+    }
+  }
+
+  // 4: Response cache (only single-turn factual questions with a vehicle).
+  // Skip the cache for spec questions that fell through to Claude — the
+  // cached answer would lock in a possibly-wrong guess. New spec questions
+  // for that vehicle should always re-attempt the provider chain.
   const cacheEligible =
     messages.length === 1 &&
     vehicle &&
@@ -527,6 +593,7 @@ app.post("/api/ask", async (req, res) => {
     vehicle.year &&
     vehicle.make &&
     vehicle.model &&
+    !specWentToClaude &&
     isCacheableQuestion(lastUserText);
 
   let cacheKey = null;
