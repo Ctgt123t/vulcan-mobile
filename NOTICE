@@ -1,0 +1,36 @@
+Vulcan Mobile bundles and queries third-party data sources. Attribution and
+licensing for those sources is recorded here.
+
+---
+
+OBDb Community Database (https://github.com/OBDb)
+
+The standard SAE J1979 PID definitions in server/pidStandard.json and the
+vehicle-specific PID definitions cached in server/pidCache.json are sourced
+from the OBDb open-source project. The data is normalized at integration
+time but retains the same semantic content (signal definitions, value
+ranges, decode metadata) as the upstream source.
+
+License: Creative Commons Attribution-ShareAlike 4.0 International
+         (CC-BY-SA-4.0)
+         https://creativecommons.org/licenses/by-sa/4.0/
+
+Upstream repos:
+  https://github.com/OBDb/SAEJ1979               (standard PIDs)
+  https://github.com/OBDb/<Make>-<Model>         (per-vehicle signal sets)
+
+CC-BY-SA-4.0 obligations:
+  - Attribution: this file, plus the `source` and `license` fields in every
+    /api/pids response carrying OBDb-derived data.
+  - ShareAlike: any redistribution of derivative works incorporating this
+    PID data must be licensed under CC-BY-SA-4.0 or a compatible license.
+
+---
+
+Wal33D/dtc-database (https://github.com/Wal33D/dtc-database)
+
+The DTC definitions in server/dtcData.json are sourced from the Wal33D
+dtc-database project under the MIT License.
+
+License: MIT
+         https://opensource.org/licenses/MIT

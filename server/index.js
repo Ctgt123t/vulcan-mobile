@@ -30,6 +30,11 @@ import {
   lookupSpec,
   vehicleSpecsStats,
 } from "./vehicleSpecs.js";
+import {
+  getStandardPids,
+  getVehiclePids,
+  pidStats,
+} from "./pidDatabase.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -259,7 +264,37 @@ app.get("/metrics", (_req, res) => {
     dtc: dtcStats(),
     dtcFallback: dtcFallbackStats(),
     vehicleSpecs: vehicleSpecsStats(),
+    pids: pidStats(),
   });
+});
+
+// Standard SAE J1979 PID list. Returns the 294 generic OBD-II signals
+// (modes 01-09) with units, value ranges, and decode metadata. Sourced
+// from the OBDb project (CC-BY-SA-4.0); see NOTICE for attribution.
+app.get("/api/pids/standard", (_req, res) => {
+  res.json(getStandardPids());
+});
+
+// Vehicle-specific PIDs merged with the standard SAE set, filtered by year.
+// Lazy-fetches from OBDb on first request per make/model and caches forever
+// — vehicle PIDs don't change once published. Returns the standard set
+// alone (source: "standard-only") when OBDb has no repo for that vehicle.
+app.get("/api/pids/:make/:model/:year", async (req, res) => {
+  const make = String(req.params.make ?? "").trim();
+  const model = String(req.params.model ?? "").trim();
+  const year = String(req.params.year ?? "").trim();
+  if (!make || !model) {
+    return res.status(400).json({ error: "make and model are required." });
+  }
+  try {
+    const result = await getVehiclePids(make, model, year);
+    if (!result) {
+      return res.status(400).json({ error: "Invalid make/model." });
+    }
+    return res.json(result);
+  } catch (err) {
+    return respondWithError(res, err, "pids");
+  }
 });
 
 // Single-code DTC lookup against the SAE + manufacturer database. Optional
@@ -645,11 +680,13 @@ app.listen(PORT, "0.0.0.0", () => {
   const c = cacheStats();
   const dfb = dtcFallbackStats();
   const vs = vehicleSpecsStats();
+  const p = pidStats();
   console.log(
     `[startup] cache rollup: ` +
       `askVulcan=${c.entries}entries/hits=${c.hits}/misses=${c.misses} | ` +
       `dtcFallback=${dfb.entries}entries/hits=${dfb.hits}/claudeCalls=${dfb.claudeCalls} | ` +
-      `vehicleSpecs=${vs.entries}entries/hits=${vs.hits}/providerCalls=${vs.providerCalls}`,
+      `vehicleSpecs=${vs.entries}entries/hits=${vs.hits}/providerCalls=${vs.providerCalls} | ` +
+      `pids=${p.cachedVehicles}vehicles/hits=${p.hits}/fetches=${p.fetches}`,
   );
   console.log(`Vulcan backend listening on http://0.0.0.0:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);

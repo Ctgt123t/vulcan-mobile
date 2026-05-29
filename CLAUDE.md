@@ -45,6 +45,11 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **Cache storage location** is resolved by `server/cacheDir.js`: reads `CACHE_DIR` env var, defaults to `server/` for local dev. On Railway, a Volume is mounted at `/data` and `CACHE_DIR=/data` is set, so `cache.json`, `dtcCache.json`, and `vehicleSpecCache.json` all live on the Volume and survive redeploys. Without the Volume, the caches reset on every redeploy and previously-answered Claude DTC questions get re-billed. See DEV_SETUP.md for the Railway dashboard walkthrough. A `[startup] cache rollup:` log line at server start shows the loaded entry counts per cache — if those reset to zero on every deploy, the Volume isn't wired correctly
 - When a spec question goes to Claude (no provider hit OR no provider configured), the anti-hallucination preamble in `vehicleSpecs.SPEC_CAUTION_PREAMBLE` is prepended to the system context, instructing the model to admit uncertainty rather than guess values
 - Diagnose mode scans the presenting complaint for spec mentions and proactively injects any verified specs as a system context block so Claude reasons against real data instead of recollection
+- PID definitions live in `server/pidDatabase.js`:
+  - **Standard SAE J1979 PIDs** (294 signals, modes 01-09) bundled at deploy time as `server/pidStandard.json`, sourced from [OBDb/SAEJ1979](https://github.com/OBDb/SAEJ1979). Returned by `GET /api/pids/standard`
+  - **Vehicle-specific PIDs** lazy-fetched from `https://raw.githubusercontent.com/OBDb/<Make>-<Model>/main/signalsets/v3/default.json` on first request per vehicle, cached forever in `pidCache.json` on the Volume. Returned by `GET /api/pids/:make/:model/:year` merged with the standard set and filtered by year via OBDb's `filter.from`/`filter.to` per command. Vehicles OBDb doesn't cover return the standard-only response (source: `"standard-only"`) — caller still gets the SAE baseline
+  - Each PID exposes: `command: {mode, pid}`, `code`, `id`, `name`, `description`, `path`, `unit`, `min`, `max`, `suggestedMetric`, and a `decode: {length, multiplier, divisor, offset, signed, startBit, enum}` block for raw-byte interpretation
+  - OBDb is CC-BY-SA-4.0; attribution lives in the repo-root `NOTICE` and every API response carries `source`/`license` fields
 
 ## Development Workflow
 
