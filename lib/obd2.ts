@@ -23,9 +23,22 @@
 //   Classic enumeration path is skipped entirely.
 // ============================================================================
 
-import RNBluetoothClassic, {
-  type BluetoothDevice,
-} from "react-native-bluetooth-classic";
+// Classic Bluetooth is Android-only here — iOS requires MFi licensing for
+// SPP/RFCOMM and the OBDLink MX+ / generic ELM327s aren't MFi devices.
+// The library itself ships an iOS implementation that has been reported
+// to crash at native init under the New Architecture. Two-part guard:
+//
+//   1. `import type` for the BluetoothDevice type — TypeScript erases it
+//      at runtime, so it produces no JS or native module load.
+//   2. Lazy `require()` for the value, only on Android. On iOS the
+//      module is never loaded, the native TurboModule registration
+//      never runs, and the iOS-only crash path is bypassed.
+//
+// Every call site below checks `RNBluetoothClassic != null` (or relies
+// on the pre-existing `Platform.OS === "android"` guards) so iOS reads
+// of the value are safe no-ops.
+import type { BluetoothDevice } from "react-native-bluetooth-classic";
+
 import {
   BleManager,
   type Characteristic,
@@ -33,6 +46,20 @@ import {
   type Subscription,
 } from "react-native-ble-plx";
 import { PermissionsAndroid, Platform } from "react-native";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let RNBluetoothClassic: any = null;
+if (Platform.OS === "android") {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    RNBluetoothClassic = require("react-native-bluetooth-classic").default;
+  } catch (err) {
+    console.warn(
+      "[obd2] react-native-bluetooth-classic failed to load on Android:",
+      (err as Error).message,
+    );
+  }
+}
 import {
   clearSavedAdapter,
   loadSavedAdapter,
@@ -678,6 +705,16 @@ class ClassicTransport implements Obd2Transport {
     deviceId: string,
     onDisconnected: () => void,
   ): Promise<{ ok: boolean; message: string }> {
+    // Defensive: if the platform-gated require failed (unlikely on Android,
+    // impossible on iOS where we never call connect with transport=classic
+    // in the first place) we surface a clean error rather than crashing
+    // on `.connectToDevice` of null.
+    if (!RNBluetoothClassic) {
+      return {
+        ok: false,
+        message: "Classic Bluetooth isn't available on this platform.",
+      };
+    }
     let lastErrorMessage = "Unknown error";
 
     for (let attempt = 1; attempt <= CLASSIC_CONNECT_ATTEMPTS; attempt++) {
@@ -727,7 +764,7 @@ class ClassicTransport implements Obd2Transport {
         }
         this.device = device;
 
-        this.dataSub = device.onDataReceived((event) => {
+        this.dataSub = device.onDataReceived((event: { data?: unknown }) => {
           const data = event.data;
           if (DEBUG_OBD2) {
             const len = typeof data === "string" ? data.length : 0;
@@ -741,7 +778,7 @@ class ClassicTransport implements Obd2Transport {
         });
 
         this.disconnectSub = RNBluetoothClassic.onDeviceDisconnected(
-          (event) => {
+          (event: { address?: string }) => {
             // Disconnect event is rare and useful for tracing — keep it
             // visible without the debug flag.
             console.log(
@@ -1120,6 +1157,7 @@ class Obd2Manager {
   }
 
   private async enumerateClassicBonded(): Promise<void> {
+    if (!RNBluetoothClassic) return;
     let bonded: BluetoothDevice[] = [];
     try {
       bonded = await RNBluetoothClassic.getBondedDevices();
