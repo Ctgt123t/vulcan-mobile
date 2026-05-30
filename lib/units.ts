@@ -40,18 +40,47 @@ export interface FormattedValue {
 // Convert raw → display numeric for a given OBDb unit and target system.
 // Pass-through if no conversion applies. Unknown units fall back to the
 // raw value with no conversion.
+//
+// Some conversions depend on WHICH signal we're formatting, not just its
+// nominal unit — barometric pressure stays in kPa (matches MAP for load/
+// altitude diagnostics and scan-tool convention), EVAP vapor pressure
+// converts to inH₂O instead of PSI (PSI makes the tiny values unreadable;
+// US service literature uses inH₂O for EVAP leak diagnosis). The optional
+// `signalName` / `signalId` carry the context needed for those overrides.
+export interface ConvertOptions {
+  system?: UnitSystem;
+  signalName?: string | null;
+  signalId?: string | null;
+}
+
+function isBarometric(opts?: ConvertOptions): boolean {
+  const name = opts?.signalName ?? "";
+  const id = opts?.signalId ?? "";
+  return /baromet/i.test(name) || /^BARO/i.test(id);
+}
+
+function isEvapVaporPressure(opts?: ConvertOptions): boolean {
+  const name = opts?.signalName ?? "";
+  const id = opts?.signalId ?? "";
+  // EVAP_SUP / EVAP_RDY / EVAP_ENA / EVAPCMPL / EVAP_PCT are status/percent
+  // signals that wouldn't reach a kPa branch anyway, but the name regex
+  // narrows to "vapor pressure" to be safe.
+  return /vapor pressure|evap.*pressure/i.test(name) || /^EVAP_VP/i.test(id);
+}
+
 export function convertValue(
   raw: number | null,
   unit: string | null,
-  system: UnitSystem = DEFAULT_UNIT_SYSTEM,
+  options?: ConvertOptions,
 ): { value: number | null; displayUnit: string } {
-  if (raw == null) return { value: null, displayUnit: shortUnit(unit, system) };
+  const system = options?.system ?? DEFAULT_UNIT_SYSTEM;
+  if (raw == null) return { value: null, displayUnit: shortUnit(unit, options) };
   if (!unit) return { value: raw, displayUnit: "" };
 
   if (system === "metric") {
     // Metric mode: keep SI as-is. The OBDb units already are SI for the
     // categories we'd convert.
-    return { value: raw, displayUnit: shortUnit(unit, system) };
+    return { value: raw, displayUnit: shortUnit(unit, options) };
   }
 
   switch (unit) {
@@ -64,8 +93,23 @@ export function convertValue(
     case "milesPerHour":
       return { value: raw, displayUnit: "mph" };
     case "kilopascal":
+      // Barometric pressure stays in kPa (scan-tool convention; comparable
+      // to MAP). EVAP vapor pressure goes to inH₂O (US service literature).
+      // Everything else (fuel rail, MAP, boost, fuel-tank pressure, etc.)
+      // converts to PSI.
+      if (isBarometric(options)) return { value: raw, displayUnit: "kPa" };
+      if (isEvapVaporPressure(options)) {
+        // 1 inH₂O = 0.24884 kPa
+        return { value: raw / 0.24884, displayUnit: "inH₂O" };
+      }
       return { value: raw / 6.89476, displayUnit: "psi" };
     case "pascal":
+      if (isBarometric(options)) {
+        return { value: raw / 1000, displayUnit: "kPa" };
+      }
+      if (isEvapVaporPressure(options)) {
+        return { value: raw / 248.84, displayUnit: "inH₂O" };
+      }
       return { value: raw / 6894.76, displayUnit: "psi" };
     case "bar":
       return { value: raw * 14.5038, displayUnit: "psi" };
@@ -122,9 +166,9 @@ export function convertValue(
 
 // Compact "short" unit label used by gauges. Same return as convertValue's
 // displayUnit but exposed for callers that just need the label.
-function shortUnit(unit: string | null, system: UnitSystem): string {
+function shortUnit(unit: string | null, options?: ConvertOptions): string {
   if (!unit) return "";
-  const c = convertValue(0, unit, system);
+  const c = convertValue(0, unit, options);
   return c.displayUnit;
 }
 
@@ -143,14 +187,24 @@ function smartFixed(v: number): string {
 }
 
 // Render a converted numeric value for the gauge display, applying smart
-// rounding and signed-prefix conventions for trim-style readings.
+// rounding and signed-prefix conventions for trim-style readings. Signal
+// name/id carry the context the convertValue overrides need (barometric
+// stays kPa, EVAP vapor pressure goes to inH₂O instead of PSI).
 export function formatLiveValue(
   raw: number | null,
   unit: string | null,
-  options?: { system?: UnitSystem; signed?: boolean },
+  options?: {
+    system?: UnitSystem;
+    signed?: boolean;
+    signalName?: string | null;
+    signalId?: string | null;
+  },
 ): FormattedValue {
-  const system = options?.system ?? DEFAULT_UNIT_SYSTEM;
-  const { value, displayUnit } = convertValue(raw, unit, system);
+  const { value, displayUnit } = convertValue(raw, unit, {
+    system: options?.system,
+    signalName: options?.signalName,
+    signalId: options?.signalId,
+  });
   if (value == null) return { text: "—", unit: displayUnit, numeric: null };
   let text = smartFixed(value);
   if (options?.signed && value > 0) text = `+${text}`;

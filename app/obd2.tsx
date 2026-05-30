@@ -882,6 +882,8 @@ function DynamicGauge({
 }) {
   const formatted = formatLiveValue(reading?.value ?? null, descriptor.unit, {
     signed: isSignedDisplay(descriptor.name),
+    signalName: descriptor.name,
+    signalId: descriptor.id,
   });
   return (
     <View style={[styles.gauge, descriptor.aiSelected && styles.gaugeAi]}>
