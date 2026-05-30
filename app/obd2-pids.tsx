@@ -24,10 +24,13 @@ import {
   deletePreset,
   fetchPidCatalog,
   intersectWithSupport,
+  liveMonitorableSignals,
+  loadCachedBitmask,
   loadCachedCatalog,
   loadPresets,
   loadSelectedCodes,
   loadUnsupportedCodes,
+  saveCachedBitmask,
   saveCatalog,
   saveSelectedCodes,
 } from "../lib/pidCatalog";
@@ -56,7 +59,12 @@ export default function PidSelectionScreen() {
     vehicle.year && vehicle.make && vehicle.model,
   );
 
+  // catalog = full OBDb data for this vehicle (unfiltered). bitmask =
+  // ECU's mode 01 support set. We intersect at render time so a flaky
+  // bitmask query (or a poll-loop race) doesn't shrink the persisted
+  // catalog across openings.
   const [catalog, setCatalog] = useState<PidCatalogResponse | null>(null);
+  const [bitmask, setBitmask] = useState<Set<number> | null>(null);
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
   const [unsupported, setUnsupported] = useState<Set<string>>(new Set());
   const [presets, setPresets] = useState<PidPreset[]>([]);
@@ -73,40 +81,52 @@ export default function PidSelectionScreen() {
     }
     let cancelled = false;
     (async () => {
-      const [cached, selected, unsup, savedPresets] = await Promise.all([
+      const [cached, cachedBitmask, selected, unsup, savedPresets] = await Promise.all([
         loadCachedCatalog(vehicle.make, vehicle.model, vehicle.year),
+        loadCachedBitmask(vehicle.make, vehicle.model, vehicle.year),
         loadSelectedCodes(vehicle.make, vehicle.model, vehicle.year),
         loadUnsupportedCodes(vehicle.make, vehicle.model, vehicle.year),
         loadPresets(),
       ]);
       if (cancelled) return;
       if (cached) setCatalog(cached);
+      if (cachedBitmask) setBitmask(cachedBitmask);
       setSelectedCodes(new Set(selected));
       setUnsupported(unsup);
       setPresets(savedPresets);
 
-      // Background refresh from network + bitmask intersection.
+      // Background refresh: fresh catalog from network.
       const fresh = await fetchPidCatalog(vehicle.make, vehicle.model, vehicle.year);
-      if (cancelled || !fresh) {
+      if (cancelled) {
         setLoading(false);
         return;
       }
-      // Ask the connected ECU which mode 01 PIDs it actually supports;
-      // intersect to remove ones the live vehicle won't respond to.
-      let supported: Set<number> | null = null;
-      if (obd2.isConnected()) {
+      if (fresh) {
+        setCatalog(fresh);
+        saveCatalog(fresh).catch(() => {});
+      }
+
+      // Background refresh: bitmask from the ECU, but only if we don't
+      // already have one cached. The bitmask query is serialized against
+      // the poll loop inside Obd2Manager so concurrent commands don't
+      // collide.
+      if (!cachedBitmask && obd2.isConnected()) {
         try {
-          supported = await obd2.getSupportedMode01Pids();
-        } catch {
-          supported = null;
+          const supported = await obd2.getSupportedMode01Pids();
+          if (!cancelled && supported.size > 0) {
+            setBitmask(supported);
+            saveCachedBitmask(
+              vehicle.make,
+              vehicle.model,
+              vehicle.year,
+              supported,
+            ).catch(() => {});
+          }
+        } catch (err) {
+          console.warn("[obd2-pids] bitmask query failed:", err);
         }
       }
-      const filtered = supported
-        ? { ...fresh, signals: intersectWithSupport(fresh.signals, supported) }
-        : fresh;
-      setCatalog(filtered);
-      saveCatalog(filtered).catch(() => {});
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -114,18 +134,26 @@ export default function PidSelectionScreen() {
   }, [vehicle.make, vehicle.model, vehicle.year, vehicleReady]);
 
   // ---------- Derived: signals grouped by category ----------
+  // Apply the live-monitorable filter + dedupe-by-code, then intersect
+  // with the ECU's mode 01 support bitmask (when we have it). Anything
+  // surviving lands in its category bucket. Bit-level signals (MIL,
+  // readiness flags, etc.) and enum signals are filtered out — they
+  // share command codes with each other and aren't useful as live
+  // gauges; they'll resurface in a dedicated "Readiness / Status" view
+  // when that work lands.
   const signalsByCategory = useMemo(() => {
     const out: Record<string, PidDescriptor[]> = {};
     const categories = catalog?.categories ?? [];
     for (const c of categories) out[c] = [];
-    for (const s of catalog?.signals ?? []) {
+    const all = liveMonitorableSignals(catalog?.signals ?? []);
+    const filtered = bitmask ? intersectWithSupport(all, bitmask) : all;
+    for (const s of filtered) {
       const cat = s.category || "Other";
       if (!out[cat]) out[cat] = [];
-      if (s.hidden) continue; // OBDb hides certain signals (debug, etc.)
       out[cat].push(s);
     }
     return out;
-  }, [catalog]);
+  }, [catalog, bitmask]);
 
   // ---------- Toggle handlers ----------
   function persistSelection(next: Set<string>) {
@@ -288,7 +316,10 @@ export default function PidSelectionScreen() {
 
         <FlatList
           data={list}
-          keyExtractor={(item) => item.code ?? `${item.id}-${item.name}`}
+          // Belt-and-suspenders unique key: signal `id` is unique within
+          // a catalog, `code` is only unique post-dedupe. Fall back to a
+          // composite if neither is present.
+          keyExtractor={(item) => item.id ?? item.code ?? `${item.name}-${item.command?.mode}-${item.command?.pid}`}
           renderItem={({ item }) => {
             const code = item.code ?? "";
             const checked = selectedCodes.has(code);

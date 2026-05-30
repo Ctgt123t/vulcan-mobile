@@ -1338,12 +1338,25 @@ class Obd2Manager {
 
   // ---------- Low-level command (delegates to active transport) ----------
 
+  // Mutex chain — every sendCommand() awaits the prior call's completion
+  // before issuing its own. Without this, concurrent callers (e.g. the
+  // selection screen's getSupportedMode01Pids() racing with the live poll
+  // loop) overwrite each other's pending-resolve on the shared
+  // CommandBuffer, producing scrambled responses and inconsistent results.
+  private commandQueue: Promise<unknown> = Promise.resolve();
+
   private async sendCommand(
     cmd: string,
     timeoutMs = 3000,
   ): Promise<string | null> {
     if (!this.transport) return null;
-    return this.transport.sendCommand(cmd, timeoutMs);
+    const transport = this.transport;
+    const next = this.commandQueue.then(() => transport.sendCommand(cmd, timeoutMs));
+    // Swallow any rejection in the chain so one failure doesn't poison
+    // all subsequent commands. Result handed back to caller carries its
+    // own resolution.
+    this.commandQueue = next.catch(() => null);
+    return next;
   }
 
   // ---------- VIN retrieval (Mode 09 PID 02) ----------
@@ -1487,6 +1500,13 @@ class Obd2Manager {
       const nextGroupSupported = (data[3] & 0x01) === 1;
       if (!nextGroupSupported) break;
     }
+    console.log(
+      `[obd2] bitmask query → ${supported.size} mode-01 PIDs supported: ` +
+        Array.from(supported)
+          .sort((a, b) => a - b)
+          .map((n) => n.toString(16).padStart(2, "0").toUpperCase())
+          .join(","),
+    );
     return supported;
   }
 
@@ -1547,6 +1567,30 @@ class Obd2Manager {
 
   setSelectedPids(pids: PidDescriptor[]): void {
     this.selectedPids = pids;
+    // Selection change resets per-PID failure tracking so previously-flaky
+    // entries get a fresh chance.
+    this.failureCounts.clear();
+  }
+
+  // Per-PID consecutive-miss counter. A PID is added to unsupportedPids
+  // only after MAX_CONSECUTIVE_MISSES misses in a row — so a one-off
+  // multi-PID partial response doesn't kill an entire batch.
+  private failureCounts: Map<string, number> = new Map();
+  private static readonly MAX_CONSECUTIVE_MISSES = 4;
+
+  private recordMiss(code: string): void {
+    const n = (this.failureCounts.get(code) ?? 0) + 1;
+    this.failureCounts.set(code, n);
+    if (n >= Obd2Manager.MAX_CONSECUTIVE_MISSES) {
+      this.unsupportedPids.add(code);
+      console.log(
+        `[obd2 poll] ${code} marked unsupported after ${n} consecutive misses`,
+      );
+    }
+  }
+
+  private recordHit(code: string): void {
+    this.failureCounts.delete(code);
   }
 
   private async pollSelectedOnce(): Promise<void> {
@@ -1575,23 +1619,31 @@ class Obd2Manager {
 
   // Send a multi-PID mode 01 request and parse the interleaved response.
   // All PIDs in `batch` must be mode 01.
+  //
+  // Failure handling: many GM ECUs (and some other CAN implementations) only
+  // answer the FIRST PID of a multi-PID request — the rest get dropped at
+  // the ECU side. To avoid marking those PIDs unsupported prematurely, any
+  // PID that didn't appear in the multi-PID response is RE-polled
+  // individually before we count it as a miss. This is the costliest path
+  // (1 multi-PID + N single-PIDs per tick) but it self-correcting and
+  // results in accurate per-PID hit / miss accounting.
   async pollMultiplePids(batch: PidDescriptor[]): Promise<void> {
     if (batch.length === 0) return;
     const cmd = `01${batch.map((p) => p.command.pid).join("")}`;
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
-    if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
-      // Mark every PID in the batch unsupported — we can't isolate which one
-      // failed from a generic NO DATA response on a multi-PID request, so
-      // fall back to individual polling next tick will surface the truth.
-      for (const p of batch) this.unsupportedPids.add(p.code);
-      return;
-    }
     const parsed = parseMultiPidResponse(res, batch);
     const now = Date.now();
     let changed = false;
+    let multiHits = 0;
+    const misses: PidDescriptor[] = [];
     for (const p of batch) {
       const v = parsed.get(p.code);
-      if (v === undefined) continue; // PID didn't appear in response
+      if (v == null) {
+        misses.push(p);
+        continue;
+      }
+      this.recordHit(p.code);
+      multiHits++;
       this.liveData[p.code] = {
         value: v,
         name: p.name,
@@ -1604,6 +1656,23 @@ class Obd2Manager {
       };
       changed = true;
     }
+    console.log(
+      `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${batch.length} hits: ` +
+        batch
+          .map((p) => `${p.code}=${parsed.get(p.code) ?? "—"}`)
+          .join(", "),
+    );
+
+    // If the batch had >1 PID and any didn't return, fall back to single-PID
+    // polling for each miss this same tick. When batch.length === 1 there's
+    // nothing to fall back to — the recordMiss happens below.
+    if (misses.length > 0 && batch.length > 1) {
+      for (const p of misses) await this.pollSinglePid(p);
+      changed = true;
+    } else if (misses.length > 0) {
+      for (const p of misses) this.recordMiss(p.code);
+    }
+
     if (changed) this.liveListeners.forEach((cb) => cb(this.liveData));
   }
 
@@ -1611,7 +1680,7 @@ class Obd2Manager {
     const cmd = `${p.command.mode}${p.command.pid}`;
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
     if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
-      this.unsupportedPids.add(p.code);
+      this.recordMiss(p.code);
       return;
     }
     // Mode response code is mode + 0x40 (01 → 41, 02 → 42, 09 → 49,
@@ -1619,8 +1688,16 @@ class Obd2Manager {
     // both back after the 0x62 marker.
     const responseCode = parseInt(p.command.mode, 16) + 0x40;
     const data = extractPidDataBytes(res, responseCode, p.command.pid, p.decode.length);
-    if (data == null) return;
+    if (data == null) {
+      this.recordMiss(p.code);
+      return;
+    }
     const value = decodePidGeneric(data, p.decode);
+    if (value == null) {
+      this.recordMiss(p.code);
+      return;
+    }
+    this.recordHit(p.code);
     this.liveData[p.code] = {
       value,
       name: p.name,

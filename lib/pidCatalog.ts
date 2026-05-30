@@ -104,6 +104,45 @@ export async function saveCatalog(
   }
 }
 
+// Mode 01 bitmask is cached separately from the catalog so re-querying the
+// bitmask (or failing to query it) doesn't shrink the persisted catalog.
+// Prior version overwrote catalog cache with the intersected set, which
+// produced an ever-shrinking PID list across selection-screen openings
+// whenever a bitmask query partially failed.
+export async function loadCachedBitmask(
+  make: string,
+  model: string,
+  year: string | number,
+): Promise<Set<number> | null> {
+  try {
+    const raw = await AsyncStorage.getItem(
+      `vulcan:pids:bitmask:${vehicleKey(make, model, year)}`,
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return new Set(parsed.filter((n) => typeof n === "number"));
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCachedBitmask(
+  make: string,
+  model: string,
+  year: string | number,
+  supported: Set<number>,
+): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      `vulcan:pids:bitmask:${vehicleKey(make, model, year)}`,
+      JSON.stringify(Array.from(supported).sort((a, b) => a - b)),
+    );
+  } catch (err) {
+    console.warn("[pidCatalog] saveCachedBitmask failed:", err);
+  }
+}
+
 export async function loadSelectedCodes(
   make: string,
   model: string,
@@ -170,6 +209,57 @@ export async function saveUnsupportedCodes(
   }
 }
 
+// ---------- Live-monitoring filters ----------
+
+// A signal is "live-monitorable" if we can render it as a numeric gauge
+// that updates at poll cadence: whole-byte width, not packed into a bit
+// field, no enum lookup, not hidden by OBDb.
+export function isLiveMonitorable(p: PidDescriptor): boolean {
+  if (p.hidden) return false;
+  const d = p.decode ?? {};
+  if (d.enum) return false;
+  if (d.length == null) return false;
+  if (d.length < 8 || d.length % 8 !== 0) return false;
+  return true;
+}
+
+// Deduplicate by PID code so the live-data path treats one signal per
+// command. Many SAE PIDs pack multiple readings into one response (e.g.
+// `01 14` carries both O2 sensor voltage AND its associated short-term
+// fuel trim; `01 08` carries fuel trim bank 2 AND bank 4). Until we wire
+// per-signal id keying through the full polling + decode stack, expose
+// only the primary signal per code in the selection UI — the one whose
+// startBit is 0 / unset.
+//
+// Tie-breaker when multiple candidates have startBit=0/null: prefer the
+// one whose name doesn't start with "SHRTFT" / "LONGFT" / "associated"
+// (OBDb tags the secondary readings in fuel-trim-pair commands that way).
+export function dedupeByCode(signals: PidDescriptor[]): PidDescriptor[] {
+  const byCode = new Map<string, PidDescriptor>();
+  for (const s of signals) {
+    if (!s.code) continue;
+    const existing = byCode.get(s.code);
+    if (!existing) {
+      byCode.set(s.code, s);
+      continue;
+    }
+    if (signalRank(s) < signalRank(existing)) {
+      byCode.set(s.code, s);
+    }
+  }
+  return Array.from(byCode.values());
+}
+
+function signalRank(s: PidDescriptor): number {
+  const bix = s.decode?.startBit;
+  // Primary = startBit null or 0. Lower rank = better candidate to keep.
+  let r = bix == null || bix === 0 ? 0 : 100 + bix;
+  // Penalize "associated/secondary" signals so primary readings win ties.
+  const name = (s.name ?? "").toLowerCase();
+  if (/associated|secondary|\(bank [34]\)/.test(name)) r += 1000;
+  return r;
+}
+
 // ---------- Mode 01 bitmask intersection ----------
 
 // Filter the catalog so that mode 01 PIDs only survive if they're in the
@@ -186,6 +276,13 @@ export function intersectWithSupport(
     const pidByte = parseInt(p.command.pid, 16);
     return supportedMode01.has(pidByte);
   });
+}
+
+// One-stop helper: filter to live-monitorable + dedupe by code. Used by
+// both the selection screen and the polling-descriptor builder so they
+// agree on what's visible / selectable / pollable.
+export function liveMonitorableSignals(signals: PidDescriptor[]): PidDescriptor[] {
+  return dedupeByCode(signals.filter(isLiveMonitorable));
 }
 
 // ---------- Presets (cross-vehicle) ----------
@@ -239,7 +336,9 @@ export async function deletePreset(id: string): Promise<void> {
 // ---------- Convenience: build the "live PIDs to poll" descriptor list ----------
 
 // Given the catalog, the user's selected codes, and the unsupported set,
-// return the PidDescriptor[] to hand to obd2.startPolling().
+// return the PidDescriptor[] to hand to obd2.startPolling(). Goes through
+// the live-monitorable filter + dedupe so the polling driver and the
+// selection UI agree on what's pollable.
 export function buildSelectedDescriptors(
   catalog: PidCatalogResponse | null,
   selectedCodes: string[],
@@ -247,8 +346,9 @@ export function buildSelectedDescriptors(
   aiSelectedCodes?: Set<string>,
 ): PidDescriptor[] {
   if (!catalog) return [];
+  const monitorable = liveMonitorableSignals(catalog.signals);
   const byCode = new Map<string, PidDescriptor>();
-  for (const s of catalog.signals) {
+  for (const s of monitorable) {
     if (s.code) byCode.set(s.code, s);
   }
   const out: PidDescriptor[] = [];

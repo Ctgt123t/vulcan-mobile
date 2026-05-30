@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -199,6 +200,9 @@ export default function Obd2Screen() {
         ).catch(() => {});
       }
       const descriptors = buildSelectedDescriptors(cached, effective, unsupported);
+      console.log(
+        `[obd2 screen] hydrate from cache — selected=${selectedCodes.length} effective=${effective.length} resolved=${descriptors.length} unsupported=${unsupported.size}`,
+      );
       if (!cancelled) setSelectedDescriptors(descriptors);
 
       // Background refresh from the network so future loads see the latest.
@@ -217,7 +221,12 @@ export default function Obd2Screen() {
     };
   }, [vehicle.make, vehicle.model, vehicle.year]);
 
-  // Drive the polling lifecycle off (connected, selectedDescriptors).
+  // Drive the polling lifecycle off (connected, selectedDescriptors). Use
+  // a stable code-string as the dependency so within-same-length selection
+  // changes (swap PID A for PID B) still trigger a re-poll. The focus
+  // effect above already calls setSelectedPids on the manager, but if the
+  // screen mounts fresh (deeplink, etc.) this is the path that primes it.
+  const selectedCodesKey = selectedDescriptors.map((d) => d.code).join(",");
   useEffect(() => {
     if (isConnected && selectedDescriptors.length > 0) {
       obd2.startPolling(selectedDescriptors, { intervalMs: 250 });
@@ -232,12 +241,42 @@ export default function Obd2Screen() {
       setDefinitions({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, selectedDescriptors.length]);
+  }, [isConnected, selectedCodesKey]);
 
-  // When the selection-screen Done button changes the active set, refresh
-  // local state from disk so the dashboard picks up the new gauges.
-  // (Triggered when this screen regains focus after navigating back.)
-  // Lightweight implementation: re-read on every render-tick-after-resume.
+  // When the user comes back from /obd2-pids (the selection screen), the
+  // OBD2 screen's component instance hasn't unmounted — the vehicle-change
+  // effect above won't re-fire. Use the navigation focus event to re-read
+  // selected codes from disk and rebuild the descriptor list so the
+  // gauges immediately reflect the new selection.
+  useFocusEffect(
+    useCallback(() => {
+      if (!vehicle.make || !vehicle.model || !vehicle.year) return;
+      let cancelled = false;
+      (async () => {
+        const [selectedCodes, unsupported] = await Promise.all([
+          loadSelectedCodes(vehicle.make, vehicle.model, vehicle.year),
+          loadUnsupportedCodes(vehicle.make, vehicle.model, vehicle.year),
+        ]);
+        if (cancelled) return;
+        const codes = selectedCodes.length > 0 ? selectedCodes : DEFAULT_PID_CODES;
+        const descriptors = buildSelectedDescriptors(pidCatalog, codes, unsupported);
+        // Only update if the selection actually changed — avoid kicking the
+        // polling driver on every focus event.
+        const prevCodes = selectedDescriptors.map((d) => d.code).join(",");
+        const nextCodes = descriptors.map((d) => d.code).join(",");
+        if (prevCodes !== nextCodes) {
+          console.log(
+            `[obd2 screen] focus refresh — selection changed: ${prevCodes} → ${nextCodes}`,
+          );
+          setSelectedDescriptors(descriptors);
+          obd2.setSelectedPids(descriptors);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [vehicle.make, vehicle.model, vehicle.year, pidCatalog, selectedDescriptors]),
+  );
 
   // On first mount, look up the remembered adapter and try to reconnect to
   // it silently. If it works, the user is straight in the connected state
