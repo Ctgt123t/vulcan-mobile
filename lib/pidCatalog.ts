@@ -4,21 +4,23 @@ import type { PidDescriptor } from "./obd2";
 // ----------------------------------------------------------------------------
 // PID catalog — bridges the server's /api/pids/<make>/<model>/<year>
 // response, the mode 01 support bitmask reported by the live ECU, and the
-// technician's per-vehicle preferences (selected PIDs, saved presets,
-// known-unsupported mode 22 PIDs).
+// technician's per-vehicle preferences (selected signal IDs, saved
+// presets, known-unsupported signal IDs).
 //
-// All technician-specific state is per-device AsyncStorage. Per CLAUDE.md
-// scalability: no backend per-user storage; the backend is stateless and
-// only serves the curated PID catalog by vehicle.
+// Storage keys (v2 — bumped from v1's code-based selection):
+//   vulcan:pids:catalog:<vk>          — full OBDb catalog cache (snapshot)
+//   vulcan:pids:bitmask:<vk>          — ECU mode-01 support bitmask
+//   vulcan:pids:selected:v2:<vk>      — array of selected signal IDs
+//   vulcan:pids:unsupported:v2:<vk>   — array of signal IDs that didn't
+//                                       respond after N poll attempts
+//   vulcan:pids:presets:v2            — cross-vehicle saved selections
 //
-// Storage layout:
-//   vulcan:pids:catalog:<vehicleKey>   — full catalog snapshot for this
-//                                         vehicle (so the selection screen
-//                                         works offline once visited once)
-//   vulcan:pids:selected:<vehicleKey>  — array of selected PID codes
-//   vulcan:pids:unsupported:<vehicleKey> — array of PID codes the ECU
-//                                         didn't respond to (lazy-marked)
-//   vulcan:pids:presets                 — user-defined presets (cross-vehicle)
+// Why v2: the v1 schema keyed everything by command code (e.g. "01 01"),
+// but many SAE PIDs carry MULTIPLE signals in the same command response
+// (PID 01 01 holds MIL, DTC_CNT, and 22 readiness bits). Code-keyed
+// selection collapsed all of them to a single row in the UI. v2 keys by
+// the OBDb signal `id` (e.g. "RPM", "MIL", "DTC_CNT"), which is unique
+// within a catalog and lets us select / decode each signal independently.
 //
 // vehicleKey = `${make}|${model}|${year}` lower-cased.
 // ----------------------------------------------------------------------------
@@ -43,7 +45,7 @@ export interface PidCatalogResponse {
 export interface PidPreset {
   id: string;
   name: string;
-  pidCodes: string[];
+  pidIds: string[];
   createdAt: number;
 }
 
@@ -72,7 +74,7 @@ export async function fetchPidCatalog(
   }
 }
 
-// ---------- Per-vehicle persistence ----------
+// ---------- Per-vehicle persistence (catalog) ----------
 
 export async function loadCachedCatalog(
   make: string,
@@ -104,11 +106,8 @@ export async function saveCatalog(
   }
 }
 
-// Mode 01 bitmask is cached separately from the catalog so re-querying the
-// bitmask (or failing to query it) doesn't shrink the persisted catalog.
-// Prior version overwrote catalog cache with the intersected set, which
-// produced an ever-shrinking PID list across selection-screen openings
-// whenever a bitmask query partially failed.
+// ---------- Per-vehicle persistence (bitmask, selected, unsupported) ----------
+
 export async function loadCachedBitmask(
   make: string,
   model: string,
@@ -143,14 +142,14 @@ export async function saveCachedBitmask(
   }
 }
 
-export async function loadSelectedCodes(
+export async function loadSelectedIds(
   make: string,
   model: string,
   year: string | number,
 ): Promise<string[]> {
   try {
     const raw = await AsyncStorage.getItem(
-      `vulcan:pids:selected:${vehicleKey(make, model, year)}`,
+      `vulcan:pids:selected:v2:${vehicleKey(make, model, year)}`,
     );
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -160,30 +159,30 @@ export async function loadSelectedCodes(
   }
 }
 
-export async function saveSelectedCodes(
+export async function saveSelectedIds(
   make: string,
   model: string,
   year: string | number,
-  codes: string[],
+  ids: string[],
 ): Promise<void> {
   try {
     await AsyncStorage.setItem(
-      `vulcan:pids:selected:${vehicleKey(make, model, year)}`,
-      JSON.stringify(codes),
+      `vulcan:pids:selected:v2:${vehicleKey(make, model, year)}`,
+      JSON.stringify(ids),
     );
   } catch (err) {
-    console.warn("[pidCatalog] saveSelectedCodes failed:", err);
+    console.warn("[pidCatalog] saveSelectedIds failed:", err);
   }
 }
 
-export async function loadUnsupportedCodes(
+export async function loadUnsupportedIds(
   make: string,
   model: string,
   year: string | number,
 ): Promise<Set<string>> {
   try {
     const raw = await AsyncStorage.getItem(
-      `vulcan:pids:unsupported:${vehicleKey(make, model, year)}`,
+      `vulcan:pids:unsupported:v2:${vehicleKey(make, model, year)}`,
     );
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
@@ -193,27 +192,27 @@ export async function loadUnsupportedCodes(
   }
 }
 
-export async function saveUnsupportedCodes(
+export async function saveUnsupportedIds(
   make: string,
   model: string,
   year: string | number,
-  codes: Set<string>,
+  ids: Set<string>,
 ): Promise<void> {
   try {
     await AsyncStorage.setItem(
-      `vulcan:pids:unsupported:${vehicleKey(make, model, year)}`,
-      JSON.stringify(Array.from(codes)),
+      `vulcan:pids:unsupported:v2:${vehicleKey(make, model, year)}`,
+      JSON.stringify(Array.from(ids)),
     );
   } catch (err) {
-    console.warn("[pidCatalog] saveUnsupportedCodes failed:", err);
+    console.warn("[pidCatalog] saveUnsupportedIds failed:", err);
   }
 }
 
-// ---------- Live-monitoring filters ----------
+// ---------- Display-type routing ----------
 
-// A signal is "live-monitorable" if we can render it as a numeric gauge
-// that updates at poll cadence: whole-byte width, not packed into a bit
-// field, no enum lookup, not hidden by OBDb.
+// A signal is "live-monitorable" (renders as a numeric gauge) when it's a
+// byte-aligned scalar reading. Bit-level signals (MIL, readiness bits)
+// and enum signals (categorical) flow into the Status panel instead.
 export function isLiveMonitorable(p: PidDescriptor): boolean {
   if (p.hidden) return false;
   const d = p.decode ?? {};
@@ -223,50 +222,19 @@ export function isLiveMonitorable(p: PidDescriptor): boolean {
   return true;
 }
 
-// Deduplicate by PID code so the live-data path treats one signal per
-// command. Many SAE PIDs pack multiple readings into one response (e.g.
-// `01 14` carries both O2 sensor voltage AND its associated short-term
-// fuel trim; `01 08` carries fuel trim bank 2 AND bank 4). Until we wire
-// per-signal id keying through the full polling + decode stack, expose
-// only the primary signal per code in the selection UI — the one whose
-// startBit is 0 / unset.
-//
-// Tie-breaker when multiple candidates have startBit=0/null: prefer the
-// one whose name doesn't start with "SHRTFT" / "LONGFT" / "associated"
-// (OBDb tags the secondary readings in fuel-trim-pair commands that way).
-export function dedupeByCode(signals: PidDescriptor[]): PidDescriptor[] {
-  const byCode = new Map<string, PidDescriptor>();
-  for (const s of signals) {
-    if (!s.code) continue;
-    const existing = byCode.get(s.code);
-    if (!existing) {
-      byCode.set(s.code, s);
-      continue;
-    }
-    if (signalRank(s) < signalRank(existing)) {
-      byCode.set(s.code, s);
-    }
-  }
-  return Array.from(byCode.values());
-}
-
-function signalRank(s: PidDescriptor): number {
-  const bix = s.decode?.startBit;
-  // Primary = startBit null or 0. Lower rank = better candidate to keep.
-  let r = bix == null || bix === 0 ? 0 : 100 + bix;
-  // Penalize "associated/secondary" signals so primary readings win ties.
-  const name = (s.name ?? "").toLowerCase();
-  if (/associated|secondary|\(bank [34]\)/.test(name)) r += 1000;
-  return r;
+export function isStatusSignal(p: PidDescriptor): boolean {
+  if (p.hidden) return false;
+  if (isLiveMonitorable(p)) return false;
+  // Anything non-hidden that isn't gauge-able is a status signal.
+  return true;
 }
 
 // ---------- Mode 01 bitmask intersection ----------
 
-// Filter the catalog so that mode 01 PIDs only survive if they're in the
-// `supportedMode01` set reported by the ECU's PID 00/20/40 bitmasks. Mode
-// 22 (manufacturer-specific) PIDs are passed through unchanged — there's
-// no support bitmask for them; the unsupported set fills in over time
-// from poll failures.
+// Filter to only mode 01 PIDs the ECU actually supports (the bitmask is
+// authoritative for mode 01). Mode 22 manufacturer PIDs have no bitmask
+// equivalent; they pass through and get lazy-marked unsupported by the
+// polling driver if they fail.
 export function intersectWithSupport(
   signals: PidDescriptor[],
   supportedMode01: Set<number>,
@@ -278,16 +246,45 @@ export function intersectWithSupport(
   });
 }
 
-// One-stop helper: filter to live-monitorable + dedupe by code. Used by
-// both the selection screen and the polling-descriptor builder so they
-// agree on what's visible / selectable / pollable.
-export function liveMonitorableSignals(signals: PidDescriptor[]): PidDescriptor[] {
-  return dedupeByCode(signals.filter(isLiveMonitorable));
+// ---------- Per-command total byte width ----------
+//
+// Each signal needs to know how many bytes follow its command's response
+// header so the multi-PID parser advances correctly even when only one
+// signal at a multi-signal command was selected. We compute this once
+// from the catalog (looking at ALL signals at each code) and embed it on
+// each descriptor.
+
+function computeBytesByCode(signals: PidDescriptor[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const s of signals) {
+    if (!s.code) continue;
+    const bix = s.decode?.startBit ?? 0;
+    const len = s.decode?.length ?? 0;
+    const bitsNeeded = bix + len;
+    const bytesNeeded = Math.max(1, Math.ceil(bitsNeeded / 8));
+    const prev = out.get(s.code) ?? 0;
+    if (bytesNeeded > prev) out.set(s.code, bytesNeeded);
+  }
+  return out;
 }
 
-// ---------- Presets (cross-vehicle) ----------
+// Annotate every signal in the catalog with the total bytes per command
+// it lives on. Called once per catalog hydration.
+export function annotateCommandWidths(
+  signals: PidDescriptor[],
+): PidDescriptor[] {
+  const bytesByCode = computeBytesByCode(signals);
+  return signals.map((s) => {
+    if (!s.code) return s;
+    const bytes = bytesByCode.get(s.code);
+    if (bytes == null) return s;
+    return { ...s, commandTotalBytes: bytes };
+  });
+}
 
-const PRESETS_KEY = "vulcan:pids:presets";
+// ---------- Presets ----------
+
+const PRESETS_KEY = "vulcan:pids:presets:v2";
 
 export async function loadPresets(): Promise<PidPreset[]> {
   try {
@@ -300,7 +297,7 @@ export async function loadPresets(): Promise<PidPreset[]> {
         p &&
         typeof p.id === "string" &&
         typeof p.name === "string" &&
-        Array.isArray(p.pidCodes),
+        Array.isArray(p.pidIds),
     );
   } catch {
     return [];
@@ -315,11 +312,11 @@ export async function savePresets(presets: PidPreset[]): Promise<void> {
   }
 }
 
-export async function createPreset(name: string, pidCodes: string[]): Promise<PidPreset> {
+export async function createPreset(name: string, pidIds: string[]): Promise<PidPreset> {
   const preset: PidPreset = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
-    pidCodes,
+    pidIds,
     createdAt: Date.now(),
   };
   const all = await loadPresets();
@@ -333,30 +330,30 @@ export async function deletePreset(id: string): Promise<void> {
   await savePresets(all.filter((p) => p.id !== id));
 }
 
-// ---------- Convenience: build the "live PIDs to poll" descriptor list ----------
+// ---------- Convenience: build the descriptors to poll ----------
 
-// Given the catalog, the user's selected codes, and the unsupported set,
-// return the PidDescriptor[] to hand to obd2.startPolling(). Goes through
-// the live-monitorable filter + dedupe so the polling driver and the
-// selection UI agree on what's pollable.
+// Given the catalog, the user's selected signal IDs, and the unsupported
+// set, return the PidDescriptor[] to hand to obd2.startPolling().
+// Annotates each descriptor with commandTotalBytes so the polling parser
+// advances correctly past multi-signal commands.
 export function buildSelectedDescriptors(
   catalog: PidCatalogResponse | null,
-  selectedCodes: string[],
-  unsupported: Set<string>,
-  aiSelectedCodes?: Set<string>,
+  selectedIds: string[],
+  unsupportedIds: Set<string>,
+  aiSelectedIds?: Set<string>,
 ): PidDescriptor[] {
   if (!catalog) return [];
-  const monitorable = liveMonitorableSignals(catalog.signals);
-  const byCode = new Map<string, PidDescriptor>();
-  for (const s of monitorable) {
-    if (s.code) byCode.set(s.code, s);
+  const annotated = annotateCommandWidths(catalog.signals);
+  const byId = new Map<string, PidDescriptor>();
+  for (const s of annotated) {
+    if (s.id) byId.set(s.id, s);
   }
   const out: PidDescriptor[] = [];
-  for (const code of selectedCodes) {
-    const sig = byCode.get(code);
+  for (const id of selectedIds) {
+    const sig = byId.get(id);
     if (!sig) continue;
-    if (unsupported.has(code)) continue;
-    if (aiSelectedCodes?.has(code)) {
+    if (unsupportedIds.has(id)) continue;
+    if (aiSelectedIds?.has(id)) {
       out.push({ ...sig, aiSelected: true });
     } else {
       out.push(sig);

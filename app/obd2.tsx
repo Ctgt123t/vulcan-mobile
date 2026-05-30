@@ -32,27 +32,35 @@ import {
   type PidCatalogResponse,
   buildSelectedDescriptors,
   fetchPidCatalog,
+  isLiveMonitorable,
+  isStatusSignal,
   loadCachedCatalog,
-  loadSelectedCodes,
-  loadUnsupportedCodes,
-  saveSelectedCodes,
+  loadSelectedIds,
+  loadUnsupportedIds,
+  saveSelectedIds,
 } from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type { DtcDefinition } from "../lib/types";
+import {
+  formatLiveValue,
+  formatStatusValue,
+  isSignedDisplay,
+} from "../lib/units";
 
-// Sensible starter selection for first-time-on-this-vehicle users — every
-// mobile-tech-friendly mode 01 PID we know is widely supported. The user
-// can change this from the PID selection screen at any time.
-const DEFAULT_PID_CODES = [
-  "01 0C", // Engine RPM
-  "01 0D", // Vehicle speed
-  "01 05", // Coolant temp
-  "01 11", // Throttle position
-  "01 10", // MAF
-  "01 42", // Control module voltage
-  "01 06", // Short term fuel trim B1
-  "01 07", // Long term fuel trim B1
+// Sensible starter selection by SAE J1979 signal ID — these IDs are
+// stable across the OBDb catalog. First-time-on-this-vehicle users see
+// these on the gauge dashboard; they can change the selection from the
+// PID picker.
+const DEFAULT_PID_IDS = [
+  "RPM",       // Engine RPM
+  "VSS",       // Vehicle speed
+  "ECT",       // Engine coolant temp
+  "TP",        // Throttle position
+  "MAF",       // Mass air flow
+  "VPWR",      // Control module voltage
+  "SHRTFT1",   // Short term fuel trim B1
+  "LONGFT1",   // Long term fuel trim B1
 ];
 
 type DefinitionState =
@@ -157,11 +165,12 @@ export default function Obd2Screen() {
 
   // ---------- PID selection + live polling ----------
   //
-  // We hydrate the catalog from AsyncStorage (instant), seed selected PIDs
-  // from saved selection (or the DEFAULT_PID_CODES starter set on first
-  // run), and start the polling driver. The driver is selected-PID-driven
-  // — sub-second refresh on a small fast-tier set instead of a fixed
-  // round-robin over a hard-coded list.
+  // Hydrate catalog from disk, seed selected signals from saved selection
+  // (or the DEFAULT_PID_IDS starter set on first run for this vehicle), and
+  // start the polling driver. Selection and live values are keyed by
+  // SIGNAL ID — many SAE PIDs carry several signals per command response,
+  // so id-keying lets each one be selected / decoded / displayed
+  // independently.
   const [pidCatalog, setPidCatalog] = useState<PidCatalogResponse | null>(null);
   const [selectedDescriptors, setSelectedDescriptors] = useState<PidDescriptor[]>(
     [],
@@ -175,7 +184,6 @@ export default function Obd2Screen() {
     }
     let cancelled = false;
     (async () => {
-      // Hydrate from disk first so the dashboard renders immediately.
       const cached = await loadCachedCatalog(
         vehicle.make,
         vehicle.model,
@@ -183,25 +191,24 @@ export default function Obd2Screen() {
       );
       if (cached && !cancelled) setPidCatalog(cached);
 
-      const [selectedCodes, unsupported] = await Promise.all([
-        loadSelectedCodes(vehicle.make, vehicle.model, vehicle.year),
-        loadUnsupportedCodes(vehicle.make, vehicle.model, vehicle.year),
+      const [selectedIds, unsupported] = await Promise.all([
+        loadSelectedIds(vehicle.make, vehicle.model, vehicle.year),
+        loadUnsupportedIds(vehicle.make, vehicle.model, vehicle.year),
       ]);
       if (cancelled) return;
 
-      const effective = selectedCodes.length > 0 ? selectedCodes : DEFAULT_PID_CODES;
-      if (selectedCodes.length === 0 && cached) {
-        // Persist the starter set so the selection screen reflects it.
-        saveSelectedCodes(
+      const effective = selectedIds.length > 0 ? selectedIds : DEFAULT_PID_IDS;
+      if (selectedIds.length === 0 && cached) {
+        saveSelectedIds(
           vehicle.make,
           vehicle.model,
           vehicle.year,
-          DEFAULT_PID_CODES,
+          DEFAULT_PID_IDS,
         ).catch(() => {});
       }
       const descriptors = buildSelectedDescriptors(cached, effective, unsupported);
       console.log(
-        `[obd2 screen] hydrate from cache — selected=${selectedCodes.length} effective=${effective.length} resolved=${descriptors.length} unsupported=${unsupported.size}`,
+        `[obd2 screen] hydrate — selectedIds=${selectedIds.length} effective=${effective.length} resolved=${descriptors.length} unsupported=${unsupported.size}`,
       );
       if (!cancelled) setSelectedDescriptors(descriptors);
 
@@ -221,12 +228,10 @@ export default function Obd2Screen() {
     };
   }, [vehicle.make, vehicle.model, vehicle.year]);
 
-  // Drive the polling lifecycle off (connected, selectedDescriptors). Use
-  // a stable code-string as the dependency so within-same-length selection
-  // changes (swap PID A for PID B) still trigger a re-poll. The focus
-  // effect above already calls setSelectedPids on the manager, but if the
-  // screen mounts fresh (deeplink, etc.) this is the path that primes it.
-  const selectedCodesKey = selectedDescriptors.map((d) => d.code).join(",");
+  // Drive the polling lifecycle off (connected, selectedDescriptors).
+  // Use a stable id-string as the dependency so swap-A-for-B selection
+  // changes also trigger a re-poll.
+  const selectedIdsKey = selectedDescriptors.map((d) => d.id).join(",");
   useEffect(() => {
     if (isConnected && selectedDescriptors.length > 0) {
       obd2.startPolling(selectedDescriptors, { intervalMs: 250 });
@@ -241,7 +246,7 @@ export default function Obd2Screen() {
       setDefinitions({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, selectedCodesKey]);
+  }, [isConnected, selectedIdsKey]);
 
   // When the user comes back from /obd2-pids (the selection screen), the
   // OBD2 screen's component instance hasn't unmounted — the vehicle-change
@@ -253,20 +258,18 @@ export default function Obd2Screen() {
       if (!vehicle.make || !vehicle.model || !vehicle.year) return;
       let cancelled = false;
       (async () => {
-        const [selectedCodes, unsupported] = await Promise.all([
-          loadSelectedCodes(vehicle.make, vehicle.model, vehicle.year),
-          loadUnsupportedCodes(vehicle.make, vehicle.model, vehicle.year),
+        const [selectedIds, unsupported] = await Promise.all([
+          loadSelectedIds(vehicle.make, vehicle.model, vehicle.year),
+          loadUnsupportedIds(vehicle.make, vehicle.model, vehicle.year),
         ]);
         if (cancelled) return;
-        const codes = selectedCodes.length > 0 ? selectedCodes : DEFAULT_PID_CODES;
-        const descriptors = buildSelectedDescriptors(pidCatalog, codes, unsupported);
-        // Only update if the selection actually changed — avoid kicking the
-        // polling driver on every focus event.
-        const prevCodes = selectedDescriptors.map((d) => d.code).join(",");
-        const nextCodes = descriptors.map((d) => d.code).join(",");
-        if (prevCodes !== nextCodes) {
+        const ids = selectedIds.length > 0 ? selectedIds : DEFAULT_PID_IDS;
+        const descriptors = buildSelectedDescriptors(pidCatalog, ids, unsupported);
+        const prevIds = selectedDescriptors.map((d) => d.id).join(",");
+        const nextIds = descriptors.map((d) => d.id).join(",");
+        if (prevIds !== nextIds) {
           console.log(
-            `[obd2 screen] focus refresh — selection changed: ${prevCodes} → ${nextCodes}`,
+            `[obd2 screen] focus refresh — selection changed: ${prevIds} → ${nextIds}`,
           );
           setSelectedDescriptors(descriptors);
           obd2.setSelectedPids(descriptors);
@@ -740,18 +743,32 @@ export default function Obd2Screen() {
                   </TouchableOpacity>
                 </View>
               </View>
-              <View style={styles.gauges}>
-                {selectedDescriptors.map((p) => {
-                  const reading = liveData[p.code];
-                  return (
+              {/* Numeric gauges — byte-aligned scalar readings */}
+              {selectedDescriptors.some(isLiveMonitorable) ? (
+                <View style={styles.gauges}>
+                  {selectedDescriptors.filter(isLiveMonitorable).map((p) => (
                     <DynamicGauge
-                      key={p.code}
+                      key={p.id}
                       descriptor={p}
-                      reading={reading}
+                      reading={liveData[p.id]}
                     />
-                  );
-                })}
-              </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {/* Status / readiness panel — bit-level + enum signals */}
+              {selectedDescriptors.some(isStatusSignal) ? (
+                <View style={styles.statusPanel}>
+                  <Text style={styles.statusPanelLabel}>STATUS</Text>
+                  {selectedDescriptors.filter(isStatusSignal).map((p) => (
+                    <StatusRow
+                      key={p.id}
+                      descriptor={p}
+                      reading={liveData[p.id]}
+                    />
+                  ))}
+                </View>
+              ) : null}
             </>
           )}
         </Section>
@@ -852,11 +869,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 // ---------- Live data gauge ----------
 
-// Dynamic gauge driven by a PidDescriptor + LiveValue from the polling
-// driver. Replaces the old 9 hardcoded Gauge components. Handles missing
-// readings (PID hasn't been polled yet or doesn't respond), unit display,
-// signed/percent formatting, and the AI-selected highlight (deferred to
-// the broader OBD2 integration but the data path is wired).
+// Dynamic numeric gauge — converts raw values through lib/units before
+// rendering so the tech sees Fahrenheit / mph / psi etc. by default
+// (imperial). The internal LiveValue stays raw so anything downstream
+// (Claude integration, exported records) gets a single source of truth.
 function DynamicGauge({
   descriptor,
   reading,
@@ -864,72 +880,58 @@ function DynamicGauge({
   descriptor: PidDescriptor;
   reading: LiveValue | undefined;
 }) {
-  const v = reading?.value ?? null;
-  const isPercent = (descriptor.unit ?? "").toLowerCase().includes("percent") ||
-    descriptor.unit === "%" ||
-    /^stft$|^ltft$|trim/i.test(descriptor.name);
-  let display: string;
-  if (v == null) {
-    display = "—";
-  } else if (Math.abs(v) >= 1000) {
-    display = String(Math.round(v));
-  } else if (Math.abs(v) >= 10) {
-    display = v.toFixed(1);
-  } else if (Math.abs(v) >= 1) {
-    display = v.toFixed(2);
-  } else {
-    display = v.toFixed(3);
-  }
-  // Show a leading + sign for percent / trim values when positive so techs
-  // can read positive vs negative trim at a glance.
-  if (v != null && isPercent && v > 0) display = `+${display}`;
-  const unitLabel = unitShortLabel(descriptor.unit);
+  const formatted = formatLiveValue(reading?.value ?? null, descriptor.unit, {
+    signed: isSignedDisplay(descriptor.name),
+  });
   return (
     <View style={[styles.gauge, descriptor.aiSelected && styles.gaugeAi]}>
       <Text style={styles.gaugeLabel} numberOfLines={1}>
         {descriptor.name}
       </Text>
       <View style={styles.gaugeValueRow}>
-        <Text style={styles.gaugeValue}>{display}</Text>
-        {unitLabel ? <Text style={styles.gaugeUnit}>{unitLabel}</Text> : null}
+        <Text style={styles.gaugeValue}>{formatted.text}</Text>
+        {formatted.unit ? (
+          <Text style={styles.gaugeUnit}>{formatted.unit}</Text>
+        ) : null}
       </View>
     </View>
   );
 }
 
-// OBDb's unit values are long camel-cased ("revolutionsPerMinute") — map
-// to short tech-style labels for the gauge. Anything we don't have a short
-// label for falls back to the raw value.
-function unitShortLabel(unit: string | null): string {
-  if (!unit) return "";
-  const map: Record<string, string> = {
-    revolutionsPerMinute: "RPM",
-    kilometersPerHour: "km/h",
-    milesPerHour: "mph",
-    celsius: "°C",
-    fahrenheit: "°F",
-    percent: "%",
-    volts: "V",
-    millivolts: "mV",
-    bar: "bar",
-    kilopascal: "kPa",
-    pascal: "Pa",
-    psi: "psi",
-    gramsPerSecond: "g/s",
-    kilometers: "km",
-    miles: "mi",
-    liters: "L",
-    seconds: "s",
-    hours: "h",
-    minutes: "min",
-    degrees: "°",
-    nanograms: "ng",
-    grams: "g",
-    yesno: "",
-    offon: "",
-    scalar: "",
-  };
-  return map[unit] ?? unit;
+// Row in the Status panel for bit-level / enum / on-off signals.
+// Renders the formatted text plus a colored severity dot so techs can
+// glance at the panel and spot a MIL ON or a NOT READY monitor.
+function StatusRow({
+  descriptor,
+  reading,
+}: {
+  descriptor: PidDescriptor;
+  reading: LiveValue | undefined;
+}) {
+  const status = formatStatusValue(
+    reading?.value ?? null,
+    descriptor.unit,
+    descriptor.decode?.enum,
+  );
+  const sevColor =
+    status.severity === "alert"
+      ? colors.dangerText
+      : status.severity === "warning"
+        ? colors.warnText
+        : status.severity === "ok"
+          ? colors.okText
+          : colors.muted;
+  return (
+    <View style={styles.statusRow}>
+      <View style={[styles.statusRowDot, { backgroundColor: sevColor }]} />
+      <Text style={styles.statusName} numberOfLines={1}>
+        {descriptor.name}
+      </Text>
+      <Text style={[styles.statusValue, { color: sevColor }]} numberOfLines={1}>
+        {status.text}
+      </Text>
+    </View>
+  );
 }
 
 // ---------- DTC card with inline definition ----------
@@ -1729,6 +1731,45 @@ const styles = StyleSheet.create({
   gaugeAi: {
     borderColor: colors.accent,
     backgroundColor: colors.accentFade,
+  },
+  statusPanel: {
+    marginTop: 10,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  statusPanelLabel: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 28,
+  },
+  statusRowDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusName: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  statusValue: {
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
   gaugeLabel: {
     color: colors.muted,

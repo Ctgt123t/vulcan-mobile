@@ -88,9 +88,9 @@ export interface PidDecode {
 }
 
 export interface PidDescriptor {
-  code: string; // e.g. "01 0C"
+  code: string; // e.g. "01 0C" — command identifier (one or more signals may share it)
   command: { mode: string; pid: string };
-  id?: string | null; // OBDb signal id, e.g. "ENGINE_RPM"
+  id: string; // OBDb signal id — UNIQUE within a vehicle catalog
   name: string;
   unit: string | null;
   category: string;
@@ -98,6 +98,13 @@ export interface PidDescriptor {
   max: number | null;
   decode: PidDecode;
   hidden?: boolean; // OBDb flags some signals as debug-only
+  // Pre-computed by pidCatalog.annotateCommandWidths(): total bytes that
+  // follow the `41 PID` (or `62 PID`) marker for this command. Used by the
+  // multi-PID parser to know how far to advance past each PID block —
+  // critical when multiple signals share a command and only some are
+  // selected. Falls back to ceil(length/8) on the signal's own bits if
+  // absent.
+  commandTotalBytes?: number;
   // Optional caller-supplied flag (set by the AI integration). Carried into
   // the live value so the UI can render an "AI-selected" badge.
   aiSelected?: boolean;
@@ -293,37 +300,62 @@ function extractPidDataBytes(
   return null;
 }
 
-// Walk a multi-PID mode 01 response and pull out each requested PID's
-// data bytes. The ELM327 spec allows up to 6 PIDs per request; the response
-// is an arbitrary interleaving of `41 XX <data...>` segments, possibly
-// spread across CAN frames. Returns a Map<code, value | null> covering
-// every PID in `batch` — null when the PID didn't appear in the response.
+// Parse a multi-PID mode 01 response and pull out each requested SIGNAL's
+// value (keyed by signal id). Many SAE PIDs carry multiple signals in one
+// response — e.g. `41 01 XX YY ZZ WW` packs MIL, DTC count, and a dozen
+// readiness bits into 4 bytes; `41 14 V T` packs an O2 sensor voltage AND
+// its associated short-term fuel trim into 2 bytes. We group requested
+// signals by PID byte, find each `41 XX` marker, slice the right number of
+// bytes (commandTotalBytes — pre-computed from the catalog so we advance
+// correctly past unselected signals at the same command), and decode each
+// selected signal using its own bit-range.
 function parseMultiPidResponse(
   raw: string,
   batch: PidDescriptor[],
 ): Map<string, number | null> {
   const result = new Map<string, number | null>();
-  for (const p of batch) result.set(p.code, null);
+  for (const s of batch) result.set(s.id, null);
+
   const bytes = responseToBytes(raw);
-  // PID hex (as int) → descriptor. Mode 01 PIDs are always 1 byte.
-  const expected = new Map<number, PidDescriptor>();
-  for (const p of batch) expected.set(parseInt(p.command.pid, 16), p);
+
+  // Group signals by mode-01 PID byte. For each PID byte, also remember
+  // the total bytes the command produces (max commandTotalBytes among the
+  // signals — they should all agree, but max is the safe pick).
+  const signalsByPidByte = new Map<number, PidDescriptor[]>();
+  const bytesByPidByte = new Map<number, number>();
+  for (const s of batch) {
+    const pidByte = parseInt(s.command.pid, 16);
+    const arr = signalsByPidByte.get(pidByte) ?? [];
+    arr.push(s);
+    signalsByPidByte.set(pidByte, arr);
+    const bytesForS =
+      s.commandTotalBytes ??
+      Math.max(
+        1,
+        Math.ceil(((s.decode.startBit ?? 0) + (s.decode.length ?? 8)) / 8),
+      );
+    const prev = bytesByPidByte.get(pidByte) ?? 0;
+    if (bytesForS > prev) bytesByPidByte.set(pidByte, bytesForS);
+  }
+
   let i = 0;
   while (i + 1 < bytes.length) {
-    if (bytes[i] === 0x41 && expected.has(bytes[i + 1])) {
-      const desc = expected.get(bytes[i + 1])!;
-      const bitsNeeded = desc.decode.length ?? 8;
-      const bytesNeeded = Math.ceil(bitsNeeded / 8);
-      if (i + 2 + bytesNeeded > bytes.length) {
-        i++;
-        continue;
-      }
-      const data = bytes.slice(i + 2, i + 2 + bytesNeeded);
-      result.set(desc.code, decodePidGeneric(data, desc.decode));
-      i += 2 + bytesNeeded;
+    if (bytes[i] !== 0x41 || !signalsByPidByte.has(bytes[i + 1])) {
+      i++;
       continue;
     }
-    i++;
+    const pidByte = bytes[i + 1];
+    const bytesNeeded = bytesByPidByte.get(pidByte) ?? 1;
+    const dataStart = i + 2;
+    if (dataStart + bytesNeeded > bytes.length) {
+      i++;
+      continue;
+    }
+    const data = bytes.slice(dataStart, dataStart + bytesNeeded);
+    for (const sig of signalsByPidByte.get(pidByte)!) {
+      result.set(sig.id, decodePidGeneric(data, sig.decode));
+    }
+    i = dataStart + bytesNeeded;
   }
   return result;
 }
@@ -1566,61 +1598,71 @@ class Obd2Manager {
     this.pollTimer = setTimeout(tick, this.pollIntervalMs);
   }
 
-  // Reports the unsupported set so callers (pidCatalog) can persist it and
-  // grey out PIDs in the selection UI.
+  // Reports the unsupported signal IDs so callers (pidCatalog) can persist
+  // them and grey out PIDs in the selection UI.
   getUnsupportedPids(): Set<string> {
     return new Set(this.unsupportedPids);
   }
 
   setSelectedPids(pids: PidDescriptor[]): void {
     this.selectedPids = pids;
-    // Selection change resets per-PID failure tracking so previously-flaky
-    // entries get a fresh chance.
+    // Selection change resets per-signal failure tracking so previously-
+    // flaky entries get a fresh chance.
     this.failureCounts.clear();
   }
 
-  // Per-PID consecutive-miss counter. A PID is added to unsupportedPids
-  // only after MAX_CONSECUTIVE_MISSES misses in a row — so a one-off
-  // multi-PID partial response doesn't kill an entire batch.
+  // Per-SIGNAL consecutive-miss counter (keyed by signal id). A signal is
+  // added to unsupportedPids only after MAX_CONSECUTIVE_MISSES misses in
+  // a row — so a one-off multi-PID partial response doesn't kill an entire
+  // batch.
   private failureCounts: Map<string, number> = new Map();
   private static readonly MAX_CONSECUTIVE_MISSES = 4;
 
-  private recordMiss(code: string): void {
-    const n = (this.failureCounts.get(code) ?? 0) + 1;
-    this.failureCounts.set(code, n);
+  private recordMiss(id: string): void {
+    const n = (this.failureCounts.get(id) ?? 0) + 1;
+    this.failureCounts.set(id, n);
     if (n >= Obd2Manager.MAX_CONSECUTIVE_MISSES) {
-      this.unsupportedPids.add(code);
+      this.unsupportedPids.add(id);
       console.log(
-        `[obd2 poll] ${code} marked unsupported after ${n} consecutive misses`,
+        `[obd2 poll] ${id} marked unsupported after ${n} consecutive misses`,
       );
     }
   }
 
-  private recordHit(code: string): void {
-    this.failureCounts.delete(code);
+  private recordHit(id: string): void {
+    this.failureCounts.delete(id);
   }
 
   private async pollSelectedOnce(): Promise<void> {
-    const supported = this.selectedPids.filter((p) => !this.unsupportedPids.has(p.code));
-    const fast: PidDescriptor[] = [];
-    const slow: PidDescriptor[] = [];
+    const supported = this.selectedPids.filter((p) => !this.unsupportedPids.has(p.id));
+
+    // Group by command code first. Multiple selected signals may share a
+    // command (e.g. MIL + DTC_CNT both live under `01 01`); they should
+    // produce ONE outgoing request, not one per signal. The parser then
+    // decodes each selected signal from the shared response.
+    const fastByCode = new Map<string, PidDescriptor[]>();
+    const slowByCode = new Map<string, PidDescriptor[]>();
     for (const p of supported) {
-      if (p.command.mode === "01") fast.push(p);
-      else slow.push(p);
+      const bucket = p.command.mode === "01" ? fastByCode : slowByCode;
+      const arr = bucket.get(p.code) ?? [];
+      arr.push(p);
+      bucket.set(p.code, arr);
     }
 
-    // Fast tier — batches of 6 PIDs per multi-PID command.
-    for (let i = 0; i < fast.length; i += 6) {
-      const batch = fast.slice(i, i + 6);
-      await this.pollMultiplePids(batch);
+    // Fast tier — batch up to 6 unique mode-01 PIDs per multi-PID command.
+    const fastCodes = Array.from(fastByCode.keys());
+    for (let i = 0; i < fastCodes.length; i += 6) {
+      const codes = fastCodes.slice(i, i + 6);
+      const signals = codes.flatMap((c) => fastByCode.get(c) ?? []);
+      await this.pollMultiplePids(codes, signals);
     }
 
-    // Slow tier — sequential, once every slowTierEvery ticks.
-    if (slow.length > 0 && this.tickIndex % this.slowTierEvery === 0) {
-      // Round-robin one mode 22 PID per slow tick so a long list doesn't
-      // stall the fast tier behind a sequential batch.
-      const idx = Math.floor(this.tickIndex / this.slowTierEvery) % slow.length;
-      await this.pollSinglePid(slow[idx]);
+    // Slow tier — sequential, one command per slowTierEvery ticks.
+    const slowCodes = Array.from(slowByCode.keys());
+    if (slowCodes.length > 0 && this.tickIndex % this.slowTierEvery === 0) {
+      const idx = Math.floor(this.tickIndex / this.slowTierEvery) % slowCodes.length;
+      const code = slowCodes[idx];
+      await this.pollSingleCommand(slowByCode.get(code)!);
     }
   }
 
@@ -1634,106 +1676,143 @@ class Obd2Manager {
   // individually before we count it as a miss. This is the costliest path
   // (1 multi-PID + N single-PIDs per tick) but it self-correcting and
   // results in accurate per-PID hit / miss accounting.
-  async pollMultiplePids(batch: PidDescriptor[]): Promise<void> {
-    if (batch.length === 0) return;
-    const cmd = `01${batch.map((p) => p.command.pid).join("")}`;
+  // Multi-PID poll. `codes` are the unique command codes batched into one
+  // request (max 6 per ELM327 spec); `signals` is every selected signal
+  // that lives under any of those codes. The parser decodes each signal
+  // independently from the shared command responses.
+  async pollMultiplePids(
+    codes: string[],
+    signals: PidDescriptor[],
+  ): Promise<void> {
+    if (codes.length === 0 || signals.length === 0) return;
+    const pidBytes = codes.map((c) => c.split(" ")[1]).join("");
+    const cmd = `01${pidBytes}`;
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
-    const parsed = parseMultiPidResponse(res, batch);
+    const parsed = parseMultiPidResponse(res, signals);
     const now = Date.now();
     let multiHits = 0;
     const misses: PidDescriptor[] = [];
-    // Build the next liveData as an immutable update. Mutating the existing
-    // map in place and re-handing the same reference to React listeners
-    // makes setState a no-op (prevState === nextState short-circuit) — the
-    // gauges would never re-render even though the underlying values are
-    // changing. Spreading into a new object on every change is the cost
-    // we pay for reactivity.
+    // Immutable update — re-handing the same map reference to setLiveData
+    // short-circuits React's prevState === nextState comparison and the
+    // gauges never re-render even when the values are changing.
     let next: LiveValues = this.liveData;
-    for (const p of batch) {
-      const v = parsed.get(p.code);
+    for (const s of signals) {
+      const v = parsed.get(s.id);
       if (v == null) {
-        misses.push(p);
+        misses.push(s);
         continue;
       }
-      this.recordHit(p.code);
+      this.recordHit(s.id);
       multiHits++;
       next = {
         ...next,
-        [p.code]: {
+        [s.id]: {
           value: v,
-          name: p.name,
-          unit: p.unit,
-          category: p.category,
-          min: p.min,
-          max: p.max,
+          name: s.name,
+          unit: s.unit,
+          category: s.category,
+          min: s.min,
+          max: s.max,
           timestamp: now,
-          aiSelected: p.aiSelected,
+          aiSelected: s.aiSelected,
         },
       };
     }
     console.log(
-      `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${batch.length} hits: ` +
-        batch
-          .map((p) => `${p.code}=${parsed.get(p.code) ?? "—"}`)
-          .join(", "),
+      `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${signals.length} hits: ` +
+        signals
+          .slice(0, 8) // truncate to keep log readable
+          .map((s) => `${s.id}=${parsed.get(s.id) ?? "—"}`)
+          .join(", ") +
+        (signals.length > 8 ? `, +${signals.length - 8} more` : ""),
     );
-    // Commit the multi-PID hits before the single-PID fallback runs so
-    // listeners see the partial result immediately (RPM updates this tick
-    // even when fuel trims need a fallback).
+    // Commit the multi-PID hits before any single-PID fallbacks run so
+    // listeners see the partial result immediately.
     if (next !== this.liveData) {
       this.liveData = next;
       this.liveListeners.forEach((cb) => cb(this.liveData));
     }
 
-    // If the batch had >1 PID and any didn't return, fall back to single-PID
-    // polling for each miss this same tick. When batch.length === 1 there's
-    // nothing to fall back to — the recordMiss happens below.
-    if (misses.length > 0 && batch.length > 1) {
-      for (const p of misses) await this.pollSinglePid(p);
+    // Fall back to single-command polling for signals that didn't show up
+    // in the multi-PID response — many GM ECUs only answer the first PID
+    // of a multi-PID request. Group misses by command code so we send
+    // each missing command once (decoding all the signals at it that we
+    // wanted in the first place).
+    if (misses.length > 0 && codes.length > 1) {
+      const missByCode = new Map<string, PidDescriptor[]>();
+      for (const m of misses) {
+        const arr = missByCode.get(m.code) ?? [];
+        arr.push(m);
+        missByCode.set(m.code, arr);
+      }
+      for (const signalsForCode of missByCode.values()) {
+        await this.pollSingleCommand(signalsForCode);
+      }
     } else if (misses.length > 0) {
-      for (const p of misses) this.recordMiss(p.code);
+      for (const s of misses) this.recordMiss(s.id);
     }
   }
 
-  private async pollSinglePid(p: PidDescriptor): Promise<void> {
-    const cmd = `${p.command.mode}${p.command.pid}`;
+  // Issue ONE command and decode every selected signal under it. Used by
+  // the slow tier (mode 22 PIDs) and as the single-PID fallback path
+  // when multi-PID returns partial results.
+  private async pollSingleCommand(signals: PidDescriptor[]): Promise<void> {
+    if (signals.length === 0) return;
+    const first = signals[0];
+    const cmd = `${first.command.mode}${first.command.pid}`;
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
     if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
-      this.recordMiss(p.code);
+      for (const s of signals) this.recordMiss(s.id);
       return;
     }
-    // Mode response code is mode + 0x40 (01 → 41, 02 → 42, 09 → 49,
-    // 22 → 62). For mode 22 the PID is two bytes; the response carries them
-    // both back after the 0x62 marker.
-    const responseCode = parseInt(p.command.mode, 16) + 0x40;
-    const data = extractPidDataBytes(res, responseCode, p.command.pid, p.decode.length);
+    // Mode response code is mode + 0x40 (01 → 41, 22 → 62).
+    const responseCode = parseInt(first.command.mode, 16) + 0x40;
+    const totalBytes =
+      first.commandTotalBytes ??
+      Math.max(
+        1,
+        Math.ceil(((first.decode.startBit ?? 0) + (first.decode.length ?? 8)) / 8),
+      );
+    const data = extractPidDataBytes(
+      res,
+      responseCode,
+      first.command.pid,
+      totalBytes * 8,
+    );
     if (data == null) {
-      this.recordMiss(p.code);
+      for (const s of signals) this.recordMiss(s.id);
       return;
     }
-    const value = decodePidGeneric(data, p.decode);
-    if (value == null) {
-      this.recordMiss(p.code);
-      return;
+    let next: LiveValues = this.liveData;
+    const logBits: string[] = [];
+    for (const s of signals) {
+      const value = decodePidGeneric(data, s.decode);
+      if (value == null) {
+        this.recordMiss(s.id);
+        logBits.push(`${s.id}=—`);
+        continue;
+      }
+      this.recordHit(s.id);
+      logBits.push(`${s.id}=${value}`);
+      next = {
+        ...next,
+        [s.id]: {
+          value,
+          name: s.name,
+          unit: s.unit,
+          category: s.category,
+          min: s.min,
+          max: s.max,
+          timestamp: Date.now(),
+          aiSelected: s.aiSelected,
+        },
+      };
     }
-    this.recordHit(p.code);
-    // Immutable update so React subscribers actually re-render — see the
-    // long-form comment in pollMultiplePids.
-    this.liveData = {
-      ...this.liveData,
-      [p.code]: {
-        value,
-        name: p.name,
-        unit: p.unit,
-        category: p.category,
-        min: p.min,
-        max: p.max,
-        timestamp: Date.now(),
-        aiSelected: p.aiSelected,
-      },
-    };
-    console.log(`[obd2 poll] single ${p.code}=${value}`);
-    this.liveListeners.forEach((cb) => cb(this.liveData));
+    console.log(`[obd2 poll] single cmd=${cmd} → ${logBits.join(", ")}`);
+    if (next !== this.liveData) {
+      this.liveData = next;
+      this.liveListeners.forEach((cb) => cb(this.liveData));
+    }
   }
 
   stopPolling(): void {
