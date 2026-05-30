@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import DiagnosisActions from "../components/DiagnosisActions";
 import Navbar from "../components/Navbar";
 import RecallList from "../components/RecallList";
@@ -20,6 +21,7 @@ import Results from "../components/Results";
 import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
+import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
   DiagnoseError,
   VinDecodeError,
@@ -28,8 +30,6 @@ import {
   isLikelyVin,
 } from "../lib/api";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
-import { fetchRecalls } from "../lib/recalls";
-import { fetchTsbs } from "../lib/tsbs";
 import {
   type DiagnosticRecord,
   type RecordOutcome,
@@ -41,33 +41,40 @@ import type {
   AssistantTurn,
   ChatMessage,
   FinalDiagnosis,
-  Recall,
-  Tsb,
   VehicleInfo,
 } from "../lib/types";
-
-const EMPTY_VEHICLE: VehicleInfo = {
-  year: "",
-  make: "",
-  model: "",
-  trim: "",
-  engineType: "",
-  mileage: "",
-};
 
 type Phase = "intake" | "chat";
 
 export default function Screen() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>("intake");
-  const [vehicle, setVehicle] = useState<VehicleInfo>(EMPTY_VEHICLE);
+  // Vehicle, recalls, and TSBs live in the global VehicleContext so the
+  // auto-VIN flow (when the OBD2 adapter connects) populates the intake
+  // form here automatically.
+  const {
+    vehicle,
+    vin: ctxVin,
+    recalls,
+    tsbs,
+    setVehicleManually,
+    clearVehicle,
+  } = useVehicle();
+  // Local VIN input — synced with the context's vin when the context
+  // updates from elsewhere (e.g. OBD2 auto-detect).
+  const [vin, setVin] = useState<string>(ctxVin ?? "");
+  useEffect(() => {
+    if ((ctxVin ?? "") !== vin) {
+      setVin(ctxVin ?? "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctxVin]);
   const [symptom, setSymptom] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [vin, setVin] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [decoding, setDecoding] = useState(false);
   const [decodeError, setDecodeError] = useState<string | null>(null);
@@ -78,20 +85,49 @@ export default function Screen() {
   const [confirmedDone, setConfirmedDone] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
 
-  const [recalls, setRecalls] = useState<Recall[]>([]);
-  const [tsbs, setTsbs] = useState<Tsb[]>([]);
-  const lastIssuesKeyRef = useRef<string>("");
-
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
+  const insets = useSafeAreaInsets();
+  // Height of the chrome above the KAV — measured for the iOS KAV offset.
+  const [headerHeight, setHeaderHeight] = useState(0);
+  // Manual keyboard-height tracking for Android. KeyboardAvoidingView is
+  // unreliable on Android (especially with newArch + expo-router), so we
+  // listen to the Keyboard API directly and apply paddingBottom equal to
+  // the keyboard height. On iOS this stays 0 and KAV does the work.
+  const [androidKbHeight, setAndroidKbHeight] = useState(0);
 
-  // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill the
-  // intake. We don't auto-submit — the technician confirms the vehicle and
-  // symptom before the diagnostic conversation starts.
+  // Auto-scroll on keyboard open + capture keyboard height for Android.
+  useEffect(() => {
+    if (phase !== "chat") return;
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      if (Platform.OS === "android") {
+        setAndroidKbHeight(e.endCoordinates.height);
+      }
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      if (Platform.OS === "android") setAndroidKbHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [phase]);
+
+  // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill
+  // the intake. We don't auto-submit — the technician confirms the vehicle
+  // and symptom before the diagnostic conversation starts. Vehicle pushes
+  // into the global context so the recall/TSB lookups fire automatically.
   useEffect(() => {
     let active = true;
     consumeHandoff("to_diagnose").then((h) => {
       if (!active || !h) return;
-      if (h.vehicle) setVehicle((v) => ({ ...v, ...h.vehicle }));
+      if (h.vehicle) {
+        setVehicleManually({ ...EMPTY_VEHICLE, ...h.vehicle }, h.vin ?? null).catch(
+          () => {},
+        );
+      }
       if (h.vin) setVin(h.vin);
       const dtcLine =
         h.dtcs && h.dtcs.length > 0
@@ -103,6 +139,7 @@ export default function Screen() {
     return () => {
       active = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -114,39 +151,9 @@ export default function Screen() {
     }
   }, [messages.length, loading, phase]);
 
-  useEffect(() => {
-    const y = vehicle.year.trim();
-    const m = vehicle.make.trim();
-    const mo = vehicle.model.trim();
-    if (!y || !m || !mo) {
-      setRecalls([]);
-      setTsbs([]);
-      lastIssuesKeyRef.current = "";
-      return;
-    }
-    const key = `${y}|${m.toLowerCase()}|${mo.toLowerCase()}`;
-    if (lastIssuesKeyRef.current === key) return;
-    lastIssuesKeyRef.current = key;
-    let cancelled = false;
-    fetchRecalls(y, m, mo)
-      .then((rs) => {
-        if (!cancelled) setRecalls(rs);
-      })
-      .catch(() => {
-        if (!cancelled) setRecalls([]);
-      });
-    fetchTsbs(y, m, mo)
-      .then((ts) => {
-        if (!cancelled) setTsbs(ts);
-      })
-      .catch(() => {
-        if (!cancelled) setTsbs([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [vehicle.year, vehicle.make, vehicle.model]);
-
+  // Manual VIN decode — when the user types or scans a VIN here, push the
+  // decoded vehicle into the context (which then fans out to recall/TSB/
+  // PID fetches automatically). Mirrors the OBD2 auto-VIN path.
   useEffect(() => {
     const trimmed = vin.trim().toUpperCase();
     if (!isLikelyVin(trimmed)) {
@@ -160,14 +167,15 @@ export default function Screen() {
     setDecodeError(null);
     decodeVin(trimmed)
       .then((d) => {
-        setVehicle((v) => ({
-          ...v,
-          year: d.year || v.year,
-          make: d.make || v.make,
-          model: d.model || v.model,
-          trim: d.trim || v.trim,
-          engineType: d.engineType || v.engineType,
-        }));
+        const merged: VehicleInfo = {
+          year: d.year || vehicle.year,
+          make: d.make || vehicle.make,
+          model: d.model || vehicle.model,
+          trim: d.trim || vehicle.trim,
+          engineType: d.engineType || vehicle.engineType,
+          mileage: vehicle.mileage,
+        };
+        setVehicleManually(merged, trimmed).catch(() => {});
         setDecoded(true);
       })
       .catch((err) => {
@@ -177,6 +185,9 @@ export default function Screen() {
         setDecoded(false);
       })
       .finally(() => setDecoding(false));
+    // We intentionally don't depend on `vehicle` — re-running on every
+    // vehicle change would re-decode the same VIN repeatedly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vin]);
 
   const latestTurn = useMemo<AssistantTurn | null>(() => {
@@ -207,7 +218,10 @@ export default function Screen() {
     field: K,
     value: VehicleInfo[K],
   ) {
-    setVehicle((v) => ({ ...v, [field]: value }));
+    // Push every edit through the context so the global vehicle stays in
+    // sync. The context's refreshMetadata is debounced by year/make/model
+    // so per-keystroke edits don't fan out to repeated recall/TSB fetches.
+    setVehicleManually({ ...vehicle, [field]: value }, vin || null).catch(() => {});
   }
 
   async function callApi(nextMessages: ChatMessage[]): Promise<void> {
@@ -352,12 +366,9 @@ export default function Screen() {
     setDecoded(false);
     setDecodeError(null);
     setManualOpen(false);
-    setVehicle(EMPTY_VEHICLE);
+    clearVehicle().catch(() => {});
     setConfirmedDone(false);
-    setRecalls([]);
-    setTsbs([]);
     lastDecodedRef.current = "";
-    lastIssuesKeyRef.current = "";
   }
 
   if (phase === "intake") {
@@ -549,12 +560,22 @@ export default function Screen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showBack />
-      <VehicleBar vehicle={vehicle} onReset={resetSession} />
+      <View
+        onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
+      >
+        <Navbar showBack />
+        <VehicleBar vehicle={vehicle} onReset={resetSession} />
+      </View>
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={[
+          styles.flex,
+          Platform.OS === "android" && { paddingBottom: androidKbHeight },
+        ]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={
+          Platform.OS === "ios" ? insets.top + headerHeight : 0
+        }
       >
         <FlatList
           ref={listRef}

@@ -1,9 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
+import { useObd2 } from "../contexts/Obd2Context";
+import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
@@ -26,90 +29,83 @@ import {
   isLikelyVin,
 } from "../lib/api";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
-import { fetchRecalls } from "../lib/recalls";
-import { fetchTsbs } from "../lib/tsbs";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type {
   ChatMessage,
-  Recall,
-  Tsb,
   VehicleInfo,
 } from "../lib/types";
 
-const EMPTY_VEHICLE: VehicleInfo = {
-  year: "",
-  make: "",
-  model: "",
-  trim: "",
-  engineType: "",
-  mileage: "",
-};
-
 export default function AskScreen() {
   const router = useRouter();
-  const [vehicle, setVehicle] = useState<VehicleInfo>(EMPTY_VEHICLE);
-  const [vin, setVin] = useState("");
-  const [hasVehicle, setHasVehicle] = useState(false);
+  const { isConnected: obdConnected } = useObd2();
+  const {
+    vehicle,
+    vin,
+    recalls,
+    tsbs,
+    setVehicleManually,
+    clearVehicle,
+  } = useVehicle();
+  // hasVehicle is derived from the global vehicle: any year/make/model
+  // triple counts as a usable vehicle context for the Ask API.
+  const hasVehicle = Boolean(
+    vehicle.year?.trim() && vehicle.make?.trim() && vehicle.model?.trim(),
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [recalls, setRecalls] = useState<Recall[]>([]);
-  const [tsbs, setTsbs] = useState<Tsb[]>([]);
-  const lastIssuesKeyRef = useRef("");
-
   const [vehicleModalOpen, setVehicleModalOpen] = useState(false);
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
+  const insets = useSafeAreaInsets();
+  // Header chrome height (used for the iOS KAV offset).
+  const [headerHeight, setHeaderHeight] = useState(0);
+  // Manual Android keyboard tracking — KeyboardAvoidingView is unreliable
+  // on Android with newArch, so we listen to the Keyboard API directly and
+  // apply paddingBottom equal to the keyboard height.
+  const [androidKbHeight, setAndroidKbHeight] = useState(0);
 
-  // Consume a handoff from Diagnose on mount (if present).
+  // Auto-scroll on keyboard open + capture keyboard height for Android.
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      if (Platform.OS === "android") {
+        setAndroidKbHeight(e.endCoordinates.height);
+      }
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      if (Platform.OS === "android") setAndroidKbHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // Consume a handoff from Diagnose on mount (if present). The handoff's
+  // vehicle and message thread come in here; recalls/TSBs are managed by
+  // the VehicleContext now, so we only seed those from the handoff if the
+  // global vehicle isn't already populated.
   useEffect(() => {
     let active = true;
     consumeHandoff("to_ask").then((h) => {
       if (!active || !h) return;
-      if (h.vehicle) {
-        setVehicle((v) => ({ ...v, ...h.vehicle }));
-        setHasVehicle(true);
+      if (h.vehicle && !hasVehicle) {
+        setVehicleManually({ ...EMPTY_VEHICLE, ...h.vehicle }, h.vin ?? null).catch(
+          () => {},
+        );
       }
-      if (h.vin) setVin(h.vin);
       if (h.messages) setMessages(h.messages);
-      if (h.recalls) setRecalls(h.recalls);
-      if (h.tsbs) setTsbs(h.tsbs);
     });
     return () => {
       active = false;
     };
+    // Intentionally only on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Background fetch recalls + TSBs when a vehicle is known.
-  useEffect(() => {
-    if (!hasVehicle) return;
-    const y = vehicle.year.trim();
-    const m = vehicle.make.trim();
-    const mo = vehicle.model.trim();
-    if (!y || !m || !mo) return;
-    const key = `${y}|${m.toLowerCase()}|${mo.toLowerCase()}`;
-    if (lastIssuesKeyRef.current === key) return;
-    lastIssuesKeyRef.current = key;
-    let cancelled = false;
-    fetchRecalls(y, m, mo)
-      .then((rs) => {
-        if (!cancelled) setRecalls(rs);
-      })
-      .catch(() => {
-        if (!cancelled) setRecalls([]);
-      });
-    fetchTsbs(y, m, mo)
-      .then((ts) => {
-        if (!cancelled) setTsbs(ts);
-      })
-      .catch(() => {
-        if (!cancelled) setTsbs([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasVehicle, vehicle.year, vehicle.make, vehicle.model]);
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -150,12 +146,7 @@ export default function AskScreen() {
   }
 
   function resetVehicle() {
-    setVehicle(EMPTY_VEHICLE);
-    setVin("");
-    setHasVehicle(false);
-    setRecalls([]);
-    setTsbs([]);
-    lastIssuesKeyRef.current = "";
+    clearVehicle().catch(() => {});
   }
 
   async function onSwitchToDiagnose() {
@@ -166,7 +157,7 @@ export default function AskScreen() {
     await setHandoff({
       type: "to_diagnose",
       vehicle: hasVehicle ? vehicle : undefined,
-      vin: vin.trim() || undefined,
+      vin: vin ? vin.trim() || undefined : undefined,
       symptom: lastUser?.content ?? "",
       recalls,
       tsbs,
@@ -178,28 +169,50 @@ export default function AskScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showBack />
+      <View
+        onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
+      >
+        <Navbar showBack />
 
-      {hasVehicle ? (
-        <VehicleBar vehicle={vehicle} onReset={resetVehicle} />
-      ) : (
-        <TouchableOpacity
-          style={styles.addVehicleBtn}
-          onPress={() => setVehicleModalOpen(true)}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel="Add vehicle context"
-        >
-          <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
-          <Text style={styles.addVehicleText}>
-            Add vehicle for vehicle-specific questions
-          </Text>
-        </TouchableOpacity>
-      )}
+        {obdConnected && (
+          <View style={styles.obdBanner}>
+            <View style={styles.obdDot} />
+            <Text style={styles.obdBannerText}>
+              OBD2 adapter connected — live data available
+            </Text>
+          </View>
+        )}
+        {hasVehicle ? (
+          <VehicleBar vehicle={vehicle} onReset={resetVehicle} />
+        ) : (
+          <TouchableOpacity
+            style={styles.addVehicleBtn}
+            onPress={() => setVehicleModalOpen(true)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Add vehicle context"
+          >
+            <Ionicons
+              name="add-circle-outline"
+              size={18}
+              color={colors.accent}
+            />
+            <Text style={styles.addVehicleText}>
+              Add vehicle for vehicle-specific questions
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={[
+          styles.flex,
+          Platform.OS === "android" && { paddingBottom: androidKbHeight },
+        ]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={
+          Platform.OS === "ios" ? insets.top + headerHeight : 0
+        }
       >
         {messages.length === 0 ? (
           <View style={styles.emptyWrap}>
@@ -291,9 +304,7 @@ export default function AskScreen() {
         visible={vehicleModalOpen}
         onClose={() => setVehicleModalOpen(false)}
         onConfirm={(v, scannedVin) => {
-          setVehicle(v);
-          setVin(scannedVin);
-          setHasVehicle(true);
+          setVehicleManually(v, scannedVin || null).catch(() => {});
           setVehicleModalOpen(false);
         }}
       />
@@ -586,6 +597,28 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
+  },
+  obdBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: colors.okBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.okBorder,
+  },
+  obdDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.okText,
+  },
+  obdBannerText: {
+    color: colors.okText,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
   },
   addVehicleBtn: {
     flexDirection: "row",

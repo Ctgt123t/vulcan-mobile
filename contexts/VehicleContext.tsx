@@ -1,0 +1,333 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Alert } from "react-native";
+import { decodeVin } from "../lib/api";
+import { obd2 } from "../lib/obd2";
+import { fetchRecalls } from "../lib/recalls";
+import { fetchTsbs } from "../lib/tsbs";
+import type { Recall, Tsb, VehicleInfo } from "../lib/types";
+
+// ----------------------------------------------------------------------------
+// Global vehicle state. Holds the currently-known vehicle plus its recalls
+// and TSBs so any screen can show the same Vehicle Bar without re-fetching.
+//
+// Auto-VIN flow: when the OBD2 manager reports "connected", we ask it for
+// Mode 09 PID 02 (the VIN), decode via NHTSA, and populate the vehicle.
+// Existing manual entry continues to work via setVehicleManually(). If a
+// manual vehicle was already entered and the OBD2 VIN decodes to something
+// different, the tech is prompted to choose.
+//
+// Persistence: vehicle + vin + source go to AsyncStorage so the last known
+// vehicle survives app restarts (techs typically work on one vehicle for
+// a while). Recalls and TSBs are NOT persisted — they're cheap to refetch
+// and the NHTSA data could change.
+//
+// Scaling note (per CLAUDE.md): state is entirely client-side. The backend
+// /api/pids/... cache warming is keyed by make/model/year, not per-user,
+// so it doesn't add per-user load.
+// ----------------------------------------------------------------------------
+
+export const EMPTY_VEHICLE: VehicleInfo = {
+  year: "",
+  make: "",
+  model: "",
+  trim: "",
+  engineType: "",
+  mileage: "",
+};
+
+export type VehicleSource = "manual" | "vin-decoded" | "obd2-auto" | null;
+
+interface VehicleState {
+  vehicle: VehicleInfo;
+  vin: string | null;
+  source: VehicleSource;
+  recalls: Recall[];
+  tsbs: Tsb[];
+  lookupBusy: boolean;
+  setVehicleManually: (vehicle: VehicleInfo, vin?: string | null) => Promise<void>;
+  clearVehicle: () => Promise<void>;
+}
+
+const STORAGE_KEY = "vulcan:vehicle:v1";
+
+const VehicleContext = createContext<VehicleState | null>(null);
+
+interface PersistedShape {
+  vehicle: VehicleInfo;
+  vin: string | null;
+  source: VehicleSource;
+}
+
+function vehiclesDiffer(a: VehicleInfo, b: VehicleInfo): boolean {
+  const norm = (s: string | undefined) => (s ?? "").trim().toLowerCase();
+  return (
+    norm(a.year) !== norm(b.year) ||
+    norm(a.make) !== norm(b.make) ||
+    norm(a.model) !== norm(b.model)
+  );
+}
+
+function vehicleHasIdentity(v: VehicleInfo): boolean {
+  return Boolean(v.year?.trim() && v.make?.trim() && v.model?.trim());
+}
+
+function formatVehicleShort(v: VehicleInfo): string {
+  return [v.year, v.make, v.model].filter((s) => s && s.trim()).join(" ");
+}
+
+export function VehicleProvider({ children }: { children: ReactNode }) {
+  const [vehicle, setVehicleState] = useState<VehicleInfo>(EMPTY_VEHICLE);
+  const [vin, setVin] = useState<string | null>(null);
+  const [source, setSource] = useState<VehicleSource>(null);
+  const [recalls, setRecalls] = useState<Recall[]>([]);
+  const [tsbs, setTsbs] = useState<Tsb[]>([]);
+  const [lookupBusy, setLookupBusy] = useState(false);
+
+  // Keep the latest state in refs so the OBD2-status listener can read
+  // current values without re-subscribing every change.
+  const vehicleRef = useRef(vehicle);
+  const vinRef = useRef(vin);
+  const sourceRef = useRef(source);
+  useEffect(() => {
+    vehicleRef.current = vehicle;
+    vinRef.current = vin;
+    sourceRef.current = source;
+  }, [vehicle, vin, source]);
+
+  // Persist core identity (recalls/TSBs intentionally not persisted).
+  const persist = useCallback(
+    async (v: VehicleInfo, vinValue: string | null, src: VehicleSource) => {
+      try {
+        const payload: PersistedShape = { vehicle: v, vin: vinValue, source: src };
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (err) {
+        console.warn("[vehicleCtx] persist failed:", err);
+      }
+    },
+    [],
+  );
+
+  // Pull recalls + TSBs in parallel and prefetch the PID database for this
+  // vehicle so the cache is warm when the live-diagnostic feature lands.
+  // Debounced by year/make/model key so per-keystroke vehicle edits during
+  // the Diagnose intake form don't fan out to a fetch every character.
+  const lastFetchedKey = useRef<string>("");
+  const refreshMetadata = useCallback(async (v: VehicleInfo) => {
+    if (!vehicleHasIdentity(v)) {
+      setRecalls([]);
+      setTsbs([]);
+      lastFetchedKey.current = "";
+      return;
+    }
+    const key = `${v.year.trim()}|${v.make.trim().toLowerCase()}|${v.model.trim().toLowerCase()}`;
+    if (lastFetchedKey.current === key) return;
+    lastFetchedKey.current = key;
+    setLookupBusy(true);
+    try {
+      const [r, t] = await Promise.all([
+        fetchRecalls(v.year, v.make, v.model).catch(() => [] as Recall[]),
+        fetchTsbs(v.year, v.make, v.model).catch(() => [] as Tsb[]),
+      ]);
+      setRecalls(r);
+      setTsbs(t);
+    } finally {
+      setLookupBusy(false);
+    }
+    // PID prefetch — fire-and-forget. Backend caches per vehicle so this
+    // costs nothing on repeat use.
+    const baseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(/\/+$/, "");
+    if (baseUrl && v.year && v.make && v.model) {
+      const url = `${baseUrl}/api/pids/${encodeURIComponent(v.make)}/${encodeURIComponent(v.model)}/${encodeURIComponent(v.year)}`;
+      fetch(url, {
+        method: "GET",
+        headers: { "ngrok-skip-browser-warning": "true" },
+      }).catch(() => {});
+    }
+  }, []);
+
+  const setVehicleManually = useCallback(
+    async (v: VehicleInfo, vinValue: string | null = null) => {
+      setVehicleState(v);
+      setVin(vinValue);
+      setSource(vehicleHasIdentity(v) ? "manual" : null);
+      await persist(v, vinValue, vehicleHasIdentity(v) ? "manual" : null);
+      await refreshMetadata(v);
+    },
+    [persist, refreshMetadata],
+  );
+
+  const clearVehicle = useCallback(async () => {
+    setVehicleState(EMPTY_VEHICLE);
+    setVin(null);
+    setSource(null);
+    setRecalls([]);
+    setTsbs([]);
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+    } catch (err) {
+      console.warn("[vehicleCtx] clear failed:", err);
+    }
+  }, []);
+
+  // Apply a VIN-decoded vehicle internally (used by the OBD2 auto-VIN path).
+  // Preserves the technician's mileage value since the VIN doesn't carry it.
+  const applyDecodedFromObd2 = useCallback(
+    async (vinValue: string, decoded: VehicleInfo) => {
+      const merged: VehicleInfo = {
+        ...decoded,
+        mileage: vehicleRef.current.mileage ?? "",
+      };
+      setVehicleState(merged);
+      setVin(vinValue);
+      setSource("obd2-auto");
+      await persist(merged, vinValue, "obd2-auto");
+      await refreshMetadata(merged);
+    },
+    [persist, refreshMetadata],
+  );
+
+  // Load persisted vehicle on mount + refresh recalls/TSBs once.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as PersistedShape;
+        if (parsed?.vehicle) {
+          setVehicleState({ ...EMPTY_VEHICLE, ...parsed.vehicle });
+          setVin(parsed.vin ?? null);
+          setSource(parsed.source ?? null);
+          if (vehicleHasIdentity(parsed.vehicle)) {
+            // Background refresh — don't block UI.
+            refreshMetadata(parsed.vehicle).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn("[vehicleCtx] hydrate failed:", err);
+      }
+    })();
+  }, [refreshMetadata]);
+
+  // Subscribe to OBD2 status. When the adapter reports "connected", request
+  // the VIN. We dedupe so we only attempt VIN retrieval once per "connected"
+  // transition (i.e. not on every status event while already connected).
+  const lastAttemptedForVin = useRef<string | null>(null);
+  useEffect(() => {
+    const off = obd2.onStatus(async (status) => {
+      if (status !== "connected") {
+        if (status === "idle" || status === "error") {
+          // Allow a fresh attempt next time we connect.
+          lastAttemptedForVin.current = null;
+        }
+        return;
+      }
+      // Single-shot per connection.
+      if (lastAttemptedForVin.current === "attempted") return;
+      lastAttemptedForVin.current = "attempted";
+
+      const detectedVin = await obd2.getVin().catch(() => null);
+      if (!detectedVin) return; // Silent fallback per spec.
+
+      // If we already have this exact VIN, nothing to do.
+      if (vinRef.current && vinRef.current === detectedVin) return;
+
+      const decoded = await decodeVin(detectedVin).catch(() => null);
+      if (!decoded) {
+        // Keep raw VIN so the tech sees it; year/make/model stay blank.
+        setVin(detectedVin);
+        await persist(vehicleRef.current, detectedVin, sourceRef.current);
+        return;
+      }
+
+      const decodedVehicle: VehicleInfo = {
+        year: decoded.year,
+        make: decoded.make,
+        model: decoded.model,
+        trim: decoded.trim,
+        engineType: decoded.engineType,
+        mileage: vehicleRef.current.mileage ?? "",
+      };
+
+      // Conflict resolution. If the tech entered a different vehicle
+      // manually before connecting, ask before overwriting.
+      const current = vehicleRef.current;
+      const manualPresent =
+        vehicleHasIdentity(current) && sourceRef.current === "manual";
+      const conflict = manualPresent && vehiclesDiffer(current, decodedVehicle);
+
+      if (conflict) {
+        Alert.alert(
+          "Vehicle mismatch",
+          `Connected vehicle (${formatVehicleShort(decodedVehicle)}) differs from entered vehicle (${formatVehicleShort(current)}). Use detected vehicle?`,
+          [
+            { text: "Keep entered", style: "cancel" },
+            {
+              text: "Use detected",
+              onPress: () => {
+                applyDecodedFromObd2(detectedVin, decodedVehicle).catch(() => {});
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      // No conflict — apply silently with a brief toast-style alert.
+      await applyDecodedFromObd2(detectedVin, decodedVehicle);
+      Alert.alert(
+        "Vehicle detected",
+        formatVehicleShort(decodedVehicle),
+        [{ text: "OK" }],
+        { cancelable: true },
+      );
+    });
+    return () => {
+      off();
+    };
+  }, [applyDecodedFromObd2, persist]);
+
+  return (
+    <VehicleContext.Provider
+      value={{
+        vehicle,
+        vin,
+        source,
+        recalls,
+        tsbs,
+        lookupBusy,
+        setVehicleManually,
+        clearVehicle,
+      }}
+    >
+      {children}
+    </VehicleContext.Provider>
+  );
+}
+
+export function useVehicle(): VehicleState {
+  const ctx = useContext(VehicleContext);
+  if (!ctx) {
+    // Defensive default for screens accidentally rendered outside the
+    // provider — they see an empty vehicle rather than crash.
+    return {
+      vehicle: EMPTY_VEHICLE,
+      vin: null,
+      source: null,
+      recalls: [],
+      tsbs: [],
+      lookupBusy: false,
+      setVehicleManually: async () => {},
+      clearVehicle: async () => {},
+    };
+  }
+  return ctx;
+}

@@ -6,6 +6,17 @@
 
 Vulcan is an AI-powered automotive diagnostic app for professional technicians. Built with Expo/React Native, a Railway-hosted backend, and the Claude API. Targets iOS and Android.
 
+## Scalability Requirements
+
+**This is a permanent project requirement, not a one-time note.** Vulcan is being built to support thousands of concurrent users at launch and beyond. Every piece of code written must be evaluated for scalability.
+
+- Whenever you write or modify code, consider whether it will hold up at thousands of concurrent users. If it won't, flag it explicitly and explain what the scalable solution would be, even if we implement a simpler version for now.
+- Avoid architectural decisions that would require a complete overhaul to scale. Prefer solutions that can grow.
+- **Current known scaling considerations:** JSON-file caching on the Railway Volume works for now but will likely need to migrate to a proper database (Supabase/Postgres) before launch. Flag any new feature that adds to file-based storage load.
+- When a current implementation is a temporary simplification, leave a clear code comment marking it as such and noting the scalable replacement.
+- Backend API endpoints should be stateless where possible so they can scale horizontally.
+- Do not introduce per-user data stored in ways that won't scale (e.g. growing single files).
+
 ## Tech Stack
 
 - **Frontend:** Expo SDK 54, React Native, TypeScript
@@ -26,6 +37,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **Hybrid retrieval system** — DTC database lookup, vehicle spec providers, and response caching on backend before calling Claude API to reduce costs and prevent hallucinated values
 - **Dual Bluetooth transport** — BLE for iOS, Classic for Android, unified abstraction layer in `lib/obd2.ts`
 - **Auto-reconnect** for saved OBD2 adapters — adapter identity (id, name, transport, last-connected timestamp) is persisted to AsyncStorage in `lib/savedAdapter.ts` after a successful handshake. On opening the OBD2 screen, `Obd2Manager.connectDirect()` attempts a silent reconnect; on failure the UI falls back to the manual device picker. Only one adapter is remembered at a time
+- **Auto-VIN + global vehicle context** (`contexts/VehicleContext.tsx`) — when the OBD2 adapter handshakes successfully, `Obd2Manager.getVin()` issues Mode 09 PID 02 and parses the multi-frame ISO-TP response (`parseVinFromResponse` in `lib/obd2.ts` tokenizes hex bytes, skips CAN IDs and ISO-TP markers, walks the bytes after the `49 02 01` header and keeps only valid VIN characters). The 17-char VIN feeds `decodeVin()` (NHTSA) which populates the global vehicle. Ask Vulcan, Diagnose, and the OBD2 screen all read from this context, so the vehicle bar reflects the connected vehicle everywhere. If the tech had manually entered a different vehicle before connecting, an alert offers a choice between the two. Vehicles older than ~2008 may not expose Mode 09 PID 02 — `getVin()` returns null and the tech falls back to manual entry silently. The context persists the current vehicle + VIN + source (`"manual" | "vin-decoded" | "obd2-auto"`) to AsyncStorage so the same vehicle is restored on app launch. On vehicle change, the context backgrounds-fetches recalls/TSBs and prefetches `/api/pids/:make/:model/:year` so the live-diagnostic feature has warm cache. **Scaling:** all vehicle state is per-user and client-side (AsyncStorage); no backend per-user storage was added
 - **TSB and recall integration** via NHTSA API
 - **Diagnostic hierarchy** — visual inspection first, simple checks before advanced tests
 - **Confirmed fix recording system** for building proprietary diagnostic database

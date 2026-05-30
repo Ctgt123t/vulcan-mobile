@@ -7,6 +7,7 @@ import {
   FlatList,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import { useObd2 } from "../contexts/Obd2Context";
+import { useVehicle } from "../contexts/VehicleContext";
 import { fetchDtcDefinition } from "../lib/api";
 import { setHandoff } from "../lib/handoff";
 import {
@@ -23,6 +25,7 @@ import {
   type FreezeFrame,
   obd2,
 } from "../lib/obd2";
+import type { SavedAdapter } from "../lib/savedAdapter";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type { DtcDefinition } from "../lib/types";
 
@@ -35,6 +38,10 @@ type DefinitionState =
 export default function Obd2Screen() {
   const router = useRouter();
   const { status, statusMessage, devices, liveData, isConnected } = useObd2();
+  const { vehicle, source: vehicleSource } = useVehicle();
+  const vehicleLabel = [vehicle.year, vehicle.make, vehicle.model]
+    .filter((s) => s && s.trim().length > 0)
+    .join(" ");
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -47,6 +54,20 @@ export default function Obd2Screen() {
   const [paused, setPaused] = useState(false);
   const [definitions, setDefinitions] = useState<Record<string, DefinitionState>>(
     {},
+  );
+
+  // Auto-reconnect state. `savedAdapter` is the adapter we remember from a
+  // previous session (null until the load completes, then either the record
+  // or undefined for "no saved adapter"). `autoConnecting` is true while the
+  // background connect attempt runs. `autoConnectMissed` is set after a
+  // failed attempt so the UI can show a "couldn't find your saved adapter"
+  // fallback instead of the default first-time-user copy.
+  const [savedAdapter, setSavedAdapter] = useState<SavedAdapter | null | undefined>(
+    undefined,
+  );
+  const [autoConnecting, setAutoConnecting] = useState(false);
+  const [autoConnectMissed, setAutoConnectMissed] = useState<SavedAdapter | null>(
+    null,
   );
 
   // Whenever new DTCs come back from a scan, kick off a parallel lookup
@@ -110,6 +131,31 @@ export default function Obd2Screen() {
     }
   }, [isConnected]);
 
+  // On first mount, look up the remembered adapter and try to reconnect to
+  // it silently. If it works, the user is straight in the connected state
+  // with no scanning. If it doesn't, fall back to the manual picker with a
+  // friendly "couldn't find it" message.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await obd2.loadSavedAdapter();
+      if (cancelled) return;
+      setSavedAdapter(saved ?? null);
+      if (!saved) return;
+      if (obd2.isConnected()) return;
+      setAutoConnecting(true);
+      const result = await obd2.connectDirect(saved);
+      if (cancelled) return;
+      setAutoConnecting(false);
+      if (!result.ok) {
+        setAutoConnectMissed(saved);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function onScanForAdapters() {
     obd2.clearDiscovered();
     setScanning(true);
@@ -137,6 +183,15 @@ export default function Obd2Screen() {
       const result = await obd2.connect(device.id);
       if (result.ok) {
         setPickerOpen(false);
+        setAutoConnectMissed(null);
+        // The library saves the adapter on successful handshake; reflect it
+        // locally so the "Change adapter" link shows up immediately.
+        setSavedAdapter({
+          deviceId: device.id,
+          name: device.name,
+          transport: device.transport,
+          lastConnectedAt: Date.now(),
+        });
       } else {
         Alert.alert("Couldn't connect", result.message);
       }
@@ -147,6 +202,14 @@ export default function Obd2Screen() {
 
   async function onDisconnect() {
     await obd2.disconnect();
+  }
+
+  async function onChangeAdapter() {
+    await obd2.disconnect();
+    await obd2.forgetSavedAdapter();
+    setSavedAdapter(null);
+    setAutoConnectMissed(null);
+    onScanForAdapters();
   }
 
   async function onScanDtcs() {
@@ -220,29 +283,89 @@ export default function Obd2Screen() {
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <Navbar showBack />
 
+      {vehicleLabel ? (
+        <View style={styles.vehicleBanner}>
+          <Ionicons name="car-outline" size={14} color={colors.accent} />
+          <Text style={styles.vehicleBannerText} numberOfLines={1}>
+            {vehicleLabel}
+          </Text>
+          {vehicleSource === "obd2-auto" ? (
+            <View style={styles.vehicleBadge}>
+              <Text style={styles.vehicleBadgeText}>AUTO</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       <StatusBar status={status} message={statusMessage} />
 
       <ScrollView contentContainerStyle={styles.content}>
         {/* ---------------- Connect section ---------------- */}
         <Section title="CONNECT">
           {isConnected ? (
-            <View style={styles.connectedRow}>
-              <Ionicons
-                name="checkmark-circle"
-                size={22}
-                color={colors.okText}
-              />
-              <Text style={styles.connectedText}>
-                {statusMessage || "Connected to adapter"}
+            <>
+              <View style={styles.connectedRow}>
+                <Ionicons
+                  name="checkmark-circle"
+                  size={22}
+                  color={colors.okText}
+                />
+                <Text style={styles.connectedText}>
+                  {statusMessage || "Connected to adapter"}
+                </Text>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={onDisconnect}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.secondaryBtnText}>Disconnect</Text>
+                </TouchableOpacity>
+              </View>
+              {savedAdapter ? (
+                <TouchableOpacity
+                  onPress={onChangeAdapter}
+                  activeOpacity={0.7}
+                  style={styles.changeAdapterRow}
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={14}
+                    color={colors.accent}
+                  />
+                  <Text style={styles.changeAdapterText}>Change adapter</Text>
+                </TouchableOpacity>
+              ) : null}
+            </>
+          ) : autoConnecting && savedAdapter ? (
+            <View style={styles.autoConnectRow}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.bodyText}>
+                Connecting to {savedAdapter.name}…
+              </Text>
+            </View>
+          ) : autoConnectMissed ? (
+            <>
+              <Text style={styles.bodyText}>
+                Couldn't find your saved adapter ({autoConnectMissed.name}).
+                Make sure it's plugged in and powered on, then scan for
+                devices.
               </Text>
               <TouchableOpacity
-                style={styles.secondaryBtn}
-                onPress={onDisconnect}
+                style={styles.primaryBtn}
+                onPress={onScanForAdapters}
+                disabled={status === "connecting"}
                 activeOpacity={0.85}
               >
-                <Text style={styles.secondaryBtnText}>Disconnect</Text>
+                {status === "scanning" ? (
+                  <View style={styles.btnLoadingRow}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>Scanning…</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.primaryBtnText}>Scan for devices</Text>
+                )}
               </TouchableOpacity>
-            </View>
+            </>
           ) : (
             <>
               <Text style={styles.bodyText}>
@@ -850,6 +973,14 @@ function DevicePicker({
                   No devices found. Make sure the adapter is powered (plugged
                   into the OBD2 port with the key on), and try again.
                 </Text>
+                {Platform.OS === "android" && (
+                  <Text style={[styles.dimText, styles.emptyHint]}>
+                    Bluetooth Classic adapters (like the OBDLink MX+) must be
+                    paired in Android Bluetooth Settings first. Pair the
+                    adapter there (PIN is typically 1234 or 0000), then tap
+                    Scan Again.
+                  </Text>
+                )}
               </View>
             ) : null
           }
@@ -931,9 +1062,37 @@ function DevicePicker({
               >
                 <SignalBars rssi={item.device.rssi} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.deviceName}>{item.device.name}</Text>
+                  <View style={styles.deviceNameRow}>
+                    <Text style={styles.deviceName}>{item.device.name}</Text>
+                    <View
+                      style={[
+                        styles.transportChip,
+                        item.device.transport === "classic"
+                          ? styles.transportClassic
+                          : styles.transportBle,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.transportChipText,
+                          {
+                            color:
+                              item.device.transport === "classic"
+                                ? colors.warnText
+                                : colors.accent,
+                          },
+                        ]}
+                      >
+                        {item.device.transport === "classic"
+                          ? "CLASSIC"
+                          : "BLE"}
+                      </Text>
+                    </View>
+                  </View>
                   <Text style={styles.deviceMeta}>
-                    {signalLabel(item.device.rssi)}
+                    {item.device.transport === "classic"
+                      ? "Paired adapter"
+                      : signalLabel(item.device.rssi)}
                     {item.device.rssi != null
                       ? `  ·  ${item.device.rssi} dBm`
                       : ""}
@@ -982,6 +1141,34 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  vehicleBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: colors.accentFade,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  vehicleBannerText: {
+    color: colors.heading,
+    fontSize: 12,
+    fontWeight: "600",
+    flex: 1,
+  },
+  vehicleBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
+  },
+  vehicleBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
   },
   statusBar: {
     flexDirection: "row",
@@ -1106,6 +1293,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     flex: 1,
+  },
+  changeAdapterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingVertical: 4,
+  },
+  changeAdapterText: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  autoConnectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 4,
   },
   errorBox: {
     backgroundColor: colors.dangerBg,
@@ -1390,6 +1595,12 @@ const styles = StyleSheet.create({
   },
   emptyWrap: {
     padding: 24,
+    gap: 12,
+  },
+  emptyHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontStyle: "italic",
   },
   sectionHeaderRow: {
     flexDirection: "row",
@@ -1476,6 +1687,31 @@ const styles = StyleSheet.create({
     color: colors.heading,
     fontSize: 15,
     fontWeight: "600",
+  },
+  deviceNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  transportChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  transportChipText: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+  },
+  transportBle: {
+    backgroundColor: colors.accentFade,
+    borderColor: colors.accent,
+  },
+  transportClassic: {
+    backgroundColor: colors.warnBg,
+    borderColor: colors.warnBorder,
   },
   deviceMeta: {
     color: colors.muted,
