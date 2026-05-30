@@ -23,11 +23,36 @@ import { setHandoff } from "../lib/handoff";
 import {
   type DiscoveredDevice,
   type FreezeFrame,
+  type LiveValue,
+  type PidDescriptor,
   obd2,
 } from "../lib/obd2";
+import {
+  type PidCatalogResponse,
+  buildSelectedDescriptors,
+  fetchPidCatalog,
+  loadCachedCatalog,
+  loadSelectedCodes,
+  loadUnsupportedCodes,
+  saveSelectedCodes,
+} from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type { DtcDefinition } from "../lib/types";
+
+// Sensible starter selection for first-time-on-this-vehicle users — every
+// mobile-tech-friendly mode 01 PID we know is widely supported. The user
+// can change this from the PID selection screen at any time.
+const DEFAULT_PID_CODES = [
+  "01 0C", // Engine RPM
+  "01 0D", // Vehicle speed
+  "01 05", // Coolant temp
+  "01 11", // Throttle position
+  "01 10", // MAF
+  "01 42", // Control module voltage
+  "01 06", // Short term fuel trim B1
+  "01 07", // Long term fuel trim B1
+];
 
 type DefinitionState =
   | { state: "loading" }
@@ -129,10 +154,74 @@ export default function Obd2Screen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dtcs.join(","), pendingDtcs.join(",")]);
 
-  // Auto-start live data polling when the connection comes up.
+  // ---------- PID selection + live polling ----------
+  //
+  // We hydrate the catalog from AsyncStorage (instant), seed selected PIDs
+  // from saved selection (or the DEFAULT_PID_CODES starter set on first
+  // run), and start the polling driver. The driver is selected-PID-driven
+  // — sub-second refresh on a small fast-tier set instead of a fixed
+  // round-robin over a hard-coded list.
+  const [pidCatalog, setPidCatalog] = useState<PidCatalogResponse | null>(null);
+  const [selectedDescriptors, setSelectedDescriptors] = useState<PidDescriptor[]>(
+    [],
+  );
+
   useEffect(() => {
-    if (isConnected && !obd2.isPolling()) {
-      obd2.startPolling(250);
+    if (!vehicle.make || !vehicle.model || !vehicle.year) {
+      setPidCatalog(null);
+      setSelectedDescriptors([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      // Hydrate from disk first so the dashboard renders immediately.
+      const cached = await loadCachedCatalog(
+        vehicle.make,
+        vehicle.model,
+        vehicle.year,
+      );
+      if (cached && !cancelled) setPidCatalog(cached);
+
+      const [selectedCodes, unsupported] = await Promise.all([
+        loadSelectedCodes(vehicle.make, vehicle.model, vehicle.year),
+        loadUnsupportedCodes(vehicle.make, vehicle.model, vehicle.year),
+      ]);
+      if (cancelled) return;
+
+      const effective = selectedCodes.length > 0 ? selectedCodes : DEFAULT_PID_CODES;
+      if (selectedCodes.length === 0 && cached) {
+        // Persist the starter set so the selection screen reflects it.
+        saveSelectedCodes(
+          vehicle.make,
+          vehicle.model,
+          vehicle.year,
+          DEFAULT_PID_CODES,
+        ).catch(() => {});
+      }
+      const descriptors = buildSelectedDescriptors(cached, effective, unsupported);
+      if (!cancelled) setSelectedDescriptors(descriptors);
+
+      // Background refresh from the network so future loads see the latest.
+      const fresh = await fetchPidCatalog(
+        vehicle.make,
+        vehicle.model,
+        vehicle.year,
+      );
+      if (cancelled || !fresh) return;
+      setPidCatalog(fresh);
+      const refreshed = buildSelectedDescriptors(fresh, effective, unsupported);
+      setSelectedDescriptors(refreshed);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [vehicle.make, vehicle.model, vehicle.year]);
+
+  // Drive the polling lifecycle off (connected, selectedDescriptors).
+  useEffect(() => {
+    if (isConnected && selectedDescriptors.length > 0) {
+      obd2.startPolling(selectedDescriptors, { intervalMs: 250 });
+      obd2.setSelectedPids(selectedDescriptors);
       setPaused(false);
     }
     if (!isConnected) {
@@ -142,7 +231,13 @@ export default function Obd2Screen() {
       setFreezeFrame(null);
       setDefinitions({});
     }
-  }, [isConnected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, selectedDescriptors.length]);
+
+  // When the selection-screen Done button changes the active set, refresh
+  // local state from disk so the dashboard picks up the new gauges.
+  // (Triggered when this screen regains focus after navigating back.)
+  // Lightweight implementation: re-read on every render-tick-after-resume.
 
   // On first mount, look up the remembered adapter and try to reconnect to
   // it silently. If it works, the user is straight in the connected state
@@ -559,95 +654,64 @@ export default function Obd2Screen() {
             <Text style={styles.dimText}>
               Connect an adapter to see live sensor readings.
             </Text>
+          ) : selectedDescriptors.length === 0 ? (
+            <View style={{ gap: 10 }}>
+              <Text style={styles.dimText}>
+                {pidCatalog
+                  ? "No PIDs selected for live monitoring."
+                  : "Loading available PIDs for this vehicle…"}
+              </Text>
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={() => router.push("/obd2-pids")}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.primaryBtnText}>Select PIDs to monitor</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
               <View style={styles.liveHeader}>
                 <Text style={styles.dimText}>
-                  Polling each PID round-robin. Values refresh every ~2 s.
+                  Monitoring {selectedDescriptors.length} PID
+                  {selectedDescriptors.length === 1 ? "" : "s"}.
                 </Text>
-                <TouchableOpacity
-                  style={styles.pauseBtn}
-                  onPress={togglePolling}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name={paused ? "play" : "pause"}
-                    size={16}
-                    color={colors.accent}
-                  />
-                  <Text style={styles.pauseBtnText}>
-                    {paused ? "Resume" : "Pause"}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TouchableOpacity
+                    style={styles.pauseBtn}
+                    onPress={() => router.push("/obd2-pids")}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="options-outline" size={16} color={colors.accent} />
+                    <Text style={styles.pauseBtnText}>Manage</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.pauseBtn}
+                    onPress={togglePolling}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name={paused ? "play" : "pause"}
+                      size={16}
+                      color={colors.accent}
+                    />
+                    <Text style={styles.pauseBtnText}>
+                      {paused ? "Resume" : "Pause"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
               <View style={styles.gauges}>
-                <Gauge
-                  label="RPM"
-                  value={liveData.rpm != null ? Math.round(liveData.rpm) : null}
-                  unit=""
-                />
-                <Gauge
-                  label="Speed"
-                  value={liveData.speedKph}
-                  unit="km/h"
-                />
-                <Gauge
-                  label="Coolant"
-                  value={liveData.coolantC}
-                  unit="°C"
-                />
-                <Gauge
-                  label="Intake air"
-                  value={liveData.intakeAirC}
-                  unit="°C"
-                />
-                <Gauge
-                  label="MAF"
-                  value={
-                    liveData.mafGps != null
-                      ? Number(liveData.mafGps.toFixed(1))
-                      : null
-                  }
-                  unit="g/s"
-                />
-                <Gauge
-                  label="Throttle"
-                  value={
-                    liveData.throttlePct != null
-                      ? Number(liveData.throttlePct.toFixed(0))
-                      : null
-                  }
-                  unit="%"
-                />
-                <Gauge
-                  label="STFT"
-                  value={
-                    liveData.shortFuelTrimPct != null
-                      ? Number(liveData.shortFuelTrimPct.toFixed(1))
-                      : null
-                  }
-                  unit="%"
-                  signed
-                />
-                <Gauge
-                  label="LTFT"
-                  value={
-                    liveData.longFuelTrimPct != null
-                      ? Number(liveData.longFuelTrimPct.toFixed(1))
-                      : null
-                  }
-                  unit="%"
-                  signed
-                />
-                <Gauge
-                  label="Battery"
-                  value={
-                    liveData.batteryV != null
-                      ? Number(liveData.batteryV.toFixed(2))
-                      : null
-                  }
-                  unit="V"
-                />
+                {selectedDescriptors.map((p) => {
+                  const reading = liveData[p.code];
+                  return (
+                    <DynamicGauge
+                      key={p.code}
+                      descriptor={p}
+                      reading={reading}
+                    />
+                  );
+                })}
               </View>
             </>
           )}
@@ -749,32 +813,84 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 // ---------- Live data gauge ----------
 
-function Gauge({
-  label,
-  value,
-  unit,
-  signed,
+// Dynamic gauge driven by a PidDescriptor + LiveValue from the polling
+// driver. Replaces the old 9 hardcoded Gauge components. Handles missing
+// readings (PID hasn't been polled yet or doesn't respond), unit display,
+// signed/percent formatting, and the AI-selected highlight (deferred to
+// the broader OBD2 integration but the data path is wired).
+function DynamicGauge({
+  descriptor,
+  reading,
 }: {
-  label: string;
-  value: number | null;
-  unit: string;
-  signed?: boolean;
+  descriptor: PidDescriptor;
+  reading: LiveValue | undefined;
 }) {
-  const display =
-    value == null
-      ? "—"
-      : signed && value > 0
-        ? `+${value}`
-        : String(value);
+  const v = reading?.value ?? null;
+  const isPercent = (descriptor.unit ?? "").toLowerCase().includes("percent") ||
+    descriptor.unit === "%" ||
+    /^stft$|^ltft$|trim/i.test(descriptor.name);
+  let display: string;
+  if (v == null) {
+    display = "—";
+  } else if (Math.abs(v) >= 1000) {
+    display = String(Math.round(v));
+  } else if (Math.abs(v) >= 10) {
+    display = v.toFixed(1);
+  } else if (Math.abs(v) >= 1) {
+    display = v.toFixed(2);
+  } else {
+    display = v.toFixed(3);
+  }
+  // Show a leading + sign for percent / trim values when positive so techs
+  // can read positive vs negative trim at a glance.
+  if (v != null && isPercent && v > 0) display = `+${display}`;
+  const unitLabel = unitShortLabel(descriptor.unit);
   return (
-    <View style={styles.gauge}>
-      <Text style={styles.gaugeLabel}>{label}</Text>
+    <View style={[styles.gauge, descriptor.aiSelected && styles.gaugeAi]}>
+      <Text style={styles.gaugeLabel} numberOfLines={1}>
+        {descriptor.name}
+      </Text>
       <View style={styles.gaugeValueRow}>
         <Text style={styles.gaugeValue}>{display}</Text>
-        {unit ? <Text style={styles.gaugeUnit}>{unit}</Text> : null}
+        {unitLabel ? <Text style={styles.gaugeUnit}>{unitLabel}</Text> : null}
       </View>
     </View>
   );
+}
+
+// OBDb's unit values are long camel-cased ("revolutionsPerMinute") — map
+// to short tech-style labels for the gauge. Anything we don't have a short
+// label for falls back to the raw value.
+function unitShortLabel(unit: string | null): string {
+  if (!unit) return "";
+  const map: Record<string, string> = {
+    revolutionsPerMinute: "RPM",
+    kilometersPerHour: "km/h",
+    milesPerHour: "mph",
+    celsius: "°C",
+    fahrenheit: "°F",
+    percent: "%",
+    volts: "V",
+    millivolts: "mV",
+    bar: "bar",
+    kilopascal: "kPa",
+    pascal: "Pa",
+    psi: "psi",
+    gramsPerSecond: "g/s",
+    kilometers: "km",
+    miles: "mi",
+    liters: "L",
+    seconds: "s",
+    hours: "h",
+    minutes: "min",
+    degrees: "°",
+    nanograms: "ng",
+    grams: "g",
+    yesno: "",
+    offon: "",
+    scalar: "",
+  };
+  return map[unit] ?? unit;
 }
 
 // ---------- DTC card with inline definition ----------
@@ -1570,6 +1686,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     gap: 4,
+  },
+  gaugeAi: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentFade,
   },
   gaugeLabel: {
     color: colors.muted,

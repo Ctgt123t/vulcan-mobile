@@ -158,6 +158,60 @@ function commandCode(cmd) {
   return { mode, pid };
 }
 
+// User-facing categories for the PID selection UI. The UI navigates these
+// labels in the same order presented here — Engine first, fallback "Other"
+// last. Keep the labels stable; clients display them verbatim.
+export const PID_CATEGORIES = [
+  "Engine",
+  "Fuel System",
+  "Air/Intake",
+  "Oxygen Sensors",
+  "Emissions",
+  "Speed/Transmission",
+  "Electrical",
+  "Other",
+];
+
+// Categorizer — map an OBDb signal to one of the user-facing categories.
+// Strategy: NAME-first because the OBDb `path` field tends to be very
+// generic ("Engine.*" covers everything from RPM to MAF to throttle). The
+// signal name is specific. We fall back to path-based rules only when the
+// name doesn't yield a clear classification.
+function categorizeSignal(signal) {
+  const path = String(signal.path ?? "");
+  const text = `${signal.name ?? ""} ${signal.description ?? ""} ${signal.id ?? ""}`;
+
+  // Name-based rules first — most specific.
+  if (/o2 sensor|oxygen sensor|\bho2s\b|wideband|lambda sensor|^o2\b/i.test(text))
+    return "Oxygen Sensors";
+  if (/catalyst|\begr\b|\bevap\b|particulate|\bdpf\b|\bdef\b|\bscr\b|readiness monitor|misfire monitor|secondary air|nox |fuel evap|warm[- ]?up.*catalyst/i.test(text))
+    return "Emissions";
+  if (/fuel trim|fuel pressure|fuel level|fuel rail|injector|\bafr\b|\blambda\b|equivalence ratio|commanded.*fuel|fuel temp|fuel system status/i.test(text))
+    return "Fuel System";
+  if (/\bmaf\b|\bmap\b|intake air|throttle|\bboost\b|barometric|manifold absolute|wastegate|charge air|airflow|air temperature/i.test(text))
+    return "Air/Intake";
+  if (/vehicle speed|\bgear\b|transmission|gearbox|\btcc\b|torque converter|odometer|\btrip\b|cruise control/i.test(text))
+    return "Speed/Transmission";
+  if (/battery|module voltage|control module voltage|charging system|alternator|\bvbat\b|\bvbatt\b/i.test(text))
+    return "Electrical";
+  if (/\brpm\b|engine load|timing advance|coolant temp|oil temp|engine torque|ignition timing|engine speed|engine run time|engine oil/i.test(text))
+    return "Engine";
+
+  // Path-based fallback when name is too generic ("Sensor 1", "Status", etc).
+  if (/^Fuel/i.test(path)) return "Fuel System";
+  if (/^O2|^Oxygen/i.test(path)) return "Oxygen Sensors";
+  if (/^Emissions|^EGR|^EVAP|^Catalyst|^DPF|^SCR|^DTCs\.Generic/i.test(path))
+    return "Emissions";
+  if (/^Intake|^Air|^MAF|^MAP|^Throttle|^Boost|^Turbo/i.test(path))
+    return "Air/Intake";
+  if (/^Transmission|^Gear|^Speed|^Vehicle|^Trips/i.test(path))
+    return "Speed/Transmission";
+  if (/^Battery|^Charging|^Electrical|^Control/i.test(path)) return "Electrical";
+  if (/^Engine/i.test(path)) return "Engine";
+
+  return "Other";
+}
+
 function normalizeSignal(signal, command) {
   const fmt = signal.fmt || {};
   const code = commandCode(command);
@@ -168,6 +222,7 @@ function normalizeSignal(signal, command) {
     name: signal.name ?? null,
     description: signal.description ?? signal.name ?? null,
     path: signal.path ?? null,
+    category: categorizeSignal(signal),
     unit: fmt.unit ?? null,
     min: fmt.min ?? 0,
     max: fmt.max ?? null,
@@ -223,6 +278,7 @@ export function getStandardPids() {
     source: standardSource,
     license: "CC-BY-SA-4.0",
     count: standardSignals.length,
+    categories: PID_CATEGORIES,
     signals: standardSignals,
   };
 }
@@ -285,6 +341,7 @@ export async function getVehiclePids(make, model, year) {
     license: "CC-BY-SA-4.0",
     standardCount: standardSignals.length,
     vehicleCount: vehicleSignals.length,
+    categories: PID_CATEGORIES,
     signals: [...standardSignals, ...vehicleSignals],
   };
 }

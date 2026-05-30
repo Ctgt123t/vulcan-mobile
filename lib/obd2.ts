@@ -74,31 +74,54 @@ export interface FreezeFrame {
   fuelPressure: number | null;
 }
 
-export interface LiveData {
-  rpm: number | null;
-  speedKph: number | null;
-  coolantC: number | null;
-  intakeAirC: number | null;
-  mafGps: number | null;
-  throttlePct: number | null;
-  shortFuelTrimPct: number | null;
-  longFuelTrimPct: number | null;
-  batteryV: number | null;
-  updatedAt: number;
+// Describes a single PID the manager can poll: the OBD-II command, decode
+// metadata, display labels, and a priority hint used by the polling driver.
+// Built from the server's /api/pids/... response by the mobile pidCatalog.
+export interface PidDecode {
+  length: number | null;
+  multiplier: number | null;
+  divisor: number | null;
+  offset: number | null;
+  signed: boolean;
+  startBit: number | null;
+  enum?: Record<string, unknown> | null;
 }
 
-const EMPTY_LIVE: LiveData = {
-  rpm: null,
-  speedKph: null,
-  coolantC: null,
-  intakeAirC: null,
-  mafGps: null,
-  throttlePct: null,
-  shortFuelTrimPct: null,
-  longFuelTrimPct: null,
-  batteryV: null,
-  updatedAt: 0,
-};
+export interface PidDescriptor {
+  code: string; // e.g. "01 0C"
+  command: { mode: string; pid: string };
+  id?: string | null; // OBDb signal id, e.g. "ENGINE_RPM"
+  name: string;
+  unit: string | null;
+  category: string;
+  min: number;
+  max: number | null;
+  decode: PidDecode;
+  hidden?: boolean; // OBDb flags some signals as debug-only
+  // Optional caller-supplied flag (set by the AI integration). Carried into
+  // the live value so the UI can render an "AI-selected" badge.
+  aiSelected?: boolean;
+}
+
+// Per-PID current value snapshot. Keyed by code in the LiveValues map.
+export interface LiveValue {
+  value: number | null;
+  name: string;
+  unit: string | null;
+  category: string;
+  min: number;
+  max: number | null;
+  timestamp: number;
+  aiSelected?: boolean;
+}
+
+export type LiveValues = Record<string, LiveValue>;
+
+// Kept as a type alias so existing context wiring keeps compiling — the
+// inner shape is now the keyed map.
+export type LiveData = LiveValues;
+
+const EMPTY_LIVE: LiveValues = {};
 
 export interface LogLine {
   ts: number;
@@ -201,6 +224,150 @@ function decodeDtcBytes(a: number, b: number): string | null {
   const fourth = ((b >> 4) & 0x0f).toString(16).toUpperCase();
   const fifth = (b & 0x0f).toString(16).toUpperCase();
   return `${type}${second}${third}${fourth}${fifth}`;
+}
+
+// ---------- Generic PID decoding ----------
+
+// Tokenize a raw ELM327 response into a clean byte stream, dropping
+// non-byte tokens (11-bit CAN IDs like "7E8", line-index prefixes "0:",
+// total-length headers like "014").
+function responseToBytes(raw: string): number[] {
+  return raw
+    .split(/\s+/)
+    .filter((t) => /^[0-9A-F]{2}$/i.test(t))
+    .map((t) => parseInt(t, 16));
+}
+
+// Find the first `<modeEcho> <pid>` marker in a response and return up to
+// `expectedBytes` bytes following it. `expectedBytes` may be null if the
+// caller wants everything remaining (used by mode 03/07 DTC parsing).
+function extractFirstPidData(
+  raw: string,
+  modeEcho: number,
+  pid: number,
+  expectedBytes: number | null,
+): number[] | null {
+  const bytes = responseToBytes(raw);
+  for (let i = 0; i + 1 < bytes.length; i++) {
+    if (bytes[i] === modeEcho && bytes[i + 1] === pid) {
+      const start = i + 2;
+      const end = expectedBytes != null ? start + expectedBytes : bytes.length;
+      if (end > bytes.length) return null;
+      return bytes.slice(start, end);
+    }
+  }
+  return null;
+}
+
+// Like extractFirstPidData but tolerates mode 22 PIDs (2-byte PID) — pass
+// the hex string. expectedBits comes from the PidDecode `length` field;
+// converted to byte count by ceil(bits/8).
+function extractPidDataBytes(
+  raw: string,
+  responseCode: number,
+  pidHex: string,
+  expectedBits: number | null,
+): number[] | null {
+  const bytes = responseToBytes(raw);
+  const pidBytes: number[] = [];
+  for (let p = 0; p < pidHex.length; p += 2) {
+    pidBytes.push(parseInt(pidHex.slice(p, p + 2), 16));
+  }
+  const bytesNeeded =
+    expectedBits != null ? Math.ceil(expectedBits / 8) : null;
+  for (let i = 0; i + pidBytes.length < bytes.length; i++) {
+    if (bytes[i] !== responseCode) continue;
+    let match = true;
+    for (let p = 0; p < pidBytes.length; p++) {
+      if (bytes[i + 1 + p] !== pidBytes[p]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    const start = i + 1 + pidBytes.length;
+    if (bytesNeeded == null) return bytes.slice(start);
+    if (start + bytesNeeded > bytes.length) return null;
+    return bytes.slice(start, start + bytesNeeded);
+  }
+  return null;
+}
+
+// Walk a multi-PID mode 01 response and pull out each requested PID's
+// data bytes. The ELM327 spec allows up to 6 PIDs per request; the response
+// is an arbitrary interleaving of `41 XX <data...>` segments, possibly
+// spread across CAN frames. Returns a Map<code, value | null> covering
+// every PID in `batch` — null when the PID didn't appear in the response.
+function parseMultiPidResponse(
+  raw: string,
+  batch: PidDescriptor[],
+): Map<string, number | null> {
+  const result = new Map<string, number | null>();
+  for (const p of batch) result.set(p.code, null);
+  const bytes = responseToBytes(raw);
+  // PID hex (as int) → descriptor. Mode 01 PIDs are always 1 byte.
+  const expected = new Map<number, PidDescriptor>();
+  for (const p of batch) expected.set(parseInt(p.command.pid, 16), p);
+  let i = 0;
+  while (i + 1 < bytes.length) {
+    if (bytes[i] === 0x41 && expected.has(bytes[i + 1])) {
+      const desc = expected.get(bytes[i + 1])!;
+      const bitsNeeded = desc.decode.length ?? 8;
+      const bytesNeeded = Math.ceil(bitsNeeded / 8);
+      if (i + 2 + bytesNeeded > bytes.length) {
+        i++;
+        continue;
+      }
+      const data = bytes.slice(i + 2, i + 2 + bytesNeeded);
+      result.set(desc.code, decodePidGeneric(data, desc.decode));
+      i += 2 + bytesNeeded;
+      continue;
+    }
+    i++;
+  }
+  return result;
+}
+
+// Decode raw bytes into a numeric value using the OBDb decode metadata.
+// Supports byte-aligned signals. For bit-level signals (startBit set with
+// length not a multiple of 8) we mask the relevant bit range out of the
+// combined integer. Returns null when the decode can't be performed.
+function decodePidGeneric(
+  bytes: number[],
+  decode: PidDecode,
+): number | null {
+  if (!bytes || bytes.length === 0) return null;
+  // Combine big-endian into a single integer. JS bitwise is 32-bit; for
+  // signals > 32 bits we fall back to plain arithmetic.
+  let raw = 0;
+  for (const b of bytes) raw = raw * 256 + b;
+
+  const totalBits = bytes.length * 8;
+  let value = raw;
+
+  // Bit-field extraction when startBit/length narrow the window.
+  if (
+    decode.startBit != null &&
+    decode.length != null &&
+    decode.length < totalBits
+  ) {
+    const shift = totalBits - decode.startBit - decode.length;
+    if (shift < 0) return null;
+    const mask = decode.length >= 32 ? -1 : (1 << decode.length) - 1;
+    value = (raw >>> shift) & (mask >>> 0);
+  } else if (
+    decode.signed &&
+    decode.length != null &&
+    decode.length <= 32
+  ) {
+    const signBit = 1 << (decode.length - 1);
+    if ((value & signBit) !== 0) value -= 1 << decode.length;
+  }
+
+  if (decode.multiplier != null) value *= decode.multiplier;
+  if (decode.divisor != null) value /= decode.divisor;
+  if (decode.offset != null) value += decode.offset;
+  return value;
 }
 
 // VIN character set per SAE J853 — uppercase letters except I, O, Q, plus
@@ -1285,23 +1452,77 @@ class Obd2Manager {
     return this.extractDataBytes(res, 0x42, pid);
   }
 
-  // ---------- Live data polling ----------
+  // ---------- Mode 01 PID support discovery ----------
+  //
+  // OBD-II Mode 01 PID 00 returns a 4-byte bitmask indicating which of the
+  // next 32 PIDs (0x01-0x20) the ECU supports. PID 20 reports 0x21-0x40,
+  // PID 40 reports 0x41-0x60, and so on through PID E0. We walk the chain
+  // until either a PID isn't supported (high bit of the bitmask says "no
+  // more groups available") or the response is missing.
+  //
+  // Returns a Set of supported PID numbers (e.g. 0x0C, 0x0D, …) covering
+  // every mode 01 PID the vehicle's ECU will respond to. Used by
+  // pidCatalog to filter the UI's "available PIDs" list down from the
+  // OBDb superset to what this specific vehicle actually exposes.
+  async getSupportedMode01Pids(): Promise<Set<number>> {
+    const supported = new Set<number>();
+    if (!this.isConnected()) return supported;
 
-  startPolling(intervalMs = 250): void {
-    if (this.pollTimer) return;
+    const groupPids = [0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0, 0xe0];
+    for (const base of groupPids) {
+      const hex = base.toString(16).padStart(2, "0").toUpperCase();
+      const res = (await this.sendCommand(`01${hex}`, 2000)) ?? "";
+      const data = extractFirstPidData(res, 0x41, base, 4);
+      if (!data) break;
+      // 32 bits — bit (31 - i) at byte i mod 4 corresponds to PID (base + 1 + i).
+      for (let i = 0; i < 32; i++) {
+        const byteIdx = (i / 8) | 0;
+        const bitIdx = 7 - (i % 8);
+        if ((data[byteIdx] >> bitIdx) & 1) {
+          supported.add(base + 1 + i);
+        }
+      }
+      // High bit of the LAST byte of this group's bitmask indicates whether
+      // the NEXT group's "supported" PID itself is supported. If not, stop.
+      const nextGroupSupported = (data[3] & 0x01) === 1;
+      if (!nextGroupSupported) break;
+    }
+    return supported;
+  }
+
+  // ---------- Selected-PID live polling ----------
+  //
+  // Driven by the technician's selected PID list (or by the AI when it
+  // injects monitoring choices). Replaces the old hard-coded round-robin.
+  //
+  // Mode 01 PIDs are "fast tier": batched up to 6 per request using the
+  // ELM327 multi-PID syntax (`01 0C 0D 0E 11`) and parsed by walking the
+  // interleaved `41 XX` response markers. Mode 22 manufacturer PIDs are
+  // "slow tier": polled sequentially every Nth tick (default every 4th)
+  // because they can't share a request with mode 01 and individual mode 22
+  // responses are usually slower.
+  //
+  // PIDs that consistently fail (NO DATA, time out, or vehicle doesn't
+  // support them) are added to an in-process `unsupportedPids` set and
+  // skipped on future ticks. The mobile pidCatalog also persists these
+  // per-vehicle so the selection UI can mark them unsupported.
+
+  private selectedPids: PidDescriptor[] = [];
+  private unsupportedPids = new Set<string>();
+  private slowTierEvery = 4;
+  private pollIntervalMs = 250;
+  private tickIndex = 0;
+
+  startPolling(
+    pids: PidDescriptor[],
+    options?: { intervalMs?: number; slowTierEvery?: number },
+  ): void {
+    this.selectedPids = pids;
+    this.pollIntervalMs = options?.intervalMs ?? 250;
+    this.slowTierEvery = options?.slowTierEvery ?? 4;
+    if (this.pollTimer) return; // tick loop already running — just swap the list
     this.pollPaused = false;
-    let i = 0;
-    const sequence: Array<() => Promise<void>> = [
-      () => this.pollPid(0x0c, decodeRpm, "rpm"),
-      () => this.pollPid(0x0d, decodeSpeed, "speedKph"),
-      () => this.pollPid(0x05, decodeTempC, "coolantC"),
-      () => this.pollPid(0x0f, decodeTempC, "intakeAirC"),
-      () => this.pollPid(0x10, decodeMaf, "mafGps"),
-      () => this.pollPid(0x11, decodePercent, "throttlePct"),
-      () => this.pollPid(0x06, decodeFuelTrim, "shortFuelTrimPct"),
-      () => this.pollPid(0x07, decodeFuelTrim, "longFuelTrimPct"),
-      () => this.pollPid(0x42, decodeVoltage, "batteryV"),
-    ];
+    this.tickIndex = 0;
 
     const tick = async () => {
       if (!this.isConnected()) {
@@ -1309,13 +1530,108 @@ class Obd2Manager {
         return;
       }
       if (!this.pollPaused) {
-        await sequence[i % sequence.length]();
-        i++;
+        await this.pollSelectedOnce();
+        this.tickIndex++;
       }
-      this.pollTimer = setTimeout(tick, intervalMs);
+      this.pollTimer = setTimeout(tick, this.pollIntervalMs);
     };
 
-    this.pollTimer = setTimeout(tick, intervalMs);
+    this.pollTimer = setTimeout(tick, this.pollIntervalMs);
+  }
+
+  // Reports the unsupported set so callers (pidCatalog) can persist it and
+  // grey out PIDs in the selection UI.
+  getUnsupportedPids(): Set<string> {
+    return new Set(this.unsupportedPids);
+  }
+
+  setSelectedPids(pids: PidDescriptor[]): void {
+    this.selectedPids = pids;
+  }
+
+  private async pollSelectedOnce(): Promise<void> {
+    const supported = this.selectedPids.filter((p) => !this.unsupportedPids.has(p.code));
+    const fast: PidDescriptor[] = [];
+    const slow: PidDescriptor[] = [];
+    for (const p of supported) {
+      if (p.command.mode === "01") fast.push(p);
+      else slow.push(p);
+    }
+
+    // Fast tier — batches of 6 PIDs per multi-PID command.
+    for (let i = 0; i < fast.length; i += 6) {
+      const batch = fast.slice(i, i + 6);
+      await this.pollMultiplePids(batch);
+    }
+
+    // Slow tier — sequential, once every slowTierEvery ticks.
+    if (slow.length > 0 && this.tickIndex % this.slowTierEvery === 0) {
+      // Round-robin one mode 22 PID per slow tick so a long list doesn't
+      // stall the fast tier behind a sequential batch.
+      const idx = Math.floor(this.tickIndex / this.slowTierEvery) % slow.length;
+      await this.pollSinglePid(slow[idx]);
+    }
+  }
+
+  // Send a multi-PID mode 01 request and parse the interleaved response.
+  // All PIDs in `batch` must be mode 01.
+  async pollMultiplePids(batch: PidDescriptor[]): Promise<void> {
+    if (batch.length === 0) return;
+    const cmd = `01${batch.map((p) => p.command.pid).join("")}`;
+    const res = (await this.sendCommand(cmd, 2500)) ?? "";
+    if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
+      // Mark every PID in the batch unsupported — we can't isolate which one
+      // failed from a generic NO DATA response on a multi-PID request, so
+      // fall back to individual polling next tick will surface the truth.
+      for (const p of batch) this.unsupportedPids.add(p.code);
+      return;
+    }
+    const parsed = parseMultiPidResponse(res, batch);
+    const now = Date.now();
+    let changed = false;
+    for (const p of batch) {
+      const v = parsed.get(p.code);
+      if (v === undefined) continue; // PID didn't appear in response
+      this.liveData[p.code] = {
+        value: v,
+        name: p.name,
+        unit: p.unit,
+        category: p.category,
+        min: p.min,
+        max: p.max,
+        timestamp: now,
+        aiSelected: p.aiSelected,
+      };
+      changed = true;
+    }
+    if (changed) this.liveListeners.forEach((cb) => cb(this.liveData));
+  }
+
+  private async pollSinglePid(p: PidDescriptor): Promise<void> {
+    const cmd = `${p.command.mode}${p.command.pid}`;
+    const res = (await this.sendCommand(cmd, 2500)) ?? "";
+    if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
+      this.unsupportedPids.add(p.code);
+      return;
+    }
+    // Mode response code is mode + 0x40 (01 → 41, 02 → 42, 09 → 49,
+    // 22 → 62). For mode 22 the PID is two bytes; the response carries them
+    // both back after the 0x62 marker.
+    const responseCode = parseInt(p.command.mode, 16) + 0x40;
+    const data = extractPidDataBytes(res, responseCode, p.command.pid, p.decode.length);
+    if (data == null) return;
+    const value = decodePidGeneric(data, p.decode);
+    this.liveData[p.code] = {
+      value,
+      name: p.name,
+      unit: p.unit,
+      category: p.category,
+      min: p.min,
+      max: p.max,
+      timestamp: Date.now(),
+      aiSelected: p.aiSelected,
+    };
+    this.liveListeners.forEach((cb) => cb(this.liveData));
   }
 
   stopPolling(): void {
@@ -1335,25 +1651,6 @@ class Obd2Manager {
   }
   isPaused(): boolean {
     return this.pollPaused;
-  }
-
-  private async pollPid<K extends keyof LiveData>(
-    pid: number,
-    decode: (bytes: number[]) => number | null,
-    field: K,
-  ): Promise<void> {
-    const hex = pid.toString(16).padStart(2, "0").toUpperCase();
-    const res = (await this.sendCommand(`01${hex}`, 1500)) ?? "";
-    const bytes = this.extractDataBytes(res, 0x41, pid);
-    if (!bytes) return;
-    const value = decode(bytes);
-    if (value == null) return;
-    this.liveData = {
-      ...this.liveData,
-      [field]: value,
-      updatedAt: Date.now(),
-    } as LiveData;
-    this.liveListeners.forEach((cb) => cb(this.liveData));
   }
 
   private extractDataBytes(
