@@ -90,7 +90,10 @@ export interface PidDecode {
 export interface PidDescriptor {
   code: string; // e.g. "01 0C" — command identifier (one or more signals may share it)
   command: { mode: string; pid: string };
-  id: string; // OBDb signal id — UNIQUE within a vehicle catalog
+  id: string; // OBDb signal id — UNIQUE-PER-COMMAND but NOT globally unique
+              // (SHRTFT11 appears at both 01 14 and 01 15; O2S{N}_EXISTS
+              // appears at 01 13 and 01 1D). Use `signalKey` for any
+              // global identity (storage keys, React keys, polling maps).
   name: string;
   unit: string | null;
   category: string;
@@ -100,14 +103,22 @@ export interface PidDescriptor {
   hidden?: boolean; // OBDb flags some signals as debug-only
   // Pre-computed by pidCatalog.annotateCommandWidths(): total bytes that
   // follow the `41 PID` (or `62 PID`) marker for this command. Used by the
-  // multi-PID parser to know how far to advance past each PID block —
-  // critical when multiple signals share a command and only some are
-  // selected. Falls back to ceil(length/8) on the signal's own bits if
-  // absent.
+  // multi-PID parser to know how far to advance past each PID block.
   commandTotalBytes?: number;
+  // Globally unique key derived as `${code}@${id}`. Stable across reloads
+  // for the same catalog. Annotated alongside commandTotalBytes; consult
+  // `signalKeyOf(s)` if you need to derive it ad-hoc.
+  signalKey?: string;
   // Optional caller-supplied flag (set by the AI integration). Carried into
   // the live value so the UI can render an "AI-selected" badge.
   aiSelected?: boolean;
+}
+
+// Globally unique key for a signal. OBDb ids aren't unique on their own;
+// pairing with the command code yields a stable identifier we use as a
+// React key, AsyncStorage key, and LiveValues map key.
+export function signalKeyOf(s: { code: string; id: string }): string {
+  return `${s.code}@${s.id}`;
 }
 
 // Per-PID current value snapshot. Keyed by code in the LiveValues map.
@@ -313,8 +324,10 @@ function parseMultiPidResponse(
   raw: string,
   batch: PidDescriptor[],
 ): Map<string, number | null> {
+  // Map keyed by signalKey (code@id) — id alone collides for the 5
+  // duplicate-id signals in the SAE J1979 standard.
   const result = new Map<string, number | null>();
-  for (const s of batch) result.set(s.id, null);
+  for (const s of batch) result.set(signalKeyOf(s), null);
 
   const bytes = responseToBytes(raw);
 
@@ -353,7 +366,7 @@ function parseMultiPidResponse(
     }
     const data = bytes.slice(dataStart, dataStart + bytesNeeded);
     for (const sig of signalsByPidByte.get(pidByte)!) {
-      result.set(sig.id, decodePidGeneric(data, sig.decode));
+      result.set(signalKeyOf(sig), decodePidGeneric(data, sig.decode));
     }
     i = dataStart + bytesNeeded;
   }
@@ -1611,30 +1624,32 @@ class Obd2Manager {
     this.failureCounts.clear();
   }
 
-  // Per-SIGNAL consecutive-miss counter (keyed by signal id). A signal is
-  // added to unsupportedPids only after MAX_CONSECUTIVE_MISSES misses in
-  // a row — so a one-off multi-PID partial response doesn't kill an entire
-  // batch.
+  // Per-signal consecutive-miss counter (keyed by signalKey since plain
+  // ids collide). A signal is added to unsupportedPids only after
+  // MAX_CONSECUTIVE_MISSES misses in a row — so a one-off multi-PID
+  // partial response doesn't kill an entire batch.
   private failureCounts: Map<string, number> = new Map();
   private static readonly MAX_CONSECUTIVE_MISSES = 4;
 
-  private recordMiss(id: string): void {
-    const n = (this.failureCounts.get(id) ?? 0) + 1;
-    this.failureCounts.set(id, n);
+  private recordMiss(key: string): void {
+    const n = (this.failureCounts.get(key) ?? 0) + 1;
+    this.failureCounts.set(key, n);
     if (n >= Obd2Manager.MAX_CONSECUTIVE_MISSES) {
-      this.unsupportedPids.add(id);
+      this.unsupportedPids.add(key);
       console.log(
-        `[obd2 poll] ${id} marked unsupported after ${n} consecutive misses`,
+        `[obd2 poll] ${key} marked unsupported after ${n} consecutive misses`,
       );
     }
   }
 
-  private recordHit(id: string): void {
-    this.failureCounts.delete(id);
+  private recordHit(key: string): void {
+    this.failureCounts.delete(key);
   }
 
   private async pollSelectedOnce(): Promise<void> {
-    const supported = this.selectedPids.filter((p) => !this.unsupportedPids.has(p.id));
+    const supported = this.selectedPids.filter(
+      (p) => !this.unsupportedPids.has(signalKeyOf(p)),
+    );
 
     // Group by command code first. Multiple selected signals may share a
     // command (e.g. MIL + DTC_CNT both live under `01 01`); they should
@@ -1697,16 +1712,17 @@ class Obd2Manager {
     // gauges never re-render even when the values are changing.
     let next: LiveValues = this.liveData;
     for (const s of signals) {
-      const v = parsed.get(s.id);
+      const k = signalKeyOf(s);
+      const v = parsed.get(k);
       if (v == null) {
         misses.push(s);
         continue;
       }
-      this.recordHit(s.id);
+      this.recordHit(k);
       multiHits++;
       next = {
         ...next,
-        [s.id]: {
+        [k]: {
           value: v,
           name: s.name,
           unit: s.unit,
@@ -1721,8 +1737,11 @@ class Obd2Manager {
     console.log(
       `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${signals.length} hits: ` +
         signals
-          .slice(0, 8) // truncate to keep log readable
-          .map((s) => `${s.id}=${parsed.get(s.id) ?? "—"}`)
+          .slice(0, 8)
+          .map((s) => {
+            const k = signalKeyOf(s);
+            return `${k}=${parsed.get(k) ?? "—"}`;
+          })
           .join(", ") +
         (signals.length > 8 ? `, +${signals.length - 8} more` : ""),
     );
@@ -1749,7 +1768,7 @@ class Obd2Manager {
         await this.pollSingleCommand(signalsForCode);
       }
     } else if (misses.length > 0) {
-      for (const s of misses) this.recordMiss(s.id);
+      for (const s of misses) this.recordMiss(signalKeyOf(s));
     }
   }
 
@@ -1762,7 +1781,7 @@ class Obd2Manager {
     const cmd = `${first.command.mode}${first.command.pid}`;
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
     if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
-      for (const s of signals) this.recordMiss(s.id);
+      for (const s of signals) this.recordMiss(signalKeyOf(s));
       return;
     }
     // Mode response code is mode + 0x40 (01 → 41, 22 → 62).
@@ -1780,23 +1799,24 @@ class Obd2Manager {
       totalBytes * 8,
     );
     if (data == null) {
-      for (const s of signals) this.recordMiss(s.id);
+      for (const s of signals) this.recordMiss(signalKeyOf(s));
       return;
     }
     let next: LiveValues = this.liveData;
     const logBits: string[] = [];
     for (const s of signals) {
+      const k = signalKeyOf(s);
       const value = decodePidGeneric(data, s.decode);
       if (value == null) {
-        this.recordMiss(s.id);
-        logBits.push(`${s.id}=—`);
+        this.recordMiss(k);
+        logBits.push(`${k}=—`);
         continue;
       }
-      this.recordHit(s.id);
-      logBits.push(`${s.id}=${value}`);
+      this.recordHit(k);
+      logBits.push(`${k}=${value}`);
       next = {
         ...next,
-        [s.id]: {
+        [k]: {
           value,
           name: s.name,
           unit: s.unit,

@@ -31,12 +31,13 @@ import {
   loadCachedBitmask,
   loadCachedCatalog,
   loadPresets,
-  loadSelectedIds,
-  loadUnsupportedIds,
+  loadSelectedKeys,
+  loadUnsupportedKeys,
   saveCachedBitmask,
   saveCatalog,
-  saveSelectedIds,
+  saveSelectedKeys,
 } from "../lib/pidCatalog";
+import { signalKeyOf } from "../lib/obd2";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type { PidDescriptor } from "../lib/obd2";
 
@@ -68,10 +69,11 @@ export default function PidSelectionScreen() {
   // catalog across openings.
   const [catalog, setCatalog] = useState<PidCatalogResponse | null>(null);
   const [bitmask, setBitmask] = useState<Set<number> | null>(null);
-  // Selection is now keyed by SIGNAL ID (not command code) so signals
-  // sharing a command (MIL + DTC_CNT + readiness bits at `01 01`) can
-  // each be selected independently.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Selection is keyed by signalKey (composite `${code}@${id}`) which IS
+  // globally unique even though OBDb's plain ids aren't. SHRTFT11 at
+  // 01 14 vs 01 15 get distinct keys — both can be selected
+  // independently.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [unsupported, setUnsupported] = useState<Set<string>>(new Set());
   const [presets, setPresets] = useState<PidPreset[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,14 +92,14 @@ export default function PidSelectionScreen() {
       const [cached, cachedBitmask, selected, unsup, savedPresets] = await Promise.all([
         loadCachedCatalog(vehicle.make, vehicle.model, vehicle.year),
         loadCachedBitmask(vehicle.make, vehicle.model, vehicle.year),
-        loadSelectedIds(vehicle.make, vehicle.model, vehicle.year),
-        loadUnsupportedIds(vehicle.make, vehicle.model, vehicle.year),
+        loadSelectedKeys(vehicle.make, vehicle.model, vehicle.year),
+        loadUnsupportedKeys(vehicle.make, vehicle.model, vehicle.year),
         loadPresets(),
       ]);
       if (cancelled) return;
       if (cached) setCatalog(cached);
       if (cachedBitmask) setBitmask(cachedBitmask);
-      setSelectedIds(new Set(selected));
+      setSelectedKeys(new Set(selected));
       setUnsupported(unsup);
       setPresets(savedPresets);
 
@@ -174,7 +176,7 @@ export default function PidSelectionScreen() {
   // ---------- Toggle handlers ----------
   function persistSelection(next: Set<string>) {
     if (!vehicleReady) return;
-    saveSelectedIds(
+    saveSelectedKeys(
       vehicle.make,
       vehicle.model,
       vehicle.year,
@@ -182,21 +184,22 @@ export default function PidSelectionScreen() {
     ).catch(() => {});
   }
 
-  function toggleId(id: string) {
-    setSelectedIds((prev) => {
+  function toggleKey(key: string) {
+    setSelectedKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       persistSelection(next);
       return next;
     });
   }
 
   function selectAllInCategory(category: string) {
-    setSelectedIds((prev) => {
+    setSelectedKeys((prev) => {
       const next = new Set(prev);
       for (const s of signalsByCategory[category] ?? []) {
-        if (s.id && !unsupported.has(s.id)) next.add(s.id);
+        const k = s.signalKey ?? signalKeyOf(s);
+        if (k && !unsupported.has(k)) next.add(k);
       }
       persistSelection(next);
       return next;
@@ -204,10 +207,11 @@ export default function PidSelectionScreen() {
   }
 
   function clearAllInCategory(category: string) {
-    setSelectedIds((prev) => {
+    setSelectedKeys((prev) => {
       const next = new Set(prev);
       for (const s of signalsByCategory[category] ?? []) {
-        if (s.id) next.delete(s.id);
+        const k = s.signalKey ?? signalKeyOf(s);
+        if (k) next.delete(k);
       }
       persistSelection(next);
       return next;
@@ -217,28 +221,32 @@ export default function PidSelectionScreen() {
   // ---------- Presets ----------
   async function onSavePreset() {
     const name = presetName.trim();
-    if (!name || selectedIds.size === 0) return;
-    const created = await createPreset(name, Array.from(selectedIds));
+    if (!name || selectedKeys.size === 0) return;
+    const created = await createPreset(name, Array.from(selectedKeys));
     setPresets((prev) => [...prev, created]);
     setPresetName("");
     setPresetModalOpen(false);
   }
 
   function applyPreset(preset: PidPreset) {
-    // Only apply ids that exist in this vehicle's catalog and aren't
-    // marked unsupported.
+    // Only apply signalKeys that exist in this vehicle's catalog and
+    // aren't marked unsupported.
     if (!catalog) return;
-    const knownIds = new Set(catalog.signals.map((s) => s.id).filter(Boolean));
-    const next = new Set(
-      preset.pidIds.filter((c) => knownIds.has(c) && !unsupported.has(c)),
+    const known = new Set(
+      catalog.signals
+        .map((s) => s.signalKey ?? signalKeyOf(s))
+        .filter(Boolean),
     );
-    setSelectedIds(next);
+    const next = new Set(
+      preset.signalKeys.filter((k) => known.has(k) && !unsupported.has(k)),
+    );
+    setSelectedKeys(next);
     persistSelection(next);
-    const missing = preset.pidIds.length - next.size;
+    const missing = preset.signalKeys.length - next.size;
     if (missing > 0) {
       Alert.alert(
         "Preset applied",
-        `${next.size} of ${preset.pidIds.length} PIDs applied — ${missing} aren't supported by this vehicle.`,
+        `${next.size} of ${preset.signalKeys.length} PIDs applied — ${missing} aren't supported by this vehicle.`,
       );
     }
   }
@@ -253,7 +261,7 @@ export default function PidSelectionScreen() {
     if (catalog) {
       const descriptors = buildSelectedDescriptors(
         catalog,
-        Array.from(selectedIds),
+        Array.from(selectedKeys),
         unsupported,
       );
       obd2.setSelectedPids(descriptors);
@@ -331,16 +339,16 @@ export default function PidSelectionScreen() {
 
         <FlatList
           data={list}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.signalKey ?? signalKeyOf(item)}
           renderItem={({ item }) => {
-            const id = item.id;
-            const checked = selectedIds.has(id);
-            const unsup = unsupported.has(id);
+            const k = item.signalKey ?? signalKeyOf(item);
+            const checked = selectedKeys.has(k);
+            const unsup = unsupported.has(k);
             const isStatus = isStatusSignal(item);
             return (
               <TouchableOpacity
                 style={[styles.pidRow, unsup && styles.pidRowDisabled]}
-                onPress={() => !unsup && toggleId(id)}
+                onPress={() => !unsup && toggleKey(k)}
                 disabled={unsup}
                 activeOpacity={0.6}
               >
@@ -397,13 +405,14 @@ export default function PidSelectionScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.sectionLabel}>CATEGORIES</Text>
         <Text style={styles.bodyDim}>
-          {selectedIds.size} PID{selectedIds.size === 1 ? "" : "s"} selected
+          {selectedKeys.size} PID{selectedKeys.size === 1 ? "" : "s"} selected
         </Text>
         {categories.map((cat) => {
           const list = signalsByCategory[cat] ?? [];
-          const selectedInCat = list.filter((s) =>
-            s.id ? selectedIds.has(s.id) : false,
-          ).length;
+          const selectedInCat = list.filter((s) => {
+            const k = s.signalKey ?? signalKeyOf(s);
+            return k ? selectedKeys.has(k) : false;
+          }).length;
           if (list.length === 0) return null;
           return (
             <TouchableOpacity
@@ -431,7 +440,7 @@ export default function PidSelectionScreen() {
         <TouchableOpacity
           style={styles.savePresetBtn}
           onPress={() => setPresetModalOpen(true)}
-          disabled={selectedIds.size === 0}
+          disabled={selectedKeys.size === 0}
           activeOpacity={0.7}
         >
           <Ionicons name="bookmark-outline" size={16} color={colors.accent} />
@@ -447,7 +456,7 @@ export default function PidSelectionScreen() {
               activeOpacity={0.6}
             >
               <Text style={styles.presetName}>{p.name}</Text>
-              <Text style={styles.presetMeta}>{p.pidIds.length} PIDs</Text>
+              <Text style={styles.presetMeta}>{p.signalKeys.length} PIDs</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() =>
@@ -479,7 +488,7 @@ export default function PidSelectionScreen() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Save preset</Text>
             <Text style={styles.modalSub}>
-              {selectedIds.size} PID{selectedIds.size === 1 ? "" : "s"} will be saved
+              {selectedKeys.size} PID{selectedKeys.size === 1 ? "" : "s"} will be saved
             </Text>
             <TextInput
               value={presetName}

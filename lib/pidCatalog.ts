@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { PidDescriptor } from "./obd2";
+import { signalKeyOf, type PidDescriptor } from "./obd2";
 
 // ----------------------------------------------------------------------------
 // PID catalog — bridges the server's /api/pids/<make>/<model>/<year>
@@ -7,20 +7,24 @@ import type { PidDescriptor } from "./obd2";
 // technician's per-vehicle preferences (selected signal IDs, saved
 // presets, known-unsupported signal IDs).
 //
-// Storage keys (v2 — bumped from v1's code-based selection):
+// Storage keys (v3 — bumped from v2's plain-id selection):
 //   vulcan:pids:catalog:<vk>          — full OBDb catalog cache (snapshot)
 //   vulcan:pids:bitmask:<vk>          — ECU mode-01 support bitmask
-//   vulcan:pids:selected:v2:<vk>      — array of selected signal IDs
-//   vulcan:pids:unsupported:v2:<vk>   — array of signal IDs that didn't
+//   vulcan:pids:selected:v3:<vk>      — array of selected signalKeys
+//   vulcan:pids:unsupported:v3:<vk>   — array of signalKeys that didn't
 //                                       respond after N poll attempts
-//   vulcan:pids:presets:v2            — cross-vehicle saved selections
+//   vulcan:pids:presets:v3            — cross-vehicle saved selections
 //
-// Why v2: the v1 schema keyed everything by command code (e.g. "01 01"),
-// but many SAE PIDs carry MULTIPLE signals in the same command response
-// (PID 01 01 holds MIL, DTC_CNT, and 22 readiness bits). Code-keyed
-// selection collapsed all of them to a single row in the UI. v2 keys by
-// the OBDb signal `id` (e.g. "RPM", "MIL", "DTC_CNT"), which is unique
-// within a catalog and lets us select / decode each signal independently.
+// v1 → v2: was code-keyed ("01 01"). Code collisions across signals
+// sharing a command response (MIL + DTC_CNT + readiness bits) made
+// selection ambiguous.
+// v2 → v3: was id-keyed ("RPM", "SHRTFT11"). Five OBDb ids collide
+// across commands in the SAE J1979 standard alone (SHRTFT11 at 01 14
+// AND 01 15; O2S{N}_EXISTS at 01 13 AND 01 1D). v3 uses signalKey =
+// `${code}@${id}` which IS globally unique. annotateCommandWidths()
+// also runs a dev-time assertion that warns if any signalKey
+// collides — catches the same class of bug at data-load time rather
+// than as a downstream React render error.
 //
 // vehicleKey = `${make}|${model}|${year}` lower-cased.
 // ----------------------------------------------------------------------------
@@ -45,7 +49,7 @@ export interface PidCatalogResponse {
 export interface PidPreset {
   id: string;
   name: string;
-  pidIds: string[];
+  signalKeys: string[]; // composite keys (`${code}@${id}`)
   createdAt: number;
 }
 
@@ -142,14 +146,14 @@ export async function saveCachedBitmask(
   }
 }
 
-export async function loadSelectedIds(
+export async function loadSelectedKeys(
   make: string,
   model: string,
   year: string | number,
 ): Promise<string[]> {
   try {
     const raw = await AsyncStorage.getItem(
-      `vulcan:pids:selected:v2:${vehicleKey(make, model, year)}`,
+      `vulcan:pids:selected:v3:${vehicleKey(make, model, year)}`,
     );
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -159,30 +163,30 @@ export async function loadSelectedIds(
   }
 }
 
-export async function saveSelectedIds(
+export async function saveSelectedKeys(
   make: string,
   model: string,
   year: string | number,
-  ids: string[],
+  keys: string[],
 ): Promise<void> {
   try {
     await AsyncStorage.setItem(
-      `vulcan:pids:selected:v2:${vehicleKey(make, model, year)}`,
-      JSON.stringify(ids),
+      `vulcan:pids:selected:v3:${vehicleKey(make, model, year)}`,
+      JSON.stringify(keys),
     );
   } catch (err) {
-    console.warn("[pidCatalog] saveSelectedIds failed:", err);
+    console.warn("[pidCatalog] saveSelectedKeys failed:", err);
   }
 }
 
-export async function loadUnsupportedIds(
+export async function loadUnsupportedKeys(
   make: string,
   model: string,
   year: string | number,
 ): Promise<Set<string>> {
   try {
     const raw = await AsyncStorage.getItem(
-      `vulcan:pids:unsupported:v2:${vehicleKey(make, model, year)}`,
+      `vulcan:pids:unsupported:v3:${vehicleKey(make, model, year)}`,
     );
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
@@ -192,19 +196,19 @@ export async function loadUnsupportedIds(
   }
 }
 
-export async function saveUnsupportedIds(
+export async function saveUnsupportedKeys(
   make: string,
   model: string,
   year: string | number,
-  ids: Set<string>,
+  keys: Set<string>,
 ): Promise<void> {
   try {
     await AsyncStorage.setItem(
-      `vulcan:pids:unsupported:v2:${vehicleKey(make, model, year)}`,
-      JSON.stringify(Array.from(ids)),
+      `vulcan:pids:unsupported:v3:${vehicleKey(make, model, year)}`,
+      JSON.stringify(Array.from(keys)),
     );
   } catch (err) {
-    console.warn("[pidCatalog] saveUnsupportedIds failed:", err);
+    console.warn("[pidCatalog] saveUnsupportedKeys failed:", err);
   }
 }
 
@@ -269,22 +273,44 @@ function computeBytesByCode(signals: PidDescriptor[]): Map<string, number> {
 }
 
 // Annotate every signal in the catalog with the total bytes per command
-// it lives on. Called once per catalog hydration.
+// it lives on AND its globally-unique signalKey. Called once per catalog
+// hydration. Runs a dev-time assertion that warns about any
+// signalKey collisions — that would mean OBDb shipped genuinely
+// duplicate signals (same id + same code), which is a real data bug
+// we'd want to know about immediately rather than as a downstream
+// React render error.
 export function annotateCommandWidths(
   signals: PidDescriptor[],
 ): PidDescriptor[] {
   const bytesByCode = computeBytesByCode(signals);
-  return signals.map((s) => {
+  const seenKeys = new Set<string>();
+  const dupKeys = new Set<string>();
+  const annotated = signals.map((s) => {
     if (!s.code) return s;
+    const key = signalKeyOf(s);
+    if (seenKeys.has(key)) dupKeys.add(key);
+    else seenKeys.add(key);
     const bytes = bytesByCode.get(s.code);
-    if (bytes == null) return s;
-    return { ...s, commandTotalBytes: bytes };
+    return {
+      ...s,
+      signalKey: key,
+      ...(bytes != null ? { commandTotalBytes: bytes } : {}),
+    };
   });
+  if (dupKeys.size > 0) {
+    console.warn(
+      `[pidCatalog] catalog has ${dupKeys.size} duplicate signalKey(s) — ` +
+        "downstream React keys may collide. This indicates a true data bug " +
+        "(same id at same code in OBDb). Duplicates: " +
+        Array.from(dupKeys).slice(0, 10).join(", "),
+    );
+  }
+  return annotated;
 }
 
 // ---------- Presets ----------
 
-const PRESETS_KEY = "vulcan:pids:presets:v2";
+const PRESETS_KEY = "vulcan:pids:presets:v3";
 
 export async function loadPresets(): Promise<PidPreset[]> {
   try {
@@ -297,7 +323,7 @@ export async function loadPresets(): Promise<PidPreset[]> {
         p &&
         typeof p.id === "string" &&
         typeof p.name === "string" &&
-        Array.isArray(p.pidIds),
+        Array.isArray(p.signalKeys),
     );
   } catch {
     return [];
@@ -312,11 +338,14 @@ export async function savePresets(presets: PidPreset[]): Promise<void> {
   }
 }
 
-export async function createPreset(name: string, pidIds: string[]): Promise<PidPreset> {
+export async function createPreset(
+  name: string,
+  signalKeys: string[],
+): Promise<PidPreset> {
   const preset: PidPreset = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
-    pidIds,
+    signalKeys,
     createdAt: Date.now(),
   };
   const all = await loadPresets();
@@ -332,32 +361,53 @@ export async function deletePreset(id: string): Promise<void> {
 
 // ---------- Convenience: build the descriptors to poll ----------
 
-// Given the catalog, the user's selected signal IDs, and the unsupported
+// Given the catalog, the user's selected signalKeys, and the unsupported
 // set, return the PidDescriptor[] to hand to obd2.startPolling().
-// Annotates each descriptor with commandTotalBytes so the polling parser
-// advances correctly past multi-signal commands.
+// Annotates each descriptor with commandTotalBytes + signalKey so the
+// polling parser advances correctly past multi-signal commands and
+// React keys stay unique.
 export function buildSelectedDescriptors(
   catalog: PidCatalogResponse | null,
-  selectedIds: string[],
-  unsupportedIds: Set<string>,
-  aiSelectedIds?: Set<string>,
+  selectedKeys: string[],
+  unsupportedKeys: Set<string>,
+  aiSelectedKeys?: Set<string>,
 ): PidDescriptor[] {
   if (!catalog) return [];
   const annotated = annotateCommandWidths(catalog.signals);
-  const byId = new Map<string, PidDescriptor>();
+  const byKey = new Map<string, PidDescriptor>();
   for (const s of annotated) {
-    if (s.id) byId.set(s.id, s);
+    if (s.signalKey) byKey.set(s.signalKey, s);
   }
   const out: PidDescriptor[] = [];
-  for (const id of selectedIds) {
-    const sig = byId.get(id);
+  for (const key of selectedKeys) {
+    const sig = byKey.get(key);
     if (!sig) continue;
-    if (unsupportedIds.has(id)) continue;
-    if (aiSelectedIds?.has(id)) {
+    if (unsupportedKeys.has(key)) continue;
+    if (aiSelectedKeys?.has(key)) {
       out.push({ ...sig, aiSelected: true });
     } else {
       out.push(sig);
     }
   }
   return out;
+}
+
+// Convenience: resolve a list of bare signal IDs (e.g. the
+// DEFAULT_PID_IDS starter set) to their signalKeys in the current
+// catalog. Picks the first matching signal when an id is ambiguous.
+export function resolveIdsToKeys(
+  catalog: PidCatalogResponse | null,
+  ids: string[],
+): string[] {
+  if (!catalog) return [];
+  const annotated = annotateCommandWidths(catalog.signals);
+  const firstByIdLower = new Map<string, string>();
+  for (const s of annotated) {
+    if (!s.id || !s.signalKey) continue;
+    const key = s.id.toLowerCase();
+    if (!firstByIdLower.has(key)) firstByIdLower.set(key, s.signalKey);
+  }
+  return ids
+    .map((id) => firstByIdLower.get(id.toLowerCase()))
+    .filter((k): k is string => Boolean(k));
 }

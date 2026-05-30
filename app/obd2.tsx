@@ -27,6 +27,7 @@ import {
   type LiveValue,
   type PidDescriptor,
   obd2,
+  signalKeyOf,
 } from "../lib/obd2";
 import {
   type PidCatalogResponse,
@@ -35,9 +36,10 @@ import {
   isLiveMonitorable,
   isStatusSignal,
   loadCachedCatalog,
-  loadSelectedIds,
-  loadUnsupportedIds,
-  saveSelectedIds,
+  loadSelectedKeys,
+  loadUnsupportedKeys,
+  resolveIdsToKeys,
+  saveSelectedKeys,
 } from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
 import { HIT_TARGET, colors } from "../lib/theme";
@@ -191,24 +193,33 @@ export default function Obd2Screen() {
       );
       if (cached && !cancelled) setPidCatalog(cached);
 
-      const [selectedIds, unsupported] = await Promise.all([
-        loadSelectedIds(vehicle.make, vehicle.model, vehicle.year),
-        loadUnsupportedIds(vehicle.make, vehicle.model, vehicle.year),
+      const [savedKeys, unsupported] = await Promise.all([
+        loadSelectedKeys(vehicle.make, vehicle.model, vehicle.year),
+        loadUnsupportedKeys(vehicle.make, vehicle.model, vehicle.year),
       ]);
       if (cancelled) return;
 
-      const effective = selectedIds.length > 0 ? selectedIds : DEFAULT_PID_IDS;
-      if (selectedIds.length === 0 && cached) {
-        saveSelectedIds(
-          vehicle.make,
-          vehicle.model,
-          vehicle.year,
-          DEFAULT_PID_IDS,
-        ).catch(() => {});
+      // First-run-on-this-vehicle: resolve the bare-id starter set to
+      // signalKeys against the catalog and persist as v3 selection.
+      let effective: string[];
+      if (savedKeys.length > 0) {
+        effective = savedKeys;
+      } else if (cached) {
+        effective = resolveIdsToKeys(cached, DEFAULT_PID_IDS);
+        if (effective.length > 0) {
+          saveSelectedKeys(
+            vehicle.make,
+            vehicle.model,
+            vehicle.year,
+            effective,
+          ).catch(() => {});
+        }
+      } else {
+        effective = [];
       }
       const descriptors = buildSelectedDescriptors(cached, effective, unsupported);
       console.log(
-        `[obd2 screen] hydrate — selectedIds=${selectedIds.length} effective=${effective.length} resolved=${descriptors.length} unsupported=${unsupported.size}`,
+        `[obd2 screen] hydrate — savedKeys=${savedKeys.length} effective=${effective.length} resolved=${descriptors.length} unsupported=${unsupported.size}`,
       );
       if (!cancelled) setSelectedDescriptors(descriptors);
 
@@ -220,7 +231,18 @@ export default function Obd2Screen() {
       );
       if (cancelled || !fresh) return;
       setPidCatalog(fresh);
-      const refreshed = buildSelectedDescriptors(fresh, effective, unsupported);
+      // If we were on the starter set and the network catalog has more
+      // signals than the cached one did, re-resolve so any starter signal
+      // missing from cache picks up its key now.
+      const refreshedEffective =
+        savedKeys.length === 0
+          ? resolveIdsToKeys(fresh, DEFAULT_PID_IDS)
+          : effective;
+      const refreshed = buildSelectedDescriptors(
+        fresh,
+        refreshedEffective,
+        unsupported,
+      );
       setSelectedDescriptors(refreshed);
     })();
     return () => {
@@ -229,9 +251,11 @@ export default function Obd2Screen() {
   }, [vehicle.make, vehicle.model, vehicle.year]);
 
   // Drive the polling lifecycle off (connected, selectedDescriptors).
-  // Use a stable id-string as the dependency so swap-A-for-B selection
-  // changes also trigger a re-poll.
-  const selectedIdsKey = selectedDescriptors.map((d) => d.id).join(",");
+  // Use a stable signalKey-string as the dependency so swap-A-for-B
+  // selection changes also trigger a re-poll.
+  const selectedKeysSig = selectedDescriptors
+    .map((d) => d.signalKey ?? signalKeyOf(d))
+    .join(",");
   useEffect(() => {
     if (isConnected && selectedDescriptors.length > 0) {
       obd2.startPolling(selectedDescriptors, { intervalMs: 250 });
@@ -246,7 +270,7 @@ export default function Obd2Screen() {
       setDefinitions({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, selectedIdsKey]);
+  }, [isConnected, selectedKeysSig]);
 
   // When the user comes back from /obd2-pids (the selection screen), the
   // OBD2 screen's component instance hasn't unmounted — the vehicle-change
@@ -258,18 +282,29 @@ export default function Obd2Screen() {
       if (!vehicle.make || !vehicle.model || !vehicle.year) return;
       let cancelled = false;
       (async () => {
-        const [selectedIds, unsupported] = await Promise.all([
-          loadSelectedIds(vehicle.make, vehicle.model, vehicle.year),
-          loadUnsupportedIds(vehicle.make, vehicle.model, vehicle.year),
+        const [savedKeys, unsupported] = await Promise.all([
+          loadSelectedKeys(vehicle.make, vehicle.model, vehicle.year),
+          loadUnsupportedKeys(vehicle.make, vehicle.model, vehicle.year),
         ]);
         if (cancelled) return;
-        const ids = selectedIds.length > 0 ? selectedIds : DEFAULT_PID_IDS;
-        const descriptors = buildSelectedDescriptors(pidCatalog, ids, unsupported);
-        const prevIds = selectedDescriptors.map((d) => d.id).join(",");
-        const nextIds = descriptors.map((d) => d.id).join(",");
-        if (prevIds !== nextIds) {
+        const effective =
+          savedKeys.length > 0
+            ? savedKeys
+            : resolveIdsToKeys(pidCatalog, DEFAULT_PID_IDS);
+        const descriptors = buildSelectedDescriptors(
+          pidCatalog,
+          effective,
+          unsupported,
+        );
+        const prev = selectedDescriptors
+          .map((d) => d.signalKey ?? signalKeyOf(d))
+          .join(",");
+        const next = descriptors
+          .map((d) => d.signalKey ?? signalKeyOf(d))
+          .join(",");
+        if (prev !== next) {
           console.log(
-            `[obd2 screen] focus refresh — selection changed: ${prevIds} → ${nextIds}`,
+            `[obd2 screen] focus refresh — selection changed: ${prev} → ${next}`,
           );
           setSelectedDescriptors(descriptors);
           obd2.setSelectedPids(descriptors);
@@ -743,16 +778,21 @@ export default function Obd2Screen() {
                   </TouchableOpacity>
                 </View>
               </View>
-              {/* Numeric gauges — byte-aligned scalar readings */}
+              {/* Numeric gauges — byte-aligned scalar readings.
+                  React key is signalKey (composite code@id) since plain
+                  ids collide (SHRTFT11 at 01 14 and 01 15, etc.). */}
               {selectedDescriptors.some(isLiveMonitorable) ? (
                 <View style={styles.gauges}>
-                  {selectedDescriptors.filter(isLiveMonitorable).map((p) => (
-                    <DynamicGauge
-                      key={p.id}
-                      descriptor={p}
-                      reading={liveData[p.id]}
-                    />
-                  ))}
+                  {selectedDescriptors.filter(isLiveMonitorable).map((p) => {
+                    const k = p.signalKey ?? signalKeyOf(p);
+                    return (
+                      <DynamicGauge
+                        key={k}
+                        descriptor={p}
+                        reading={liveData[k]}
+                      />
+                    );
+                  })}
                 </View>
               ) : null}
 
@@ -760,13 +800,16 @@ export default function Obd2Screen() {
               {selectedDescriptors.some(isStatusSignal) ? (
                 <View style={styles.statusPanel}>
                   <Text style={styles.statusPanelLabel}>STATUS</Text>
-                  {selectedDescriptors.filter(isStatusSignal).map((p) => (
-                    <StatusRow
-                      key={p.id}
-                      descriptor={p}
-                      reading={liveData[p.id]}
-                    />
-                  ))}
+                  {selectedDescriptors.filter(isStatusSignal).map((p) => {
+                    const k = p.signalKey ?? signalKeyOf(p);
+                    return (
+                      <StatusRow
+                        key={k}
+                        descriptor={p}
+                        reading={liveData[k]}
+                      />
+                    );
+                  })}
                 </View>
               ) : null}
             </>
