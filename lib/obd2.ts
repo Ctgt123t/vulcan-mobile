@@ -1543,13 +1543,20 @@ class Obd2Manager {
     if (this.pollTimer) return; // tick loop already running — just swap the list
     this.pollPaused = false;
     this.tickIndex = 0;
+    console.log(
+      `[obd2 poll] startPolling — ${pids.length} PIDs at ${this.pollIntervalMs}ms`,
+    );
 
     const tick = async () => {
       if (!this.isConnected()) {
+        console.log("[obd2 poll] tick: disconnected, stopping");
         this.stopPolling();
         return;
       }
       if (!this.pollPaused) {
+        console.log(
+          `[obd2 poll] tick #${this.tickIndex} — selectedPids=${this.selectedPids.length}`,
+        );
         await this.pollSelectedOnce();
         this.tickIndex++;
       }
@@ -1633,9 +1640,15 @@ class Obd2Manager {
     const res = (await this.sendCommand(cmd, 2500)) ?? "";
     const parsed = parseMultiPidResponse(res, batch);
     const now = Date.now();
-    let changed = false;
     let multiHits = 0;
     const misses: PidDescriptor[] = [];
+    // Build the next liveData as an immutable update. Mutating the existing
+    // map in place and re-handing the same reference to React listeners
+    // makes setState a no-op (prevState === nextState short-circuit) — the
+    // gauges would never re-render even though the underlying values are
+    // changing. Spreading into a new object on every change is the cost
+    // we pay for reactivity.
+    let next: LiveValues = this.liveData;
     for (const p of batch) {
       const v = parsed.get(p.code);
       if (v == null) {
@@ -1644,17 +1657,19 @@ class Obd2Manager {
       }
       this.recordHit(p.code);
       multiHits++;
-      this.liveData[p.code] = {
-        value: v,
-        name: p.name,
-        unit: p.unit,
-        category: p.category,
-        min: p.min,
-        max: p.max,
-        timestamp: now,
-        aiSelected: p.aiSelected,
+      next = {
+        ...next,
+        [p.code]: {
+          value: v,
+          name: p.name,
+          unit: p.unit,
+          category: p.category,
+          min: p.min,
+          max: p.max,
+          timestamp: now,
+          aiSelected: p.aiSelected,
+        },
       };
-      changed = true;
     }
     console.log(
       `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${batch.length} hits: ` +
@@ -1662,18 +1677,22 @@ class Obd2Manager {
           .map((p) => `${p.code}=${parsed.get(p.code) ?? "—"}`)
           .join(", "),
     );
+    // Commit the multi-PID hits before the single-PID fallback runs so
+    // listeners see the partial result immediately (RPM updates this tick
+    // even when fuel trims need a fallback).
+    if (next !== this.liveData) {
+      this.liveData = next;
+      this.liveListeners.forEach((cb) => cb(this.liveData));
+    }
 
     // If the batch had >1 PID and any didn't return, fall back to single-PID
     // polling for each miss this same tick. When batch.length === 1 there's
     // nothing to fall back to — the recordMiss happens below.
     if (misses.length > 0 && batch.length > 1) {
       for (const p of misses) await this.pollSinglePid(p);
-      changed = true;
     } else if (misses.length > 0) {
       for (const p of misses) this.recordMiss(p.code);
     }
-
-    if (changed) this.liveListeners.forEach((cb) => cb(this.liveData));
   }
 
   private async pollSinglePid(p: PidDescriptor): Promise<void> {
@@ -1698,16 +1717,22 @@ class Obd2Manager {
       return;
     }
     this.recordHit(p.code);
-    this.liveData[p.code] = {
-      value,
-      name: p.name,
-      unit: p.unit,
-      category: p.category,
-      min: p.min,
-      max: p.max,
-      timestamp: Date.now(),
-      aiSelected: p.aiSelected,
+    // Immutable update so React subscribers actually re-render — see the
+    // long-form comment in pollMultiplePids.
+    this.liveData = {
+      ...this.liveData,
+      [p.code]: {
+        value,
+        name: p.name,
+        unit: p.unit,
+        category: p.category,
+        min: p.min,
+        max: p.max,
+        timestamp: Date.now(),
+        aiSelected: p.aiSelected,
+      },
     };
+    console.log(`[obd2 poll] single ${p.code}=${value}`);
     this.liveListeners.forEach((cb) => cb(this.liveData));
   }
 
