@@ -21,7 +21,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 
 - **Frontend:** Expo SDK 54, React Native, TypeScript
 - **Backend:** Node.js/Express on Railway
-- **AI:** Claude Opus 4.6 for Diagnose mode, Claude Sonnet 4.6 for Ask Vulcan mode
+- **AI:** Claude Opus 4.6 for Diagnose mode, Claude Sonnet 4.6 for Ask Vulcan mode. Both system prompts begin with a shared `APP_CONTEXT` block (`server/index.js`) so Claude reasons as an integrated diagnostic tool — aware that the app retrieves VIN/DTCs/live data through the Vulcan OBD2 connection, knows the four app modes, and treats codes appearing in conversation as confirmed scans rather than hypothetical. Updates to the shared identity belong in `APP_CONTEXT` so both modes stay consistent
 - **OBD2:** `react-native-ble-plx` for BLE, `react-native-bluetooth-classic` for Classic Bluetooth
 - **Builds:** EAS Build for iOS and Android
 
