@@ -69,6 +69,16 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
   - Each PID exposes: `command: {mode, pid}`, `code`, `id`, `name`, `description`, `path`, `unit`, `min`, `max`, `suggestedMetric`, and a `decode: {length, multiplier, divisor, offset, signed, startBit, enum}` block for raw-byte interpretation
   - OBDb is CC-BY-SA-4.0; attribution lives in the repo-root `NOTICE` and every API response carries `source`/`license` fields
 
+## Debug Logging
+
+Mobile uses bundle-time-inlined debug flags in `lib/debug.ts`. High-frequency
+logs (per-poll-tick, transport TX/RX, BLE scan ingestion, per-handshake
+commands) are wrapped in `if (DEBUG_OBD2)` and stay silent unless
+`EXPO_PUBLIC_DEBUG_OBD2=1` is set in `.env`. Preview / production builds
+never set the flag so production binaries never produce verbose logs.
+Rare/informational events (connection PASS/FAIL, marked-unsupported,
+disconnect, errors, the duplicate-signalKey assertion warning) always log.
+
 ## Development Workflow
 
 - Use **Windows CMD** (not PowerShell) for all terminal commands

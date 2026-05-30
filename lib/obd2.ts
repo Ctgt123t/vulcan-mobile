@@ -39,6 +39,7 @@ import {
   saveAdapter,
   type SavedAdapter,
 } from "./savedAdapter";
+import { DEBUG_OBD2 } from "./debug";
 
 // ---------- Public types ----------
 
@@ -680,9 +681,11 @@ class ClassicTransport implements Obd2Transport {
     let lastErrorMessage = "Unknown error";
 
     for (let attempt = 1; attempt <= CLASSIC_CONNECT_ATTEMPTS; attempt++) {
-      console.log(
-        `[obd2 classic] === connect attempt ${attempt}/${CLASSIC_CONNECT_ATTEMPTS} → ${deviceId} ===`,
-      );
+      if (DEBUG_OBD2) {
+        console.log(
+          `[obd2 classic] === connect attempt ${attempt}/${CLASSIC_CONNECT_ATTEMPTS} → ${deviceId} ===`,
+        );
+      }
       try {
         // Connect options for the OBDLink MX+:
         //
@@ -708,24 +711,30 @@ class ClassicTransport implements Obd2Transport {
           DELIMITER: "",
           UUID: SPP_UUID,
         };
-        console.log(
-          `[obd2 classic] calling RNBluetoothClassic.connectToDevice with ${JSON.stringify(options)}`,
-        );
+        if (DEBUG_OBD2) {
+          console.log(
+            `[obd2 classic] calling RNBluetoothClassic.connectToDevice with ${JSON.stringify(options)}`,
+          );
+        }
         const device = await RNBluetoothClassic.connectToDevice(
           deviceId,
           options,
         );
-        console.log(
-          `[obd2 classic] socket OPEN — address=${device.address} name=${JSON.stringify(device.name)}`,
-        );
+        if (DEBUG_OBD2) {
+          console.log(
+            `[obd2 classic] socket OPEN — address=${device.address} name=${JSON.stringify(device.name)}`,
+          );
+        }
         this.device = device;
 
         this.dataSub = device.onDataReceived((event) => {
           const data = event.data;
-          const len = typeof data === "string" ? data.length : 0;
-          console.log(
-            `[obd2 classic] RX (${len} chars): ${JSON.stringify(data)}`,
-          );
+          if (DEBUG_OBD2) {
+            const len = typeof data === "string" ? data.length : 0;
+            console.log(
+              `[obd2 classic] RX (${len} chars): ${JSON.stringify(data)}`,
+            );
+          }
           if (typeof data === "string") {
             this.cmdBuf.receive(data);
           }
@@ -733,6 +742,8 @@ class ClassicTransport implements Obd2Transport {
 
         this.disconnectSub = RNBluetoothClassic.onDeviceDisconnected(
           (event) => {
+            // Disconnect event is rare and useful for tracing — keep it
+            // visible without the debug flag.
             console.log(
               `[obd2 classic] DISCONNECT event: ${JSON.stringify(event)}`,
             );
@@ -742,16 +753,21 @@ class ClassicTransport implements Obd2Transport {
 
         // The MX+ needs a moment after socket open before it'll accept
         // commands — without this delay the first ATZ often times out.
-        console.log(
-          `[obd2 classic] waiting ${CLASSIC_POST_CONNECT_SETTLE_MS}ms for adapter to settle…`,
-        );
+        if (DEBUG_OBD2) {
+          console.log(
+            `[obd2 classic] waiting ${CLASSIC_POST_CONNECT_SETTLE_MS}ms for adapter to settle…`,
+          );
+        }
         await sleep(CLASSIC_POST_CONNECT_SETTLE_MS);
-        console.log(`[obd2 classic] settle complete, ready for handshake`);
+        if (DEBUG_OBD2) {
+          console.log(`[obd2 classic] settle complete, ready for handshake`);
+        }
 
         return { ok: true, message: "Connected" };
       } catch (err) {
         lastErrorMessage = (err as Error).message ?? "Unknown error";
-        console.log(
+        // Failure path is rare and load-bearing for diagnosis — always log.
+        console.warn(
           `[obd2 classic] attempt ${attempt} FAILED: ${lastErrorMessage}`,
         );
 
@@ -765,9 +781,11 @@ class ClassicTransport implements Obd2Transport {
         this.device = null;
 
         if (attempt < CLASSIC_CONNECT_ATTEMPTS) {
-          console.log(
-            `[obd2 classic] sleeping ${CLASSIC_CONNECT_RETRY_MS}ms before retry…`,
-          );
+          if (DEBUG_OBD2) {
+            console.log(
+              `[obd2 classic] sleeping ${CLASSIC_CONNECT_RETRY_MS}ms before retry…`,
+            );
+          }
           await sleep(CLASSIC_CONNECT_RETRY_MS);
         }
       }
@@ -796,23 +814,27 @@ class ClassicTransport implements Obd2Transport {
 
   async sendCommand(cmd: string, timeoutMs: number): Promise<string | null> {
     if (!this.device) return null;
-    console.log(`[obd2 classic] TX: ${JSON.stringify(cmd)} (timeout ${timeoutMs}ms)`);
+    if (DEBUG_OBD2) {
+      console.log(`[obd2 classic] TX: ${JSON.stringify(cmd)} (timeout ${timeoutMs}ms)`);
+    }
     this.log("→", cmd);
     this.cmdBuf.reset();
     const p = this.cmdBuf.awaitResponse(timeoutMs);
     try {
       await this.device.write(cmd + "\r");
     } catch (err) {
-      console.log(
+      console.warn(
         `[obd2 classic] write threw: ${(err as Error).message}`,
       );
       this.cmdBuf.reset();
       return null;
     }
     const response = await p;
-    console.log(
-      `[obd2 classic] response for ${JSON.stringify(cmd)}: ${JSON.stringify(response)}`,
-    );
+    if (DEBUG_OBD2) {
+      console.log(
+        `[obd2 classic] response for ${JSON.stringify(cmd)}: ${JSON.stringify(response)}`,
+      );
+    }
     this.log("←", response ?? "(no response)");
     return response;
   }
@@ -1041,27 +1063,29 @@ class Obd2Manager {
     rssi: number | null;
     serviceUUIDs?: string[] | null;
   }): void {
-    const rawName = device.name;
-    const rawLocal = device.localName;
-    const rawRssi = device.rssi;
-    const rawSvc = device.serviceUUIDs;
-    const prevCount = this.sightings.get(device.id)?.count ?? 0;
-    console.log(
-      `[obd2 scan] RAW id=${device.id} name=${JSON.stringify(rawName)} ` +
-        `localName=${JSON.stringify(rawLocal)} rssi=${rawRssi} ` +
-        `serviceUUIDs=${JSON.stringify(rawSvc)} priorSightings=${prevCount}`,
-    );
+    if (DEBUG_OBD2) {
+      const prevCount = this.sightings.get(device.id)?.count ?? 0;
+      console.log(
+        `[obd2 scan] RAW id=${device.id} name=${JSON.stringify(device.name)} ` +
+          `localName=${JSON.stringify(device.localName)} rssi=${device.rssi} ` +
+          `serviceUUIDs=${JSON.stringify(device.serviceUUIDs)} priorSightings=${prevCount}`,
+      );
+    }
 
     const name = device.name || device.localName;
     if (!name || name.trim().length === 0) {
-      console.log(`[obd2 scan] DROP id=${device.id} reason=no_name`);
+      if (DEBUG_OBD2) {
+        console.log(`[obd2 scan] DROP id=${device.id} reason=no_name`);
+      }
       return;
     }
     if (device.rssi != null && device.rssi < MIN_RSSI) {
-      console.log(
-        `[obd2 scan] DROP id=${device.id} name=${JSON.stringify(name)} ` +
-          `reason=weak_rssi rssi=${device.rssi} threshold=${MIN_RSSI}`,
-      );
+      if (DEBUG_OBD2) {
+        console.log(
+          `[obd2 scan] DROP id=${device.id} name=${JSON.stringify(name)} ` +
+            `reason=weak_rssi rssi=${device.rssi} threshold=${MIN_RSSI}`,
+        );
+      }
       return;
     }
 
@@ -1086,10 +1110,12 @@ class Obd2Manager {
       entry.rssi = prev.device.rssi;
     }
     this.sightings.set(id, { device: entry, count });
-    console.log(
-      `[obd2 scan] ACCEPT id=${id} name=${JSON.stringify(name)} ` +
-        `rssi=${entry.rssi} count=${count} likelyObd=${isObd} transport=ble`,
-    );
+    if (DEBUG_OBD2) {
+      console.log(
+        `[obd2 scan] ACCEPT id=${id} name=${JSON.stringify(name)} ` +
+          `rssi=${entry.rssi} count=${count} likelyObd=${isObd} transport=ble`,
+      );
+    }
     this.recomputeVisible();
   }
 
@@ -1121,7 +1147,9 @@ class Obd2Manager {
       added++;
     }
     if (added > 0) this.recomputeVisible();
-    console.log(`[obd2 scan] Classic bonded: added ${added} likely-OBD devices`);
+    if (DEBUG_OBD2) {
+      console.log(`[obd2 scan] Classic bonded: added ${added} likely-OBD devices`);
+    }
   }
 
   private recomputeVisible(): void {
@@ -1140,22 +1168,24 @@ class Obd2Manager {
       })
       .slice(0, MAX_RESULTS);
 
-    if (droppedBySightings.length > 0) {
+    if (DEBUG_OBD2) {
+      if (droppedBySightings.length > 0) {
+        console.log(
+          `[obd2 scan] DROP-sightings (${droppedBySightings.length}):`,
+          droppedBySightings.map(
+            (s) =>
+              `${JSON.stringify(s.device.name)} (count=${s.count}, threshold=${MIN_SIGHTINGS})`,
+          ),
+        );
+      }
       console.log(
-        `[obd2 scan] DROP-sightings (${droppedBySightings.length}):`,
-        droppedBySightings.map(
-          (s) =>
-            `${JSON.stringify(s.device.name)} (count=${s.count}, threshold=${MIN_SIGHTINGS})`,
+        `[obd2 scan] VISIBLE (${visible.length}/${allSightings.length}):`,
+        visible.map(
+          (d) =>
+            `${JSON.stringify(d.name)} transport=${d.transport} rssi=${d.rssi} obd=${d.likelyObd}`,
         ),
       );
     }
-    console.log(
-      `[obd2 scan] VISIBLE (${visible.length}/${allSightings.length}):`,
-      visible.map(
-        (d) =>
-          `${JSON.stringify(d.name)} transport=${d.transport} rssi=${d.rssi} obd=${d.likelyObd}`,
-      ),
-    );
 
     this.discovered.clear();
     for (const d of visible) this.discovered.set(d.id, d);
@@ -1320,46 +1350,48 @@ class Obd2Manager {
   // diagnose adapter-specific quirks (STN vs ELM banners, unusual prompts,
   // protocol-search behavior).
   private async runHandshake(): Promise<string | null> {
+    // Handshake start/finish always log — connection events are rare and
+    // load-bearing for diagnosis. Per-command request/response chatter is
+    // gated behind DEBUG_OBD2.
     console.log(`[obd2 handshake] === starting ===`);
 
     // ATZ: full adapter reset. The MX+ STN chipset can take ~2-3 s to come
     // back with its boot banner ("STN2120 v5.5.2", "OBDLink MX+…"), so we
-    // give it 5 s. Banner content varies by chip — we DON'T validate its
-    // text; the real gate is the 0100 response below.
-    console.log(`[obd2 handshake] → ATZ (timeout 5000)`);
+    // give it 5 s.
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATZ (timeout 5000)`);
     const reset = await this.sendCommand("ATZ", 5000);
-    console.log(`[obd2 handshake] ATZ response: ${JSON.stringify(reset)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] ATZ response: ${JSON.stringify(reset)}`);
     if (!reset) {
       return "Adapter didn't respond to reset. It may be powered down or another app is holding the connection. Power-cycle the adapter and try again.";
     }
 
     // ATE0 / ATL0 / ATH1 / ATSP0 — straightforward config commands.
-    // 5 s timeout each (was 1.5 s) because the MX+ on a fresh connection
-    // sometimes batches responses.
-    console.log(`[obd2 handshake] → ATE0 (timeout 5000)`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATE0 (timeout 5000)`);
     const ate0 = await this.sendCommand("ATE0", 5000);
-    console.log(`[obd2 handshake] ATE0 response: ${JSON.stringify(ate0)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] ATE0 response: ${JSON.stringify(ate0)}`);
 
-    console.log(`[obd2 handshake] → ATL0 (timeout 5000)`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATL0 (timeout 5000)`);
     const atl0 = await this.sendCommand("ATL0", 5000);
-    console.log(`[obd2 handshake] ATL0 response: ${JSON.stringify(atl0)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] ATL0 response: ${JSON.stringify(atl0)}`);
 
-    console.log(`[obd2 handshake] → ATH1 (timeout 5000)`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATH1 (timeout 5000)`);
     const ath1 = await this.sendCommand("ATH1", 5000);
-    console.log(`[obd2 handshake] ATH1 response: ${JSON.stringify(ath1)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] ATH1 response: ${JSON.stringify(ath1)}`);
 
-    console.log(`[obd2 handshake] → ATSP0 (timeout 5000)`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATSP0 (timeout 5000)`);
     const atsp0 = await this.sendCommand("ATSP0", 5000);
-    console.log(`[obd2 handshake] ATSP0 response: ${JSON.stringify(atsp0)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] ATSP0 response: ${JSON.stringify(atsp0)}`);
 
     // 0100 is the real sanity check — supported PIDs in mode 01. The first
     // 0100 after ATSP0 triggers protocol auto-detection ("SEARCHING…"),
     // which can take up to 8-10 s on some vehicles, so give it 10 s.
-    console.log(
-      `[obd2 handshake] → 0100 (timeout 10000, may trigger protocol search)`,
-    );
+    if (DEBUG_OBD2) {
+      console.log(
+        `[obd2 handshake] → 0100 (timeout 10000, may trigger protocol search)`,
+      );
+    }
     const pids = await this.sendCommand("0100", 10000);
-    console.log(`[obd2 handshake] 0100 response: ${JSON.stringify(pids)}`);
+    if (DEBUG_OBD2) console.log(`[obd2 handshake] 0100 response: ${JSON.stringify(pids)}`);
 
     if (!pids) {
       return "Adapter connected but didn't respond to OBD2 query. Check that the key is in Run (not just Accessory).";
@@ -1545,13 +1577,19 @@ class Obd2Manager {
       const nextGroupSupported = (data[3] & 0x01) === 1;
       if (!nextGroupSupported) break;
     }
-    console.log(
-      `[obd2] bitmask query → ${supported.size} mode-01 PIDs supported: ` +
-        Array.from(supported)
-          .sort((a, b) => a - b)
-          .map((n) => n.toString(16).padStart(2, "0").toUpperCase())
-          .join(","),
-    );
+    // Short summary always (fires once per session). Full PID list only
+    // when DEBUG_OBD2 — useful when the support set looks wrong.
+    if (DEBUG_OBD2) {
+      console.log(
+        `[obd2] bitmask query → ${supported.size} mode-01 PIDs supported: ` +
+          Array.from(supported)
+            .sort((a, b) => a - b)
+            .map((n) => n.toString(16).padStart(2, "0").toUpperCase())
+            .join(","),
+      );
+    } else {
+      console.log(`[obd2] bitmask query → ${supported.size} mode-01 PIDs supported`);
+    }
     return supported;
   }
 
@@ -1594,14 +1632,17 @@ class Obd2Manager {
 
     const tick = async () => {
       if (!this.isConnected()) {
+        // Disconnect during polling is rare and worth logging once.
         console.log("[obd2 poll] tick: disconnected, stopping");
         this.stopPolling();
         return;
       }
       if (!this.pollPaused) {
-        console.log(
-          `[obd2 poll] tick #${this.tickIndex} — selectedPids=${this.selectedPids.length}`,
-        );
+        if (DEBUG_OBD2) {
+          console.log(
+            `[obd2 poll] tick #${this.tickIndex} — selectedPids=${this.selectedPids.length}`,
+          );
+        }
         await this.pollSelectedOnce();
         this.tickIndex++;
       }
@@ -1734,17 +1775,19 @@ class Obd2Manager {
         },
       };
     }
-    console.log(
-      `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${signals.length} hits: ` +
-        signals
-          .slice(0, 8)
-          .map((s) => {
-            const k = signalKeyOf(s);
-            return `${k}=${parsed.get(k) ?? "—"}`;
-          })
-          .join(", ") +
-        (signals.length > 8 ? `, +${signals.length - 8} more` : ""),
-    );
+    if (DEBUG_OBD2) {
+      console.log(
+        `[obd2 poll] multi cmd=${cmd} → ${multiHits}/${signals.length} hits: ` +
+          signals
+            .slice(0, 8)
+            .map((s) => {
+              const k = signalKeyOf(s);
+              return `${k}=${parsed.get(k) ?? "—"}`;
+            })
+            .join(", ") +
+          (signals.length > 8 ? `, +${signals.length - 8} more` : ""),
+      );
+    }
     // Commit the multi-PID hits before any single-PID fallbacks run so
     // listeners see the partial result immediately.
     if (next !== this.liveData) {
@@ -1828,7 +1871,9 @@ class Obd2Manager {
         },
       };
     }
-    console.log(`[obd2 poll] single cmd=${cmd} → ${logBits.join(", ")}`);
+    if (DEBUG_OBD2) {
+      console.log(`[obd2 poll] single cmd=${cmd} → ${logBits.join(", ")}`);
+    }
     if (next !== this.liveData) {
       this.liveData = next;
       this.liveListeners.forEach((cb) => cb(this.liveData));
