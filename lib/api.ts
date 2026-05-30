@@ -52,7 +52,25 @@ function titleCase(s: string): string {
     .trim();
 }
 
-function buildEngineType(displacementL: string, cyl: string): string {
+// NHTSA's value for the Turbo / Other fields can be "Yes" / "No" / null /
+// rarely a model name. Treat anything that doesn't look like a clear "no"
+// or empty as a positive signal.
+function nhtsaIsYes(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  if (v === "" || v === "no" || v === "false" || v === "0" || v === "not applicable") {
+    return false;
+  }
+  return true;
+}
+
+function buildEngineType(
+  displacementL: string,
+  cyl: string,
+  turbo: string | undefined,
+  fuelType: string | undefined,
+  otherEngineInfo: string | undefined,
+): string {
   const parts: string[] = [];
   if (displacementL) {
     const n = Number(displacementL);
@@ -61,6 +79,19 @@ function buildEngineType(displacementL: string, cyl: string): string {
   if (cyl) {
     const n = Number(cyl);
     if (Number.isFinite(n) && n > 0) parts.push(`${n}-cyl`);
+  }
+  // Surface forced-induction explicitly so the server-side config-mismatch
+  // detector can do keyword matching on engineType (it's how we catch e.g.
+  // turbo DTCs reported on a naturally-aspirated engine). NHTSA exposes a
+  // Turbo field directly; if it's a "yes" we tag the string. Diesel comes
+  // from FuelTypePrimary so the diesel-on-gas mismatch rule works the same
+  // way without extra plumbing.
+  if (nhtsaIsYes(turbo)) parts.push("Turbocharged");
+  if (fuelType && /diesel/i.test(fuelType)) parts.push("Diesel");
+  // OtherEngineInfo sometimes carries free-text qualifiers like "EcoBoost"
+  // or "Supercharged" that aren't surfaced through the dedicated fields.
+  if (otherEngineInfo && /ecoboost|supercharg|biturbo|twinturbo/i.test(otherEngineInfo)) {
+    parts.push(otherEngineInfo.trim());
   }
   return parts.join(" ");
 }
@@ -95,6 +126,9 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
     Trim2?: string;
     EngineCylinders?: string;
     DisplacementL?: string;
+    Turbo?: string;
+    FuelTypePrimary?: string;
+    OtherEngineInfo?: string;
     ErrorCode?: string;
     ErrorText?: string;
   };
@@ -124,6 +158,9 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
     engineType: buildEngineType(
       row.DisplacementL ?? "",
       row.EngineCylinders ?? "",
+      row.Turbo,
+      row.FuelTypePrimary,
+      row.OtherEngineInfo,
     ),
   };
 }
@@ -258,6 +295,7 @@ export async function ask(
 export async function fetchDtcDefinition(
   code: string,
   make?: string | null,
+  engineType?: string | null,
 ): Promise<DtcDefinition | null> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
@@ -265,9 +303,14 @@ export async function fetchDtcDefinition(
     );
   }
   const clean = code.trim().toUpperCase();
-  const query = make && make.trim().length > 0
-    ? `?make=${encodeURIComponent(make.trim())}`
-    : "";
+  const params: string[] = [];
+  if (make && make.trim().length > 0) {
+    params.push(`make=${encodeURIComponent(make.trim())}`);
+  }
+  if (engineType && engineType.trim().length > 0) {
+    params.push(`engineType=${encodeURIComponent(engineType.trim())}`);
+  }
+  const query = params.length > 0 ? `?${params.join("&")}` : "";
   const url = `${BASE_URL}/api/dtc/${encodeURIComponent(clean)}${query}`;
   const headers: Record<string, string> = {
     "ngrok-skip-browser-warning": "true",

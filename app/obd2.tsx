@@ -74,6 +74,17 @@ export default function Obd2Screen() {
   // against the backend's curated database. Codes not in the DB (404) are
   // marked "unknown" — the UI shows a fallback line for those rather than
   // hiding them.
+  // Race-condition handling: if the tech scans codes before the auto-VIN
+  // populates the vehicle, the first batch of definitions will fetch with
+  // empty make/engineType. When vehicle.make or vehicle.engineType later
+  // changes, clear the definitions cache so the codes re-fetch with the
+  // full vehicle context (manufacturer-specific lookup + config-mismatch
+  // detection).
+  useEffect(() => {
+    setDefinitions({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicle.make, vehicle.engineType]);
+
   useEffect(() => {
     const all = [...dtcs, ...pendingDtcs];
     const toFetch = all.filter((code) => !definitions[code]);
@@ -89,7 +100,7 @@ export default function Obd2Screen() {
 
     let cancelled = false;
     for (const code of toFetch) {
-      fetchDtcDefinition(code)
+      fetchDtcDefinition(code, vehicle.make, vehicle.engineType)
         .then((entry) => {
           if (cancelled) return;
           setDefinitions((prev) => ({
@@ -113,7 +124,9 @@ export default function Obd2Screen() {
     };
     // We intentionally depend on the array contents via length+join to avoid
     // re-fetching every render. The `definitions` cache is keyed by code so
-    // already-fetched codes are no-ops.
+    // already-fetched codes are no-ops. Vehicle make / engineType changes
+    // are handled separately by the cache-clearing effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dtcs.join(","), pendingDtcs.join(",")]);
 
   // Auto-start live data polling when the connection comes up.
@@ -841,6 +854,18 @@ function DtcCard({
 
       {definition?.state === "found" ? (
         <>
+          {definition.entry.configMismatch ? (
+            <View style={styles.mismatchBanner}>
+              <Ionicons
+                name="warning-outline"
+                size={14}
+                color={colors.warnText}
+              />
+              <Text style={styles.mismatchText}>
+                {definition.entry.configMismatch.message}
+              </Text>
+            </View>
+          ) : null}
           <Text style={[styles.dtcShort, { color: colors.heading }]}>
             {definition.entry.shortDescription}
           </Text>
@@ -1370,6 +1395,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
+  },
+  mismatchBanner: {
+    flexDirection: "row",
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    backgroundColor: colors.warnBg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.warnBorder,
+    borderRadius: 6,
+    marginTop: 2,
+  },
+  mismatchText: {
+    flex: 1,
+    color: colors.warnText,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "500",
   },
   urgencyChipText: {
     fontSize: 9,

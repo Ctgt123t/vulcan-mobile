@@ -41,6 +41,12 @@ export interface Tsb {
   date?: string;
 }
 
+export interface DtcConfigMismatch {
+  id: string;
+  message: string;
+  severity?: "low" | "medium" | "high" | null;
+}
+
 export interface DtcDefinition {
   code: string;
   shortDescription: string;
@@ -48,6 +54,9 @@ export interface DtcDefinition {
   system: string;
   commonCauses: string[];
   urgency: "low" | "medium" | "high";
+  // Present when the server detected a mismatch between this code's system
+  // (e.g. forced induction) and the vehicle's decoded configuration.
+  configMismatch?: DtcConfigMismatch;
 }
 
 export interface DiagnoseRequest {

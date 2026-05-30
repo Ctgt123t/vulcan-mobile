@@ -14,6 +14,7 @@ import {
   dtcFallbackStats,
   fetchDtcFallback,
 } from "./dtcFallback.js";
+import { detectConfigMismatch } from "./dtcMismatch.js";
 import {
   buildCacheKey,
   cacheStats,
@@ -328,16 +329,26 @@ app.get("/api/dtc/:code", async (req, res) => {
     return res.status(400).json({ error: "Invalid DTC format." });
   }
   const make = typeof req.query.make === "string" ? req.query.make : null;
+  const engineType =
+    typeof req.query.engineType === "string" ? req.query.engineType : null;
+  // Vehicle context used only for the mismatch detector — no caching by this.
+  const vehicleForMismatch = make || engineType ? { make, engineType } : null;
 
-  const entry = lookupDtc(raw, make);
-  if (entry) return res.json(entry);
+  const dbEntry = lookupDtc(raw, make);
+  if (dbEntry) {
+    const mismatch = detectConfigMismatch(dbEntry, vehicleForMismatch);
+    return res.json(mismatch ? { ...dbEntry, configMismatch: mismatch } : dbEntry);
+  }
 
   // Fallback: ask Claude, cache, return.
   try {
     const fallbackEntry = await fetchDtcFallback(raw, make, (params) =>
       callAnthropicWithRetry(() => client.messages.create(params)),
     );
-    return res.json(fallbackEntry);
+    const mismatch = detectConfigMismatch(fallbackEntry, vehicleForMismatch);
+    return res.json(
+      mismatch ? { ...fallbackEntry, configMismatch: mismatch } : fallbackEntry,
+    );
   } catch (err) {
     return respondWithError(res, err, "dtc-fallback");
   }
@@ -416,12 +427,35 @@ app.post("/api/diagnose", async (req, res) => {
     });
   }
 
+  const presentingComplaint = String(messages[0]?.content ?? "");
+
+  // DTC enrichment: any DTC codes appearing in the presenting complaint
+  // (typically dropped in by the OBD2 → Diagnose handoff) get a server-
+  // side lookup against the verified database — manufacturer-aware when
+  // we have vehicle.make — plus config-mismatch detection. The structured
+  // definitions are injected into Claude's context so reasoning anchors
+  // on the verified description, not on training-data recall, and any
+  // mismatch flag (e.g. turbo code on NA engine) is surfaced explicitly.
+  const dtcCodes = extractDtcCodes(presentingComplaint);
+  const enrichedDtcEntries = [];
+  for (const code of dtcCodes) {
+    const entry = lookupDtc(code, vehicle?.make);
+    if (!entry) continue;
+    const mismatch = detectConfigMismatch(entry, vehicle);
+    enrichedDtcEntries.push(mismatch ? { ...entry, configMismatch: mismatch } : entry);
+  }
+  if (enrichedDtcEntries.length > 0) {
+    systemBlocks.push({
+      type: "text",
+      text: formatDtcContextBlock(enrichedDtcEntries),
+    });
+  }
+
   // Proactive spec injection: scan the presenting complaint (first user
   // message) for spec-relevant categories (oil, brake fluid, torque, etc.).
   // Query the provider chain for each hit and inject the verified values
   // into Claude's context so reasoning that touches those specs is anchored
   // to real data instead of model recollection.
-  const presentingComplaint = String(messages[0]?.content ?? "");
   const specsToFetch = detectAllSpecIntents(presentingComplaint);
   const verifiedSpecs = [];
   if (specsToFetch.length > 0) {
@@ -440,9 +474,11 @@ app.post("/api/diagnose", async (req, res) => {
     }
   }
 
+  const mismatchCount = enrichedDtcEntries.filter((e) => e.configMismatch).length;
   console.log(
     `[diagnose] model=${DIAGNOSE_MODEL} messages=${messages.length} ` +
       `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
+      `dtcsInjected=${enrichedDtcEntries.length} mismatches=${mismatchCount} ` +
       `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length}`,
   );
 

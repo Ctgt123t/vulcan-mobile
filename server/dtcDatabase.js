@@ -251,6 +251,9 @@ export function formatDtcContextBlock(entries) {
     if (e.commonCauses && e.commonCauses.length > 0) {
       lines.push(`  Common causes: ${e.commonCauses.join("; ")}`);
     }
+    if (e.configMismatch && e.configMismatch.message) {
+      lines.push(`  ⚠ Configuration mismatch: ${e.configMismatch.message}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
