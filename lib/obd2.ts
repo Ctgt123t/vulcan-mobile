@@ -167,6 +167,14 @@ export type LiveValues = Record<string, LiveValue>;
 // inner shape is now the keyed map.
 export type LiveData = LiveValues;
 
+// One entry in the rolling ring buffer — a full LiveValues snapshot stamped
+// at the moment the poll tick completed. Used by captureSnapshot() to produce
+// a 5-second averaged window for the diagnostic assessment.
+export interface RingBufferEntry {
+  timestamp: number;
+  values: LiveValues;
+}
+
 const EMPTY_LIVE: LiveValues = {};
 
 export interface LogLine {
@@ -917,6 +925,12 @@ class Obd2Manager {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private pollPaused = false;
   private liveData: LiveData = { ...EMPTY_LIVE };
+
+  // Rolling ring buffer of full LiveValues snapshots, one entry per poll tick.
+  // Maintained for RING_BUFFER_DURATION_MS (10s). captureSnapshot() slices the
+  // last N ms out of it to produce an averaged snapshot for the diagnostic engine.
+  private ringBuffer: RingBufferEntry[] = [];
+  private static readonly RING_BUFFER_DURATION_MS = 10_000;
 
   // Subscribers
   private statusListeners = new Set<
@@ -1682,6 +1696,13 @@ class Obd2Manager {
           );
         }
         await this.pollSelectedOnce();
+        // Maintain the rolling ring buffer for the diagnostic snapshot engine.
+        const nowMs = Date.now();
+        this.ringBuffer.push({ timestamp: nowMs, values: this.liveData });
+        const cutoff = nowMs - Obd2Manager.RING_BUFFER_DURATION_MS;
+        while (this.ringBuffer.length > 0 && this.ringBuffer[0].timestamp < cutoff) {
+          this.ringBuffer.shift();
+        }
         this.tickIndex++;
       }
       this.pollTimer = setTimeout(tick, this.pollIntervalMs);
@@ -1918,6 +1939,23 @@ class Obd2Manager {
     }
   }
 
+  // Returns ring buffer entries from the last `durationMs` milliseconds.
+  // Used by the diagnostic snapshot builder to compute averaged signal values.
+  // Returns whatever is available — callers should check getRingBufferAge()
+  // first if they need a minimum data window.
+  captureSnapshot(durationMs: number = 5000): RingBufferEntry[] {
+    const cutoff = Date.now() - durationMs;
+    return this.ringBuffer.filter((e) => e.timestamp >= cutoff);
+  }
+
+  // Returns the age (ms) of the oldest entry in the ring buffer, or 0 if empty.
+  // Use this to check whether enough data has accumulated before triggering
+  // an assessment (e.g. guard: getRingBufferAge() >= 3000 before proceeding).
+  getRingBufferAge(): number {
+    if (this.ringBuffer.length === 0) return 0;
+    return Date.now() - this.ringBuffer[0].timestamp;
+  }
+
   stopPolling(): void {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -1976,6 +2014,7 @@ class Obd2Manager {
       this.transport = null;
     }
     this.liveData = { ...EMPTY_LIVE };
+    this.ringBuffer = [];
     this.liveListeners.forEach((cb) => cb(this.liveData));
     this.setStatus("idle", "");
   }

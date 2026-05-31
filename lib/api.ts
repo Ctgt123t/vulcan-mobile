@@ -7,6 +7,7 @@ import type {
   Tsb,
   VehicleInfo,
 } from "./types";
+import type { DiagnosticAssessment, DiagnosticSnapshot } from "./assessmentTypes";
 
 const BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(
   /\/+$/,
@@ -283,6 +284,75 @@ export async function ask(
   }
 
   return (json as { text: string }).text ?? "";
+}
+
+export class AssessError extends Error {}
+
+export async function assess(
+  vehicle: VehicleInfo,
+  vin: string | null,
+  mileage: string,
+  complaint: string,
+  snapshot: DiagnosticSnapshot,
+  recalls: Recall[] = [],
+  tsbs: Tsb[] = [],
+): Promise<DiagnosticAssessment> {
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new AssessError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+
+  const url = `${BASE_URL}/api/assess`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "ngrok-skip-browser-warning": "true",
+  };
+  const bodyStr = JSON.stringify({
+    vehicle,
+    vin,
+    mileage,
+    complaint,
+    snapshot,
+    recalls,
+    tsbs,
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: bodyStr });
+  } catch {
+    throw new AssessError(
+      "Network error. Check your connection and try again.",
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch {
+    throw new AssessError(`Couldn't read server response (${res.status}).`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new AssessError(
+      `Server returned an unexpected response (${res.status}).`,
+    );
+  }
+
+  if (!res.ok) {
+    const msg =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : `Request failed (${res.status}).`;
+    throw new AssessError(msg);
+  }
+
+  const result = json as { assessment: DiagnosticAssessment };
+  return result.assessment;
 }
 
 // Looks up a DTC against the backend's SAE + manufacturer-specific database

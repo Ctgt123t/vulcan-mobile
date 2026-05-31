@@ -21,6 +21,7 @@ import { useObd2 } from "../contexts/Obd2Context";
 import { useVehicle } from "../contexts/VehicleContext";
 import { fetchDtcDefinition } from "../lib/api";
 import { setHandoff } from "../lib/handoff";
+import { setSmartDiagnoseHandoff } from "./smart-diagnose";
 import {
   type DiscoveredDevice,
   type FreezeFrame,
@@ -461,6 +462,16 @@ export default function Obd2Screen() {
     router.replace("/diagnose");
   }
 
+  function onSmartDiagnose() {
+    setSmartDiagnoseHandoff({
+      selectedDescriptors,
+      dtcs,
+      pendingDtcs,
+      freezeFrame,
+    });
+    router.push("/smart-diagnose");
+  }
+
   const visibleObd = devices.filter((d) => d.likelyObd);
   const visibleOther = devices.filter((d) => !d.likelyObd);
 
@@ -812,7 +823,29 @@ export default function Obd2Screen() {
                   })}
                 </View>
               ) : null}
+
+              {/* Smart Diagnose — structured AI assessment using live data + DTCs */}
+              <TouchableOpacity
+                style={styles.smartDiagnoseBtn}
+                onPress={onSmartDiagnose}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="analytics" size={18} color="#FFFFFF" />
+                <Text style={styles.smartDiagnoseBtnText}>Smart Diagnose</Text>
+              </TouchableOpacity>
             </>
+          )}
+
+          {/* Smart Diagnose when connected but no PIDs selected yet */}
+          {isConnected && selectedDescriptors.length === 0 && (
+            <TouchableOpacity
+              style={[styles.smartDiagnoseBtn, { marginTop: 4 }]}
+              onPress={onSmartDiagnose}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="analytics" size={18} color="#FFFFFF" />
+              <Text style={styles.smartDiagnoseBtnText}>Smart Diagnose</Text>
+            </TouchableOpacity>
           )}
         </Section>
       </ScrollView>
@@ -1727,6 +1760,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   diagnoseBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 15,
+    letterSpacing: 0.3,
+  },
+  // Smart Diagnose button — structured AI assessment from live OBD2 data
+  smartDiagnoseBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    minHeight: HIT_TARGET,
+    backgroundColor: "#1A3A5C",
+    borderRadius: 10,
+    paddingHorizontal: 16,
+  },
+  smartDiagnoseBtnText: {
     color: "#FFFFFF",
     fontWeight: "700",
     fontSize: 15,

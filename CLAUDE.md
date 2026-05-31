@@ -21,15 +21,17 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - OBDb PID database, persistent Railway Volume storage (confirmed surviving redeploys)
 - iOS startup crash resolved (reanimated v4 / worklets misconfig)
 - Debug logging gated behind `EXPO_PUBLIC_DEBUG_OBD2`
+- **Diagnostic engine Stage 1 (single-shot assessment):** OBD2 screen → Smart Diagnose → structured differential with stance, hypotheses + evidence, single next step. New route `/smart-diagnose`, new endpoint `/api/assess`, ring buffer in `Obd2Manager`. See architecture section below.
 
 **Open action items (near-term):**
 
 - **iOS native cleanup:** exclude `react-native-bluetooth-classic` pod from iOS build via Expo config plugin (latent crash risk; requires full iOS rebuild; do before TestFlight)
 - **Offline resilience:** graceful handling when connectivity drops during connect/VIN-decode (currently fails silently into a degraded PID list); plus offline data buffering for road tests
+- **Diagnostic engine Stage 2:** iterative evidence loop — Claude requests specific data under specific conditions, phone captures automatically via monitoring loop, sends back for an evidence-update call
 
 **Next major feature:**
 
-- **Claude-directed live monitoring** (the "autopilot" diagnostic vision) — Claude specifies which PIDs/thresholds to watch, phone monitors locally for free, Claude is only called when a condition triggers. Cost safeguards: sustained-condition requirement, per-PID cooldowns, per-session monitoring budget cap, auto-pause on inactivity. Folds in the deferred Claude-auto-applies-PIDs capability (`PidDescriptor.aiSelected` path already wired).
+- **Diagnostic engine Stage 2 / Claude-directed live monitoring** — Claude's DATA_CAPTURE next-step already includes `requested_data` in the Stage 1 schema. Stage 2 auto-executes those requests: phone waits for the condition, captures the window, sends one Claude call with the captured evidence for an evidence-update. Cost safeguards: sustained-condition requirement, per-PID cooldowns, per-session monitoring budget cap, auto-pause on inactivity. Folds in `PidDescriptor.aiSelected` (already wired).
 
 **Pre-launch work not yet started:**
 
@@ -44,7 +46,9 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 |---|---|
 | 1. Get off Expo Go | COMPLETE |
 | 2. OBD2 Foundation | COMPLETE |
-| 3. OBD2 Advanced (live monitoring, intelligent PID selection) | IN PROGRESS / NEXT |
+| 3a. Diagnostic engine — Stage 1 (single-shot assessment) | COMPLETE |
+| 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | NEXT |
+| 3c. Diagnostic engine — Stage 3 (adaptive stance UI, guided checklists) | NOT STARTED |
 | 4. Pre-launch infrastructure | NOT STARTED |
 | 5. Testing & launch | NOT STARTED |
 
@@ -182,6 +186,63 @@ Cost-aware deep OBD2 integration that folds in the deferred "Claude auto-applies
 - **Auto-pause on inactivity** — if no PID values change meaningfully for X minutes (vehicle off, adapter idle), polling pauses and the monitoring session is paused. Resumes on activity.
 
 **Scaling implication:** the LOCAL polling + trigger logic is per-device with zero backend load. The Claude calls when triggers fire ARE backend load but bounded by the safeguards above to dozens of calls per session at most.
+
+## Diagnostic Engine Architecture
+
+The diagnostic engine is a local-state + LLM-reasoning hybrid. Core principles (all settled and implemented):
+
+- **Never stream raw sensor data to Claude.** The phone summarizes live data into objective facts; Claude reasons on the summary. This is the central cost-control decision.
+- **Phone produces facts, Claude produces judgment.** The snapshot builder (`lib/diagnosticSnapshot.ts`) outputs averaged values and ranges — it never infers "lean condition" or "misfiring." That's Claude's job.
+- **Structured output via tool use.** The `/api/assess` endpoint forces Claude to call `emit_diagnostic_assessment` with a strict schema. No prompt-and-pray JSON.
+- **Verified data injected before Claude.** Same pipeline as `/api/diagnose`: DTC enrichment, config-mismatch detection, spec injection, recall/TSB blocks — all server-side before the Claude call.
+- **Confidence ladder without CONFIRMED.** Stage 1 schema allows POSSIBLE / LIKELY / STRONGLY_SUPPORTED only. CONFIRMED re-added in Stage 3 when a real confirmation gate exists.
+
+### Key files
+
+| File | Role |
+|---|---|
+| `lib/assessmentTypes.ts` | All types: `OperatingCondition`, `DiagnosticSnapshot`, `DiagnosticAssessment`, `Hypothesis`, `NextStep`, etc. |
+| `lib/diagnosticSnapshot.ts` | Snapshot builder — averages ring buffer entries per signal, records absent signals, packages freeze frame. Objective facts only. |
+| `lib/obd2.ts` (Obd2Manager) | Rolling 10-second ring buffer maintained after each poll tick. `captureSnapshot(durationMs)` and `getRingBufferAge()` for assessment. Cleared on disconnect. |
+| `server/index.js` `/api/assess` | Assessment endpoint: enriches DTCs from snapshot.dtcs, injects specs from complaint, formats snapshot block, calls Opus with `emit_diagnostic_assessment` tool. |
+| `app/smart-diagnose.tsx` | Route `/smart-diagnose`. Intake (complaint + condition selector + mileage) → assessing → structured result display. Exports `setSmartDiagnoseHandoff()`. |
+| `app/obd2.tsx` | "Smart Diagnose" button in LIVE DATA section. Calls `setSmartDiagnoseHandoff()` then navigates. |
+
+### Data flow (Stage 1)
+
+```
+Tech taps "Smart Diagnose" on OBD2 screen
+  ↓
+obd2.tsx calls setSmartDiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, freezeFrame})
+  ↓
+Navigate to /smart-diagnose
+  ↓
+Tech selects operating condition, optionally adds complaint
+  ↓
+Tech taps "Run Assessment"
+  ↓
+obd2.captureSnapshot(5000) → last 5s of ring buffer entries
+  ↓
+buildDiagnosticSnapshot(ringBuffer, descriptors, condition, dtcs, ...) → DiagnosticSnapshot
+  ↓
+POST /api/assess {vehicle, vin, mileage, complaint, snapshot, recalls, tsbs}
+  ↓
+Server: enrich DTCs, inject specs, format snapshot block, build system context
+  ↓
+Claude Opus: emit_diagnostic_assessment tool call
+  ↓
+Return { assessment: DiagnosticAssessment }
+  ↓
+UI: stance banner → leading hypothesis → next step → full differential → ceiling note → unverified specs
+```
+
+### Stage 2 hook
+
+The `NextStep` type includes `requested_data?: RequestedDataItem[]` (present when `type === "DATA_CAPTURE"`). Stage 1 surfaces this to the tech as text. Stage 2 will auto-execute it: phone detects the operating condition, captures the window, sends an evidence-update call. The data model is ready; the execution loop is not yet built.
+
+### Safety discipline (non-negotiable)
+
+Claude may apply diagnostic logic freely from its training. It may NOT state specific numeric factory specifications (torque, pressures, capacities, expected sensor ranges) unless that value was injected in the verified data blocks. Any needed but unavailable spec must be listed in `unverified_specs_needed` with parameter name and purpose. This rule is in the system prompt and enforced by making `unverified_specs_needed` a required schema field.
 
 ## Current Development Priorities
 

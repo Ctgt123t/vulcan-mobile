@@ -726,6 +726,446 @@ app.post("/api/ask", async (req, res) => {
   }
 });
 
+// ============================================================================
+// /api/assess — Single-shot structured diagnostic assessment (Stage 1)
+//
+// Takes a factual OBD2 data snapshot + vehicle context and returns a
+// structured differential diagnosis via the emit_diagnostic_assessment tool.
+// Reuses the same DTC enrichment, spec injection, and recall/TSB pipelines
+// as /api/diagnose. Separate endpoint because the call is single-shot
+// (no conversation history), uses a different tool, and different prompt.
+//
+// Stage 2 will extend this endpoint with iterative evidence-update calls.
+// ============================================================================
+
+const OPERATING_CONDITION_LABELS = {
+  COLD_START: "Cold Start (engine recently started, not yet at operating temp)",
+  WARM_IDLE: "Warm Idle (engine fully warm, idling in park/neutral)",
+  LIGHT_LOAD: "Light Load (light throttle, normal cruise)",
+  HEAVY_LOAD: "Heavy Load (hard acceleration, towing, high throttle demand)",
+  UNDER_SYMPTOM_CONDITION: "Under Symptom Condition (actively reproducing the fault)",
+  OTHER: "Other / Not Sure",
+};
+
+function formatOperatingCondition(cond) {
+  return OPERATING_CONDITION_LABELS[cond] ?? cond ?? "Not specified";
+}
+
+function formatSnapshotBlock(snapshot) {
+  const lines = [
+    "=== LIVE DATA SNAPSHOT ===",
+    `Operating condition (declared by technician): ${formatOperatingCondition(snapshot.operatingCondition)}`,
+    `Capture window: ${((snapshot.durationMs ?? 0) / 1000).toFixed(1)} seconds`,
+    "",
+  ];
+
+  if (snapshot.signals && snapshot.signals.length > 0) {
+    lines.push("CURRENT LIVE READINGS (averaged over capture window):");
+    for (const s of snapshot.signals) {
+      const avg = `${s.averageValue} ${s.unit ?? ""}`.trim();
+      const range =
+        s.minSample !== s.maxSample
+          ? ` | range across window: ${s.minSample}–${s.maxSample} ${s.unit ?? ""}`.trim()
+          : " | stable";
+      const encMax =
+        s.encodingMax != null
+          ? ` [encoding range: ${s.encodingMin}–${s.encodingMax} ${s.unit ?? ""}]`.trim()
+          : "";
+      lines.push(`  ${s.name} (${s.category}): ${avg}${range}${encMax} — ${s.sampleCount} samples`);
+    }
+  } else {
+    lines.push("No live signal data was captured (no PIDs were selected or none responded).");
+  }
+
+  if (snapshot.absentSignalNames && snapshot.absentSignalNames.length > 0) {
+    lines.push("");
+    lines.push("SIGNALS SELECTED BUT NOT AVAILABLE IN THIS SESSION:");
+    for (const name of snapshot.absentSignalNames) {
+      lines.push(`  - ${name}`);
+    }
+  }
+
+  const allDtcs = [
+    ...(snapshot.dtcs ?? []).map((c) => `${c} (stored)`),
+    ...(snapshot.pendingDtcs ?? []).map((c) => `${c} (pending)`),
+  ];
+  if (allDtcs.length > 0) {
+    lines.push("");
+    lines.push("PRESENT DTCs (verified definitions injected separately above):");
+    lines.push("  " + allDtcs.join(", "));
+  } else {
+    lines.push("");
+    lines.push("PRESENT DTCs: None stored or pending.");
+  }
+
+  if (snapshot.freezeFrame) {
+    const ff = snapshot.freezeFrame;
+    const hasData =
+      ff.dtc || ff.rpm != null || ff.speedKph != null || ff.coolantC != null || ff.fuelPressure != null;
+    if (hasData) {
+      lines.push("");
+      lines.push(
+        "FREEZE FRAME DATA (HISTORICAL — the operating condition when the DTC stored, NOT the current state):",
+      );
+      lines.push(
+        "  IMPORTANT: This is from a past moment (possibly days or weeks ago). Reason about how it compares to the current live readings above.",
+      );
+      if (ff.dtc) lines.push(`  Associated DTC: ${ff.dtc}`);
+      if (ff.rpm != null) lines.push(`  RPM: ${Math.round(ff.rpm)} rpm`);
+      if (ff.speedKph != null) lines.push(`  Speed: ${ff.speedKph} km/h`);
+      if (ff.coolantC != null) lines.push(`  Coolant temp: ${ff.coolantC} °C`);
+      if (ff.fuelPressure != null) lines.push(`  Fuel pressure: ${ff.fuelPressure} kPa`);
+    } else {
+      lines.push("");
+      lines.push("FREEZE FRAME DATA: Not available for stored DTCs.");
+    }
+  } else if ((snapshot.dtcs ?? []).length > 0) {
+    lines.push("");
+    lines.push("FREEZE FRAME DATA: Not available.");
+  }
+
+  return lines.join("\n");
+}
+
+const ASSESS_TOOL = {
+  name: "emit_diagnostic_assessment",
+  description:
+    "Output a structured diagnostic assessment based on the provided vehicle data, DTCs, and live OBD2 snapshot. Call this exactly once.",
+  input_schema: {
+    type: "object",
+    properties: {
+      presenting_complaint: {
+        type: "string",
+        description:
+          "The technician's presenting complaint. If none was provided, characterize the fault picture from the DTCs and data in one concise sentence.",
+      },
+      stance: {
+        type: "string",
+        enum: ["AUTOPILOT", "GUIDED"],
+        description:
+          "AUTOPILOT: fault likely lives in the data — sensor rationality, fuel trims, misfires, electrical. Data-directed investigation. GUIDED: fault likely requires the technician's physical senses — mechanical noise, wear, visual damage, leaks. Technician-directed inspection.",
+      },
+      stance_reason: {
+        type: "string",
+        description: "One sentence explaining why this stance was chosen for this specific case.",
+      },
+      hypotheses: {
+        type: "array",
+        description:
+          "Ranked list of diagnostic hypotheses, most likely first. Maximum 5. Cut any hypothesis that lacks specific citable support from the provided data.",
+        maxItems: 5,
+        items: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Concise hypothesis name (e.g., 'Vacuum leak — intake manifold area').",
+            },
+            confidence: {
+              type: "string",
+              enum: ["POSSIBLE", "LIKELY", "STRONGLY_SUPPORTED"],
+            },
+            supporting_evidence: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Specific observations from the provided data that support this hypothesis. Each item must reference actual data values — not generic code definitions.",
+            },
+            contradicting_evidence: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Specific observations from the provided data that weaken or argue against this hypothesis.",
+            },
+          },
+          required: ["name", "confidence", "supporting_evidence", "contradicting_evidence"],
+        },
+      },
+      next_step: {
+        type: "object",
+        description: "The single highest-value next action — exactly one, not a checklist.",
+        properties: {
+          action: {
+            type: "string",
+            description: "What to do — specific and actionable.",
+          },
+          rationale: {
+            type: "string",
+            description:
+              "Why this step — which hypothesis it confirms or eliminates, and why it is the cheapest action that most changes the ranking.",
+          },
+          type: {
+            type: "string",
+            enum: ["DATA_CAPTURE", "PHYSICAL_INSPECTION", "QUESTION"],
+          },
+          requested_data: {
+            type: "array",
+            description:
+              "Populated when type is DATA_CAPTURE. Specifies which signals to capture and under what conditions.",
+            items: {
+              type: "object",
+              properties: {
+                signal_id: {
+                  type: "string",
+                  description: "OBD2 signal identifier (e.g., STFT1, RPM, ECT, MAF).",
+                },
+                operating_condition: {
+                  type: "string",
+                  description:
+                    "The specific operating condition under which to capture this signal (e.g., 'warm idle, 650-750 RPM, fully warm coolant').",
+                },
+                duration_seconds: {
+                  type: "number",
+                  description: "How many seconds of data to capture.",
+                },
+              },
+              required: ["signal_id", "operating_condition", "duration_seconds"],
+            },
+          },
+        },
+        required: ["action", "rationale", "type"],
+      },
+      data_ceiling_note: {
+        type: "string",
+        description:
+          "If the OBD2 data genuinely cannot distinguish between the leading hypotheses, explain plainly here. Empty string if the data is sufficient to meaningfully differentiate.",
+      },
+      unverified_specs_needed: {
+        type: "array",
+        description:
+          "Specific factory values you needed for your reasoning but were not provided in the verified data blocks. List them here rather than stating unverified numbers.",
+        items: {
+          type: "object",
+          properties: {
+            parameter: {
+              type: "string",
+              description:
+                "The specific factory spec needed (e.g., 'Expected MAF g/s at warm idle for 2018 Ford F-150 3.5L EcoBoost').",
+            },
+            purpose: {
+              type: "string",
+              description:
+                "Why you need this value — what hypothesis it would confirm or eliminate.",
+            },
+          },
+          required: ["parameter", "purpose"],
+        },
+      },
+    },
+    required: [
+      "presenting_complaint",
+      "stance",
+      "stance_reason",
+      "hypotheses",
+      "next_step",
+      "data_ceiling_note",
+      "unverified_specs_needed",
+    ],
+  },
+};
+
+const ASSESS_SYSTEM_PROMPT = `${APP_CONTEXT}
+
+DIAGNOSTIC ASSESSMENT — SINGLE-SHOT STRUCTURED ANALYSIS
+
+You are performing a one-shot differential diagnosis based on real OBD2 data captured directly from the vehicle by the Vulcan app. You are NOT conducting a conversation — you are producing a structured differential, exactly as a master technician would review a complete data set before calling a diagnosis.
+
+=== WHAT YOU HAVE ===
+
+The following have been verified by the Vulcan backend and injected into this context. Treat them as ground truth:
+- Vehicle identity, engine configuration, and mileage
+- Technician-declared operating condition at the time of capture
+- A 5-second averaged live OBD2 snapshot with per-signal min/max ranges across the window
+- Stored and pending DTC codes with their verified manufacturer-specific definitions
+- Freeze frame data (if available) — the operating condition when the DTCs stored (HISTORICAL)
+- Active NHTSA recall campaigns for this vehicle
+- NHTSA Technical Service Bulletins on file for this vehicle
+- Verified factory specs (if available for this vehicle and complaint)
+- The technician's presenting complaint (may be blank)
+
+=== REASONING INSTRUCTIONS ===
+
+1. FORM A DIFFERENTIAL. Rank up to 5 hypotheses by how well the actual provided data supports each one. Cut any hypothesis that lacks specific citable support from the data. Don't pad the list with generic possibilities the data cannot speak to.
+
+2. CITE SPECIFIC EVIDENCE. For each hypothesis: supporting_evidence must reference specific values from the provided data. "STFT1 averaged +18% at warm idle with LTFT1 also positive at +12%, consistent with unmetered air rather than a sensor drift" is evidence. "P0171 indicates a lean condition" is a code definition, not evidence from this vehicle's data.
+
+3. CITE CONTRADICTING EVIDENCE. For each hypothesis: contradicting_evidence must name specific observations that argue against it. Contradicting evidence is as important as supporting evidence — it shows honest reasoning rather than confirmation bias.
+
+4. STATE YOUR STANCE.
+   - AUTOPILOT: The fault likely lives in the sensor data — fuel trims, misfire counts, sensor rationality, electrical readings, ECU-detectable malfunctions. You drive the investigation with data-directed next steps.
+   - GUIDED: The fault likely requires the technician's physical senses — mechanical noise, wear patterns, visual damage, leak location. You direct the technician's hands.
+   Give one plain-English sentence for why this stance fits this specific case.
+
+5. ONE NEXT STEP. The single cheapest action that most changes the hypothesis ranking. Not a checklist — exactly one.
+   - DATA_CAPTURE: Specific OBD2 signals under specific operating conditions. List each signal ID, the exact conditions, and duration in requested_data.
+   - PHYSICAL_INSPECTION: A specific, actionable check. Name the exact component and the exact test.
+   - QUESTION: The single highest-diagnostic-value piece of information you're missing that would most change the ranking.
+
+6. CONFIDENCE LADDER — use it honestly:
+   - POSSIBLE: Plausible given the data, but direct support is limited. One test could rule it out.
+   - LIKELY: Multiple consistent data points converge on it. Would be surprised if wrong, but not certain.
+   - STRONGLY_SUPPORTED: Strong convergent evidence from several independent indicators. Difficult to explain otherwise.
+   No hypothesis in a single-shot assessment may be marked higher than STRONGLY_SUPPORTED.
+
+7. DATA CEILING. If the generic OBD2 data genuinely cannot distinguish between the leading hypotheses, say so plainly in data_ceiling_note. Honesty about the data's limits is more valuable than a forced conclusion. Leave it empty if the data is sufficient to differentiate.
+
+=== CRITICAL SAFETY DISCIPLINE — NON-NEGOTIABLE ===
+
+You may freely apply diagnostic logic, pattern recognition, and mechanistic reasoning from your training. That is your core value as a master technician.
+
+You must NOT state any specific numeric factory specification — exact torque values, exact pressures, fluid capacities, precise expected sensor voltages, target idle RPM ranges, expected MAF values — unless that exact value was explicitly provided in the verified data blocks injected into this context.
+
+If you need such a value and it was not provided: add it to unverified_specs_needed with the parameter name and why you need it. Recommend the technician confirm against the OEM service manual.
+
+A confidently-stated wrong factory number can cause a technician to condemn a good part or miss the real fault. This is the worst failure mode. When uncertain about a specific numeric value: flag it as unverified, don't state it.
+
+=== FREEZE FRAME vs. LIVE DATA ===
+
+Freeze frame data reflects the operating condition when the DTC was stored — HISTORICAL, possibly days or weeks ago.
+Live data reflects the vehicle's state at the moment the technician triggered this assessment.
+
+When reasoning across both:
+- A fault condition present in freeze frame but absent in live data: suggests intermittent — was active when code stored, not currently active.
+- A condition consistent across both contexts: suggests a persistent, currently-active fault.
+Always state explicitly when you are reasoning about the relationship between the two temporal contexts.
+
+=== OUTPUT ===
+
+Call emit_diagnostic_assessment exactly once with your complete structured assessment. Do not produce any plain-text response.`;
+
+app.post("/api/assess", async (req, res) => {
+  const { vehicle, vin, mileage, complaint, snapshot, recalls, tsbs } =
+    req.body ?? {};
+
+  if (!vehicle || typeof vehicle !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
+  }
+  if (!snapshot || typeof snapshot !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'snapshot'." });
+  }
+
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
+  const complaintText = typeof complaint === "string" ? complaint.trim() : "";
+  const mileageText =
+    typeof mileage === "string" && mileage.trim().length > 0
+      ? mileage.trim()
+      : vehicle.mileage ?? "Not provided";
+
+  // Build system context blocks in the same layered pattern as /api/diagnose.
+  const systemBlocks = [
+    {
+      type: "text",
+      text: ASSESS_SYSTEM_PROMPT,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+
+  if (recallsArr.length > 0) {
+    systemBlocks.push({ type: "text", text: buildRecallBlock(recallsArr) });
+  }
+  if (tsbsArr.length > 0) {
+    systemBlocks.push({ type: "text", text: buildTsbBlock(tsbsArr) });
+  }
+
+  // DTC enrichment: look up all stored + pending codes directly from the snapshot
+  // (not from complaint text — codes are confirmed by the scan, not typed in).
+  const allDtcCodes = [
+    ...(Array.isArray(snapshot.dtcs) ? snapshot.dtcs : []),
+    ...(Array.isArray(snapshot.pendingDtcs) ? snapshot.pendingDtcs : []),
+  ];
+  const enrichedDtcEntries = [];
+  for (const code of allDtcCodes) {
+    const entry = lookupDtc(code, vehicle?.make);
+    if (!entry) continue;
+    const mismatch = detectConfigMismatch(entry, vehicle);
+    enrichedDtcEntries.push(mismatch ? { ...entry, configMismatch: mismatch } : entry);
+  }
+  if (enrichedDtcEntries.length > 0) {
+    systemBlocks.push({
+      type: "text",
+      text: formatDtcContextBlock(enrichedDtcEntries),
+    });
+  }
+
+  // Spec injection: detect from the complaint text, same as /api/diagnose.
+  const specsToFetch = complaintText.length > 0 ? detectAllSpecIntents(complaintText) : [];
+  const verifiedSpecs = [];
+  if (specsToFetch.length > 0) {
+    const results = await Promise.all(
+      specsToFetch.map(async (specType) => {
+        const r = await lookupSpec(vehicle, specType);
+        return r ? { specType, data: r.data, source: r.source } : null;
+      }),
+    );
+    for (const r of results) if (r) verifiedSpecs.push(r);
+    if (verifiedSpecs.length > 0) {
+      systemBlocks.push({
+        type: "text",
+        text: formatSpecContextBlock(verifiedSpecs),
+      });
+    }
+  }
+
+  // Formatted snapshot block (the live OBD2 data Claude will reason on).
+  systemBlocks.push({
+    type: "text",
+    text: formatSnapshotBlock(snapshot),
+  });
+
+  // Build the single user message: vehicle context + complaint + assessment request.
+  const vehicleHead = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
+    .filter((s) => s && String(s).trim().length > 0)
+    .join(" ");
+  const userLines = [`Vehicle: ${vehicleHead}`];
+  if (vehicle.engineType && vehicle.engineType.trim().length > 0) {
+    userLines.push(`Engine: ${vehicle.engineType}`);
+  }
+  userLines.push(`Mileage: ${mileageText}`);
+  if (vin && typeof vin === "string" && vin.trim().length > 0) {
+    userLines.push(`VIN: ${vin.trim()}`);
+  }
+  if (complaintText.length > 0) {
+    userLines.push("", `Presenting complaint: ${complaintText}`);
+  } else {
+    userLines.push("", "Presenting complaint: (none provided — assess based on DTCs and live data)");
+  }
+  userLines.push("", "Please perform a structured diagnostic assessment of this vehicle based on all the verified data above.");
+
+  const mismatchCount = enrichedDtcEntries.filter((e) => e.configMismatch).length;
+  console.log(
+    `[assess] model=${DIAGNOSE_MODEL} ` +
+      `dtcs=${allDtcCodes.length} enriched=${enrichedDtcEntries.length} mismatches=${mismatchCount} ` +
+      `signals=${(snapshot.signals ?? []).length} absent=${(snapshot.absentSignalNames ?? []).length} ` +
+      `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
+      `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length}`,
+  );
+
+  try {
+    const response = await callAnthropicWithRetry(() =>
+      client.messages.create({
+        model: DIAGNOSE_MODEL,
+        max_tokens: 4096,
+        system: systemBlocks,
+        tools: [ASSESS_TOOL],
+        tool_choice: { type: "tool", name: "emit_diagnostic_assessment" },
+        messages: [{ role: "user", content: userLines.join("\n") }],
+      }),
+    );
+
+    const toolUse = response.content.find((b) => b.type === "tool_use");
+    if (!toolUse || toolUse.name !== "emit_diagnostic_assessment") {
+      return res.status(502).json({
+        error: "Model did not return a structured assessment. Try again.",
+      });
+    }
+
+    return res.json({ assessment: toolUse.input });
+  } catch (err) {
+    return respondWithError(res, err, "assess");
+  }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   // Aggregate cache rollup — printed last so it stands out in deploy logs.
   // If counts are non-zero on first startup after a redeploy, the Railway
