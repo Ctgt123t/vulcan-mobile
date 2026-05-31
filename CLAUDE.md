@@ -134,6 +134,8 @@ disconnect, errors, the duplicate-signalKey assertion warning) always log.
 - Native module changes require full EAS rebuild
 - Push to GitHub for Railway backend deploys
 
+**Deploying changes — Claude Code's responsibility:** When a task involves backend/server changes, Claude Code must commit and push to GitHub `main` as the final step so Railway redeploys — this is not the user's job to do manually. Backend changes do NOT reach the live server via OTA updates (`eas update` only ships the mobile JS bundle to devices; server code only deploys when pushed to GitHub). A task that changes both mobile and server code requires BOTH an `eas update` (for mobile) AND a `git push` (for server) — these are always separate steps and both must be completed. Never consider a task with server changes finished until the push to GitHub is done. Always confirm to the user that both the OTA update and the GitHub push were completed.
+
 ## Known Platform Issues
 
 ### iOS startup crash — reanimated v4 / worklets babel plugin (RESOLVED)
