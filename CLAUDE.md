@@ -226,6 +226,27 @@ Some ECUs (confirmed on 2011 GMC Sierra PCM) prepend a count byte `B` before the
 
 For >3 DTCs a vehicle uses ISO-TP multi-frame (first-frame PCI = `0x10-0x1F`). Detected by `bytes[i-2] & 0xF0 === 0x10`. Currently falls back to stream-scan until `00 00` — same as the old behavior. Full ISO-TP reassembly across consecutive frames is a future improvement; a `WARN` is emitted in `DEBUG_OBD2` builds when this path is taken.
 
+### Module structure
+
+The DTC parsing layer is isolated in `lib/dtcParser.ts` — a standalone pure module with zero React Native / Expo dependencies. This allows it to be imported and run in Node.js directly for testing.
+
+| File | Role |
+|---|---|
+| `lib/dtcParser.ts` | All parsing logic: `parseCanFrames`, `assemblePayloads`, `decodePayloadDtcs`, `parseDtcResponse`, `runDtcParserSelfTest` |
+| `lib/dtcParser.fixtures.ts` | Test fixtures — real Sierra captures + synthetic multi-frame + pathological cases |
+| `lib/dtcParser.test.ts` | Node.js runnable test script (46 tests). Run from project root: `npx ts-node --skipProject --compiler-options "{\"module\":\"CommonJS\",\"moduleResolution\":\"node\",\"esModuleInterop\":true}" --transpile-only lib/dtcParser.test.ts` |
+| `lib/obd2.ts` | Delegates `parseDtcResponse` to `dtcParser.ts` via a private shim. Runs `runDtcParserSelfTest()` on module load when `DEBUG_OBD2=1`. |
+
+### Multi-frame ISO-TP reassembly (Priority 1 — COMPLETE)
+
+The three-pass pipeline correctly handles interleaved multi-ECU CAN responses:
+
+**Pass 1 — `parseCanFrames`**: Splits on 3-char hex tokens (CAN IDs as delimiters). Each ECU's frames are collected separately regardless of arrival order. Returns `null` for non-CAN / ATH0 responses (fallback to flat scan).
+
+**Pass 2 — `assemblePayloads`**: Per CAN ID: SF → payload direct; FF → starts an accumulator; CF → appends to accumulator. After all frames processed, trims each multi-frame payload to the total length declared in the FF. Correctly handles `7E8 FF, 7EB SF, 7E8 CF1, 7EA SF, 7E8 CF2` interleaving as confirmed in the real Sierra live-data log.
+
+**Pass 3 — `decodePayloadDtcs`**: Decodes GM count-byte format or SAE no-count format from the clean, reassembled payload. No framing bytes can contaminate the DTC pairs.
+
 ### Debug assertions (DEBUG_OBD2=1)
 
 The parser emits `[dtc parse] WARN:` or `[dtc parse] SUSPICIOUS:` console messages when:

@@ -67,6 +67,11 @@ import {
   type SavedAdapter,
 } from "./savedAdapter";
 import { DEBUG_OBD2 } from "./debug";
+import {
+  decodeDtcBytes,
+  parseDtcResponse,
+  runDtcParserSelfTest,
+} from "./dtcParser";
 
 // ---------- Public types ----------
 
@@ -267,17 +272,6 @@ function decodeFuelTrim(bytes: number[]): number | null {
 function decodeVoltage(bytes: number[]): number | null {
   if (bytes.length < 2) return null;
   return ((bytes[0] << 8) | bytes[1]) / 1000;
-}
-
-function decodeDtcBytes(a: number, b: number): string | null {
-  if (a === 0 && b === 0) return null;
-  const types = ["P", "C", "B", "U"];
-  const type = types[(a >> 6) & 0x03];
-  const second = (a >> 4) & 0x03;
-  const third = (a & 0x0f).toString(16).toUpperCase();
-  const fourth = ((b >> 4) & 0x0f).toString(16).toUpperCase();
-  const fifth = (b & 0x0f).toString(16).toUpperCase();
-  return `${type}${second}${third}${fourth}${fifth}`;
 }
 
 // ---------- Generic PID decoding ----------
@@ -1597,184 +1591,13 @@ class Obd2Manager {
     return { ok: false, message: "Adapter did not confirm the clear." };
   }
 
-  // Parse a raw ELM327 DTC response into an array of code strings.
-  //
-  // Multi-ECU CAN reality: on modern CAN vehicles multiple ECUs respond to
-  // Mode 03/07/0A simultaneously. With ATH1 (headers on) each ECU contributes
-  // one CAN frame, formatted as:
-  //   [3-char CAN ID]  [PCI byte]  [mode echo]  [data bytes...]
-  //
-  // The 3-char CAN IDs are dropped by the 2-char-only filter. What remains:
-  //   [PCI]  [echo]  [data...]  [PCI]  [echo]  [data...]  ...
-  //
-  // The PCI byte for a single-frame ISO-TP response is 0x0N, where N is the
-  // total data byte count (including the mode echo). So N-1 bytes follow the
-  // echo and belong to THIS frame. Bounding each decode to its frame prevents
-  // cross-frame byte contamination (which produced phantom P0002/C0300 etc.).
-  //
-  // GM count-byte format: after the mode echo, some ECUs (including GM PCMs)
-  // prepend a count byte B before the DTC pairs, where B*2 == remaining bytes.
-  // Detected by: frameData[0] * 2 === frameData.length - 1.
-  // SAE no-count format: pairs follow the mode echo directly until 00 00.
-  //
-  // Multi-frame ISO-TP (for >3 DTCs): detected by bytes[i-2] being a 0x1X
-  // first-frame PCI. Falls back to stream-scan until 00 00; full ISO-TP
-  // reassembly is a future improvement. Warns in debug builds.
+  // DTC response parsing is in lib/dtcParser.ts (standalone pure module, tested in dtcParser.test.ts).
+  // This private shim delegates so the call sites in scanDtcs() stay unchanged.
   private parseDtcResponse(response: string, modeEcho: string): string[] {
-    const allTokens = response.replace(/^[^A-F0-9]+/i, "").split(/\s+/);
-    const droppedTokens = allTokens.filter(
-      (s) => s.length > 0 && !/^[0-9A-F]{2}$/i.test(s),
-    );
-    const bytes = allTokens
-      .filter((s) => /^[0-9A-F]{2}$/i.test(s))
-      .map((s) => parseInt(s, 16));
-
-    if (DEBUG_OBD2) {
-      console.log(
-        `[dtc parse] echo=0x${modeEcho} dropped:[${droppedTokens.join(",")}] ` +
-          `bytes:[${bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ")}]`,
-      );
-    }
-
-    const echoVal = parseInt(modeEcho, 16);
-    const out: string[] = [];
-
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] !== echoVal) continue;
-
-      // Classify the ISO-TP frame type from context bytes.
-      // bytes[i-1] = PCI byte for a single frame (0x0N, N = data length incl. echo).
-      // bytes[i-2] = first-frame PCI (0x1X) — bytes[i-1] is then the length LSB.
-      const hasSingleFramePci =
-        i > 0 &&
-        (bytes[i - 1] & 0xF0) === 0x00 &&
-        (bytes[i - 1] & 0x0F) > 0;
-      const hasMultiFrameCtx =
-        i >= 2 && (bytes[i - 2] & 0xF0) === 0x10;
-
-      let available: number;
-      if (hasMultiFrameCtx) {
-        available = bytes.length - i - 1;
-        if (DEBUG_OBD2) {
-          console.warn(
-            `[dtc parse] WARN: multi-frame ISO-TP at byte[${i}] — stream-scan fallback. ` +
-              `If DTCs look wrong, this vehicle may need full ISO-TP reassembly (not yet implemented).`,
-          );
-        }
-      } else if (hasSingleFramePci) {
-        // Single-frame: PCI & 0x0F = total data bytes including mode echo.
-        available = (bytes[i - 1] & 0x0F) - 1;
-      } else {
-        available = bytes.length - i - 1;
-        if (DEBUG_OBD2 && available > 0) {
-          console.warn(
-            `[dtc parse] WARN: no PCI context for echo at byte[${i}] — stream-scan fallback. ` +
-              `Verify DTC output is correct for this vehicle.`,
-          );
-        }
-      }
-
-      if (available <= 0) {
-        if (DEBUG_OBD2) {
-          console.log(`[dtc parse] echo at [${i}]: available=${available}, no data`);
-        }
-        i += Math.max(available, 0);
-        continue;
-      }
-
-      const dataStart = i + 1;
-      const dataEnd = Math.min(dataStart + available, bytes.length);
-      const frameData = bytes.slice(dataStart, dataEnd);
-
-      if (DEBUG_OBD2) {
-        console.log(
-          `[dtc parse] echo at [${i}], PCI=0x${(bytes[i - 1] ?? 0).toString(16).padStart(2, "0").toUpperCase()}, ` +
-            `available=${available}, frameData:[${frameData.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ")}]`,
-        );
-      }
-
-      // Detect GM count-byte format: if first byte B satisfies B*2 == remaining
-      // bytes, then B is the DTC count and B pairs follow immediately.
-      // Otherwise decode pairs directly (SAE no-count format) until 00 00.
-      const useCount =
-        frameData.length >= 1 &&
-        frameData[0] * 2 === frameData.length - 1;
-
-      const codesThisFrame: string[] = [];
-
-      if (useCount) {
-        const count = frameData[0];
-        if (DEBUG_OBD2) console.log(`[dtc parse]   count-byte fmt, count=${count}`);
-        for (let j = 0; j < count; j++) {
-          const a = frameData[1 + j * 2];
-          const b = frameData[1 + j * 2 + 1];
-          if (a === undefined || b === undefined) {
-            if (DEBUG_OBD2) {
-              console.warn(
-                `[dtc parse] SUSPICIOUS: count=${count} but ran out of bytes at pair ${j} — truncated frame?`,
-              );
-            }
-            break;
-          }
-          const code = decodeDtcBytes(a, b);
-          if (DEBUG_OBD2) {
-            console.log(
-              `[dtc parse]   pair[${j}]: 0x${a.toString(16).padStart(2, "0").toUpperCase()} ` +
-                `0x${b.toString(16).padStart(2, "0").toUpperCase()} → ${code ?? "null"}`,
-            );
-          }
-          if (code) codesThisFrame.push(code);
-        }
-      } else {
-        let j = 0;
-        while (j + 1 < frameData.length) {
-          const a = frameData[j];
-          const b = frameData[j + 1];
-          const code = decodeDtcBytes(a, b);
-          if (DEBUG_OBD2) {
-            console.log(
-              `[dtc parse]   pair: 0x${a.toString(16).padStart(2, "0").toUpperCase()} ` +
-                `0x${b.toString(16).padStart(2, "0").toUpperCase()} → ${code ?? "null (stop)"}`,
-            );
-          }
-          if (!code) break;
-          codesThisFrame.push(code);
-          j += 2;
-        }
-        // Sanity: unconsumed non-null bytes remaining in the frame after the
-        // null-pair stop suggests an unrecognised framing or format mismatch.
-        if (DEBUG_OBD2 && j < frameData.length - 1) {
-          const leftover = frameData.slice(j);
-          if (!leftover.every((b) => b === 0x00)) {
-            console.warn(
-              `[dtc parse] SUSPICIOUS: ${leftover.length} unconsumed non-null byte(s) in frame after decode stop: ` +
-                `[${leftover.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ")}] ` +
-                `— may indicate unrecognised framing for this vehicle.`,
-            );
-          }
-        }
-      }
-
-      out.push(...codesThisFrame);
-      i = dataEnd - 1; // skip past this frame; the for loop will i++ next
-    }
-
-    const result = Array.from(new Set(out));
-
-    if (DEBUG_OBD2) {
-      console.log(`[dtc parse] result: [${result.join(", ") || "none"}]`);
-      if (result.length > 20) {
-        console.warn(
-          `[dtc parse] SUSPICIOUS: decoded ${result.length} codes — implausibly high for a standard OBD2 scan. ` +
-            `Likely a parsing error for this vehicle's response format.`,
-        );
-      }
-    }
-
-    return result;
+    return parseDtcResponse(response, modeEcho);
   }
 
-  private async queryMode02(pid: number): Promise<number[] | null> {
+    private async queryMode02(pid: number): Promise<number[] | null> {
     const hex = pid.toString(16).padStart(2, "0").toUpperCase();
     const res = (await this.sendCommand(`02${hex}00`, 2500)) ?? "";
     return this.extractDataBytes(res, 0x42, pid);
@@ -2232,6 +2055,13 @@ class Obd2Manager {
     this.liveListeners.forEach((cb) => cb(this.liveData));
     this.setStatus("idle", "");
   }
+}
+
+// Run the DTC parser self-test on module load when debug logging is on.
+// All fixtures validate before any vehicle is connected — regressions surface
+// immediately in the Metro console rather than on the next real-vehicle test.
+if (DEBUG_OBD2) {
+  runDtcParserSelfTest();
 }
 
 export const obd2 = new Obd2Manager();
