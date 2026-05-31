@@ -86,6 +86,7 @@ export default function Obd2Screen() {
   const [readingDtcs, setReadingDtcs] = useState(false);
   const [dtcs, setDtcs] = useState<string[]>([]);
   const [pendingDtcs, setPendingDtcs] = useState<string[]>([]);
+  const [permanentDtcs, setPermanentDtcs] = useState<string[]>([]);
   const [freezeFrame, setFreezeFrame] = useState<FreezeFrame | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -267,6 +268,7 @@ export default function Obd2Screen() {
       obd2.stopPolling();
       setDtcs([]);
       setPendingDtcs([]);
+      setPermanentDtcs([]);
       setFreezeFrame(null);
       setDefinitions({});
     }
@@ -404,6 +406,7 @@ export default function Obd2Screen() {
       const result = await obd2.scanDtcs();
       setDtcs(result.dtcs);
       setPendingDtcs(result.pending);
+      setPermanentDtcs(result.permanent);
       setFreezeFrame(result.freezeFrame);
     } finally {
       setReadingDtcs(false);
@@ -427,6 +430,8 @@ export default function Obd2Screen() {
             }
             setDtcs([]);
             setPendingDtcs([]);
+            // Permanent codes survive a clear by definition — do NOT clear
+            // permanentDtcs here. They will only drop off after a drive cycle.
             setFreezeFrame(null);
             setDefinitions({});
             setClearError(null);
@@ -447,7 +452,8 @@ export default function Obd2Screen() {
   }
 
   async function onDiagnoseWithVulcan() {
-    if (dtcs.length === 0) {
+    const allCodes = [...dtcs, ...permanentDtcs];
+    if (allCodes.length === 0) {
       Alert.alert(
         "No codes to send",
         "Run a code scan first, then we can hand the results to Vulcan.",
@@ -458,6 +464,7 @@ export default function Obd2Screen() {
       type: "to_diagnose",
       symptom: "",
       dtcs,
+      permanentDtcs,
     });
     router.replace("/diagnose");
   }
@@ -467,6 +474,7 @@ export default function Obd2Screen() {
       selectedDescriptors,
       dtcs,
       pendingDtcs,
+      permanentDtcs,
       freezeFrame,
     });
     router.push("/smart-diagnose");
@@ -720,7 +728,26 @@ export default function Obd2Screen() {
                 </View>
               ) : null}
 
-              {dtcs.length > 0 && (
+              {permanentDtcs.length > 0 && (
+                <View style={styles.permanentGroup}>
+                  <Text style={styles.permanentGroupLabel}>
+                    PERMANENT · {permanentDtcs.length}
+                  </Text>
+                  <Text style={styles.permanentNote}>
+                    Survived last code clear — requires a completed drive cycle to extinguish
+                  </Text>
+                  {permanentDtcs.map((code) => (
+                    <DtcCard
+                      key={`perm-${code}`}
+                      code={code}
+                      kind="permanent"
+                      definition={definitions[code]}
+                    />
+                  ))}
+                </View>
+              )}
+
+              {(dtcs.length > 0 || permanentDtcs.length > 0) && (
                 <TouchableOpacity
                   style={styles.diagnoseBtn}
                   onPress={onDiagnoseWithVulcan}
@@ -1020,23 +1047,17 @@ function DtcCard({
   definition,
 }: {
   code: string;
-  kind: "stored" | "pending";
+  kind: "stored" | "pending" | "permanent";
   definition: DefinitionState | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   const palette =
     kind === "stored"
-      ? {
-          bg: colors.dangerBg,
-          border: colors.dangerBorder,
-          text: colors.dangerText,
-        }
-      : {
-          bg: colors.warnBg,
-          border: colors.warnBorder,
-          text: colors.warnText,
-        };
+      ? { bg: colors.dangerBg, border: colors.dangerBorder, text: colors.dangerText }
+      : kind === "permanent"
+        ? { bg: colors.infoBg, border: colors.infoBorder, text: colors.infoText }
+        : { bg: colors.warnBg, border: colors.warnBorder, text: colors.warnText };
 
   const urgencyChip = (() => {
     if (definition?.state !== "found") return null;
@@ -1747,6 +1768,23 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     fontWeight: "600",
+  },
+  // Permanent codes section
+  permanentGroup: {
+    gap: 6,
+  },
+  permanentGroupLabel: {
+    color: colors.infoText,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+  },
+  permanentNote: {
+    color: colors.infoText,
+    fontSize: 11,
+    fontStyle: "italic",
+    lineHeight: 15,
+    marginBottom: 2,
   },
   // Diagnose handoff button
   diagnoseBtn: {

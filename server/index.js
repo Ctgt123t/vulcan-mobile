@@ -785,17 +785,23 @@ function formatSnapshotBlock(snapshot) {
     }
   }
 
-  const allDtcs = [
-    ...(snapshot.dtcs ?? []).map((c) => `${c} (stored)`),
-    ...(snapshot.pendingDtcs ?? []).map((c) => `${c} (pending)`),
-  ];
-  if (allDtcs.length > 0) {
+  const storedDtcs = snapshot.dtcs ?? [];
+  const pendingDtcs = snapshot.pendingDtcs ?? [];
+  const permanentDtcs = snapshot.permanentDtcs ?? [];
+  const hasCodes = storedDtcs.length > 0 || pendingDtcs.length > 0 || permanentDtcs.length > 0;
+
+  if (hasCodes) {
     lines.push("");
     lines.push("PRESENT DTCs (verified definitions injected separately above):");
-    lines.push("  " + allDtcs.join(", "));
+    if (storedDtcs.length > 0) lines.push(`  Stored (Mode 03): ${storedDtcs.join(", ")}`);
+    if (permanentDtcs.length > 0) {
+      lines.push(`  Permanent (Mode 0A): ${permanentDtcs.join(", ")}`);
+      lines.push(`    Note: permanent codes survived a code-clear and require a completed drive cycle to extinguish. They are confirmed-fault evidence even if no stored code is present.`);
+    }
+    if (pendingDtcs.length > 0) lines.push(`  Pending (Mode 07): ${pendingDtcs.join(", ")}`);
   } else {
     lines.push("");
-    lines.push("PRESENT DTCs: None stored or pending.");
+    lines.push("PRESENT DTCs: None stored, pending, or permanent.");
   }
 
   if (snapshot.freezeFrame) {
@@ -1068,11 +1074,12 @@ app.post("/api/assess", async (req, res) => {
     systemBlocks.push({ type: "text", text: buildTsbBlock(tsbsArr) });
   }
 
-  // DTC enrichment: look up all stored + pending codes directly from the snapshot
-  // (not from complaint text — codes are confirmed by the scan, not typed in).
+  // DTC enrichment: look up all stored, pending, and permanent codes directly
+  // from the snapshot (confirmed by the scan, not typed in by the tech).
   const allDtcCodes = [
     ...(Array.isArray(snapshot.dtcs) ? snapshot.dtcs : []),
     ...(Array.isArray(snapshot.pendingDtcs) ? snapshot.pendingDtcs : []),
+    ...(Array.isArray(snapshot.permanentDtcs) ? snapshot.permanentDtcs : []),
   ];
   const enrichedDtcEntries = [];
   for (const code of allDtcCodes) {

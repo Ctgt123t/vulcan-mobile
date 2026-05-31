@@ -12,6 +12,8 @@ export type Handoff =
       symptom: string;
       recalls?: Recall[];
       tsbs?: Tsb[];
+      dtcs?: string[];
+      permanentDtcs?: string[];
     }
   | {
       type: "to_ask";

@@ -69,6 +69,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **Backend:** Node.js/Express on Railway
 - **AI:** Claude Opus 4.6 for Diagnose mode, Claude Sonnet 4.6 for Ask Vulcan mode. Both system prompts begin with a shared `APP_CONTEXT` block (`server/index.js`) so Claude reasons as an integrated diagnostic tool — aware that the app retrieves VIN/DTCs/live data through the Vulcan OBD2 connection, knows the four app modes, and treats codes appearing in conversation as confirmed scans rather than hypothetical. Updates to the shared identity belong in `APP_CONTEXT` so both modes stay consistent
 - **OBD2:** `react-native-ble-plx` for BLE, `react-native-bluetooth-classic` for Classic Bluetooth
+- **DTC parsing:** Three modes queried on every scan — Mode 03 (stored), Mode 07 (pending), Mode 0A (permanent/confirmed). See DTC Parsing Architecture section below.
 - **Builds:** EAS Build for iOS and Android
 
 ## App Structure — Four Main Modes
@@ -188,6 +189,53 @@ Cost-aware deep OBD2 integration that folds in the deferred "Claude auto-applies
 - **Auto-pause on inactivity** — if no PID values change meaningfully for X minutes (vehicle off, adapter idle), polling pauses and the monitoring session is paused. Resumes on activity.
 
 **Scaling implication:** the LOCAL polling + trigger logic is per-device with zero backend load. The Claude calls when triggers fire ARE backend load but bounded by the safeguards above to dozens of calls per session at most.
+
+## DTC Parsing Architecture
+
+### Modes queried
+
+Every `obd2.scanDtcs()` call queries three modes and returns all three arrays:
+
+| Mode | Echo byte | Returns | Description |
+|------|-----------|---------|-------------|
+| `03` | `0x43` | `dtcs[]` | Stored / confirmed codes |
+| `07` | `0x47` | `pending[]` | Pending (not yet confirmed) |
+| `0A` | `0x4A` | `permanent[]` | Permanent — survive code clear, require drive cycle to extinguish |
+
+**B-codes (body codes)** are stored by GM BCMs in proprietary mode ($19), not in Mode 03/07/0A. They are unreachable via generic SAE OBD II. Vulcan cannot read them; professional factory-protocol scan tools (Autel, Snap-on GM mode) can. This is an expected data ceiling, not a parsing bug.
+
+### Multi-ECU CAN response format
+
+Modern CAN vehicles have multiple ECUs (PCM, BCM, EBCM…) all responding to a DTC query simultaneously. With `ATH1` (headers on), the ELM327 concatenates all responses:
+
+```
+7E8 02 43 00   ← PCM:  PCI=02 (2 data bytes), mode echo 43, count=00 (0 stored DTCs)
+7EB 02 43 00   ← EBCM: same
+7EA 02 43 00   ← BCM:  same
+```
+
+After the tokenizer drops 3-char CAN IDs, the byte stream is: `02 43 00 02 43 00 02 43 00`
+
+**The parser must bound each decode to its CAN frame** using the ISO-TP PCI byte (always the byte immediately before the mode echo in the filtered stream). For a single-frame response `0x0N`, `N-1` bytes of data follow the mode echo.
+
+### Count-byte detection (GM format)
+
+Some ECUs (confirmed on 2011 GMC Sierra PCM) prepend a count byte `B` before the DTC pairs: `[MODE_ECHO] [COUNT] [PAIR1_A] [PAIR1_B] ...`. The count-byte format is detected when `frameData[0] * 2 === frameData.length - 1`. SAE no-count format (pairs directly after echo until `00 00`) is the fallback.
+
+### Multi-frame responses
+
+For >3 DTCs a vehicle uses ISO-TP multi-frame (first-frame PCI = `0x10-0x1F`). Detected by `bytes[i-2] & 0xF0 === 0x10`. Currently falls back to stream-scan until `00 00` — same as the old behavior. Full ISO-TP reassembly across consecutive frames is a future improvement; a `WARN` is emitted in `DEBUG_OBD2` builds when this path is taken.
+
+### Debug assertions (DEBUG_OBD2=1)
+
+The parser emits `[dtc parse] WARN:` or `[dtc parse] SUSPICIOUS:` console messages when:
+- No PCI context was available (stream-scan fallback used)
+- Multi-frame ISO-TP detected (reassembly fallback)
+- Count-byte claimed N codes but fewer bytes were available (truncated frame)
+- Unconsumed non-null bytes remain in a no-count frame after the null-pair stop
+- Decoded code count exceeds 20 (implausibly high — indicates format mismatch)
+
+Keep `EXPO_PUBLIC_DEBUG_OBD2=1` set during first-run testing on any new vehicle make/model to catch format surprises early.
 
 ## Diagnostic Engine Architecture
 

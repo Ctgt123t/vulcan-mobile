@@ -54,8 +54,9 @@ export interface DiagnosticSnapshot {
   operatingCondition: OperatingCondition;
   signals: SnapshotSignal[];
   absentSignalNames: string[]; // selected PIDs that returned no value in the window
-  dtcs: string[]; // stored codes from the last DTC scan
-  pendingDtcs: string[]; // pending codes from the last DTC scan
+  dtcs: string[]; // stored codes (Mode 03)
+  pendingDtcs: string[]; // pending codes (Mode 07)
+  permanentDtcs: string[]; // permanent / confirmed codes (Mode 0A — survive code clear)
   freezeFrame: {
     dtc: string | null;
     rpm: number | null;

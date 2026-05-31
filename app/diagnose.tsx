@@ -131,9 +131,13 @@ export default function Screen() {
       if (h.vin) setVin(h.vin);
       const dtcLine =
         h.dtcs && h.dtcs.length > 0
-          ? `OBD2 scan returned the following DTCs: ${h.dtcs.join(", ")}.`
+          ? `OBD2 scan — stored codes: ${h.dtcs.join(", ")}.`
           : "";
-      const combined = [dtcLine, h.symptom].filter((s) => s).join("\n\n");
+      const permLine =
+        h.permanentDtcs && h.permanentDtcs.length > 0
+          ? `Permanent codes (survived last clear): ${h.permanentDtcs.join(", ")}.`
+          : "";
+      const combined = [dtcLine, permLine, h.symptom].filter((s) => s).join("\n\n");
       if (combined) setSymptom(combined);
     });
     return () => {

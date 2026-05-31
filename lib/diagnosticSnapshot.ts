@@ -18,6 +18,7 @@ export function buildDiagnosticSnapshot(
   operatingCondition: OperatingCondition,
   dtcs: string[],
   pendingDtcs: string[],
+  permanentDtcs: string[],
   freezeFrame: FreezeFrame | null,
 ): DiagnosticSnapshot {
   const now = Date.now();
@@ -81,6 +82,7 @@ export function buildDiagnosticSnapshot(
     absentSignalNames,
     dtcs: [...dtcs],
     pendingDtcs: [...pendingDtcs],
+    permanentDtcs: [...permanentDtcs],
     freezeFrame: freezeFrame
       ? {
           dtc: freezeFrame.dtc,

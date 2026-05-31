@@ -85,6 +85,7 @@ export default function SmartDiagnoseScreen() {
       condition,
       handoff.dtcs,
       handoff.pendingDtcs,
+      handoff.permanentDtcs,
       handoff.freezeFrame,
     );
 
@@ -117,7 +118,7 @@ export default function SmartDiagnoseScreen() {
 
   const handoff = getSmartDiagnoseHandoff();
   const signalCount = handoff.selectedDescriptors.length;
-  const dtcCount = handoff.dtcs.length + handoff.pendingDtcs.length;
+  const dtcCount = handoff.dtcs.length + handoff.pendingDtcs.length + handoff.permanentDtcs.length;
   const bufferAge = obd2.getRingBufferAge();
   const hasWarmBuffer = bufferAge >= MIN_BUFFER_AGE_MS;
 
@@ -686,6 +687,7 @@ interface SmartDiagnoseHandoff {
   selectedDescriptors: import("../lib/obd2").PidDescriptor[];
   dtcs: string[];
   pendingDtcs: string[];
+  permanentDtcs: string[];
   freezeFrame: import("../lib/obd2").FreezeFrame | null;
 }
 
@@ -693,6 +695,7 @@ let handoffStore: SmartDiagnoseHandoff = {
   selectedDescriptors: [],
   dtcs: [],
   pendingDtcs: [],
+  permanentDtcs: [],
   freezeFrame: null,
 };
 
