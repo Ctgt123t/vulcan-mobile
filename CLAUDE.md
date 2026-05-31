@@ -6,6 +6,48 @@
 
 Vulcan is an AI-powered automotive diagnostic app for professional technicians. Built with Expo/React Native, a Railway-hosted backend, and the Claude API. Targets iOS and Android.
 
+## Current State & Next Steps
+
+> Keep this section current as work progresses — update it when a feature lands, an action item closes, or priorities shift. New sessions read this first to understand momentum, not just architecture.
+
+**Working and validated:**
+
+- All four modes functional (Ask Vulcan, Diagnose, Inspection Report, OBD2 Scan)
+- OBD2 core validated on BOTH platforms: Android (OBDLink MX+ over Bluetooth Classic) and iOS (Veepeak OBDCheck BLE+ over BLE) — connects fast, reads DTCs, streams live data
+- Live data tracking is responsive and real-time; full per-vehicle PID selection with categorized picker, presets, US/imperial units, and a status panel for bit-level signals
+- DTC database (18,805 codes) with manufacturer-specific lookups, config-mismatch detection, Claude fallback + caching
+- Auto-VIN populate across all modes, auto-reconnect for saved adapters
+- Vehicle specs hybrid retrieval (Vehicle Finder API live; Open Labor Project scaffolded/disabled pending key)
+- OBDb PID database, persistent Railway Volume storage (confirmed surviving redeploys)
+- iOS startup crash resolved (reanimated v4 / worklets misconfig)
+- Debug logging gated behind `EXPO_PUBLIC_DEBUG_OBD2`
+
+**Open action items (near-term):**
+
+- **iOS native cleanup:** exclude `react-native-bluetooth-classic` pod from iOS build via Expo config plugin (latent crash risk; requires full iOS rebuild; do before TestFlight)
+- **Offline resilience:** graceful handling when connectivity drops during connect/VIN-decode (currently fails silently into a degraded PID list); plus offline data buffering for road tests
+
+**Next major feature:**
+
+- **Claude-directed live monitoring** (the "autopilot" diagnostic vision) — Claude specifies which PIDs/thresholds to watch, phone monitors locally for free, Claude is only called when a condition triggers. Cost safeguards: sustained-condition requirement, per-PID cooldowns, per-session monitoring budget cap, auto-pause on inactivity. Folds in the deferred Claude-auto-applies-PIDs capability (`PidDescriptor.aiSelected` path already wired).
+
+**Pre-launch work not yet started:**
+
+- **Infrastructure:** migrate JSON-file storage to Postgres/Supabase (bundle in self-hosted NHTSA vPIC VIN decoder + NHTSA recall/TSB caching); fallback AI provider (Claude → GPT-4o for 529s); real auth (Supabase); billing (RevenueCat + Stripe); Sentry; Mixpanel; API cost monitoring + usage limits; build proprietary spec database; move confirmed-fix database to cloud
+- **Product:** UI redesign for premium feel; decide whether to remove Inspection Report; speech-to-text; compatible-adapters screen
+- **Legal/business:** form LLC + EIN; trademark Vulcan (Class 9 & 42, VulcanDX backup); switch Apple/Google accounts to Organization; CPA/attorney consult
+- **Launch:** TestFlight + Google Play internal testing; finalize tiered pricing ($40-50/mo target); App Store listing prep
+
+**Phase tracker:**
+
+| Phase | Status |
+|---|---|
+| 1. Get off Expo Go | COMPLETE |
+| 2. OBD2 Foundation | COMPLETE |
+| 3. OBD2 Advanced (live monitoring, intelligent PID selection) | IN PROGRESS / NEXT |
+| 4. Pre-launch infrastructure | NOT STARTED |
+| 5. Testing & launch | NOT STARTED |
+
 ## Scalability Requirements
 
 **This is a permanent project requirement, not a one-time note.** Vulcan is being built to support thousands of concurrent users at launch and beyond. Every piece of code written must be evaluated for scalability.
