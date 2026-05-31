@@ -88,8 +88,63 @@ disconnect, errors, the duplicate-signalKey assertion warning) always log.
 - Native module changes require full EAS rebuild
 - Push to GitHub for Railway backend deploys
 
+## Known Platform Issues
+
+### iOS startup crash — reanimated v4 / worklets babel plugin (RESOLVED)
+
+For a window in development, the app crashed on iOS ~200ms after launch (Swift `_assertionFailure(_:_:file:line:flags:)` from `EXC_BREAKPOINT / brk 1`) before any UI appeared. Initial suspect was `react-native-bluetooth-classic` under the New Architecture; the crash log ruled that out (its iOS native code is Objective-C, not Swift). Actual cause: `babel.config.js` referenced `"react-native-reanimated/plugin"` — the v3-style name — while the project is on reanimated 4.1.1 + `react-native-worklets` 0.5.1, which **moved the babel plugin into the worklets package**. The correct name is `"react-native-worklets/plugin"`. With the wrong plugin loaded, worklet callbacks (`useSharedValue`, `useAnimatedStyle`, `runOnUI`, etc.) were never transformed at build time, and the reanimated runtime asserted on first attempt to execute one on the UI thread. Android tolerated the same misconfig because the Android worklets runtime has softer assertions than iOS Swift preconditions. **Don't regress this — if you upgrade reanimated/worklets in the future, keep the babel plugin name in sync with whichever package owns it in that version.**
+
+### iOS Classic Bluetooth — pending native cleanup
+
+Apple's MFi restriction blocks Bluetooth Classic on iOS for non-licensed peripherals, so `react-native-bluetooth-classic` cannot function on iOS at all. The app already routes platform-dependent: **iOS → BLE only, Android → BLE + Classic** (see `Obd2Manager.connect()` and `connectDirect()`). The JS-side import is platform-gated via a lazy `require()` in `lib/obd2.ts` (only loads on Android), and `BluetoothDevice` comes in as a type-only import so iOS bundles never reference the runtime module.
+
+**Open action item before TestFlight:** the Classic library's iOS Pod still autolinks into the binary on iOS even though the JS layer never touches it. It's dead weight on iOS plus a latent native-init crash risk if a future RN/Expo update breaks the library's iOS shim. Fix is an **Expo config plugin** that excludes the pod from the iOS build (`react-native-bluetooth-classic` removed from the iOS Podfile via the config plugin). Requires a full `eas build --profile development --platform ios` afterward, not OTA. The JS-side lazy-require gate is in place as partial defense for now.
+
+## Hardware Compatibility
+
+| Adapter | Android | iOS | Notes |
+|---|---|---|---|
+| **OBDLink MX+** | ✓ (Classic) | ✗ | MFi-locked. Used on the ONN Android test tablet |
+| **OBDLink LX** | ✓ (Classic) | ✗ | Same MFi restriction as MX+ |
+| **Veepeak OBDCheck BLE+** | ✓ (BLE) | ✓ (BLE) | Confirmed working on iPhone test device |
+
+**For end-user recommendations:** Vulcan should prefer BLE-capable adapters in marketing/onboarding copy. Classic Bluetooth adapters work on Android only — be explicit about this when guiding users to a purchase.
+
+## Known Gaps
+
+### Offline resilience
+
+The connect-and-decode-VIN sequence fails ungracefully when connectivity drops mid-flow (e.g. WiFi-to-cell handoff while in a shop): `decodeVin()` (NHTSA API) silently returns null, the global vehicle stays empty/partial, and the PID list falls back to the SAE-only "standard-only" path with no error surface to the technician. Adapter connection itself succeeds — the symptom is a thin / degraded experience downstream of the failed network call.
+
+**Planned fix has two parts:**
+
+1. **Graceful VIN-decode-failure handling** — when NHTSA returns null or times out, keep the raw VIN string, prompt the tech to retry once connectivity returns, or offer manual vehicle entry. Don't silently degrade.
+2. **Offline data buffering** — local OBD2 collection continues working without network (everything except backend lookups already does); buffer any DTCs / live snapshots / Claude-ready context locally, sync when reconnected. This pairs with the Claude-directed monitoring roadmap item below since that feature relies on local capture by design.
+
+## Roadmap — Next Major Features
+
+### Claude-directed live monitoring
+
+Cost-aware deep OBD2 integration that folds in the deferred "Claude auto-applies PID selections" capability. Design:
+
+1. Technician describes the problem in Diagnose mode (e.g. "stalls at idle when warm").
+2. Claude analyzes the complaint + vehicle context and emits a structured **monitoring plan** via tool call: a list of PIDs to watch, expected ranges, and trigger conditions (e.g. "STFT1 sustained > +10% for 30s while RPM 600-900").
+3. Phone applies the plan to the OBD2 polling driver via `PidDescriptor.aiSelected = true` (data path is already wired through `lib/units.ts`, `lib/pidCatalog.ts`, and the gauge highlight style). Monitoring runs **locally on the device — zero API cost** while the technician drives or operates the vehicle.
+4. When a trigger condition fires, the phone packages the captured window of live data + the trigger context and sends ONE Claude call to interpret the event and recommend next steps.
+
+**Cost safeguards (load-bearing — without these the feature is unbounded API spend):**
+
+- **Sustained-condition requirement** — a trigger must hold for N seconds (per-PID, configurable) before firing. Prevents noisy single-frame spikes from triggering Claude.
+- **Per-PID cooldown timers** — once a trigger fires, that condition can't refire for M minutes. Prevents oscillating sensors from spamming.
+- **Per-session monitoring budget** — hard cap on Claude calls per monitoring session (e.g. 5). Session ends; budget resets on the next explicit "start monitoring" action.
+- **Auto-pause on inactivity** — if no PID values change meaningfully for X minutes (vehicle off, adapter idle), polling pauses and the monitoring session is paused. Resumes on activity.
+
+**Scaling implication:** the LOCAL polling + trigger logic is per-device with zero backend load. The Claude calls when triggers fire ARE backend load but bounded by the safeguards above to dozens of calls per session at most.
+
 ## Current Development Priorities
 
-- OBD2 feature refinement and real-world testing
-- Expanding DTC database for manufacturer-specific codes
-- Building toward TestFlight beta and eventual App Store launch
+- **Claude-directed live monitoring** — see roadmap section above
+- **Offline resilience** — graceful VIN-decode-failure handling + local OBD2 buffering
+- **iOS native cleanup** — Expo config plugin to exclude the Classic Bluetooth pod from iOS builds (see Known Platform Issues)
+- **Pre-launch infrastructure** — Supabase/Postgres migration to replace JSON-file caches; auth; billing; analytics; error/crash tracking (Sentry or similar)
+- **TestFlight beta + App Store launch prep**
