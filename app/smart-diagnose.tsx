@@ -15,6 +15,7 @@ import Navbar from "../components/Navbar";
 import { useObd2 } from "../contexts/Obd2Context";
 import { useVehicle } from "../contexts/VehicleContext";
 import { AssessError, assess } from "../lib/api";
+import { diagnosticLogger } from "../lib/diagnosticLogger";
 import {
   OPERATING_CONDITION_LABELS,
   type ConfidenceLevel,
@@ -100,6 +101,14 @@ export default function SmartDiagnoseScreen() {
         recalls,
         tsbs,
       );
+      diagnosticLogger.log({
+        type: "assessment",
+        vehicle: vehicle.year
+          ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
+          : undefined,
+        assessment: result,
+        operatingCondition: condition,
+      });
       setPhase({ kind: "result", assessment: result });
     } catch (err) {
       const msg =

@@ -23,6 +23,25 @@
 import { DEBUG_OBD2 } from "./debug";
 import type { DtcParserFixture } from "./dtcParser.fixtures";
 
+// ---- Parser warning listener ----
+//
+// emitParserWarning() always calls this listener (not gated by DEBUG_OBD2)
+// so structural parse issues are captured in the on-device diagnostic log
+// even in preview builds where console output is unavailable. The listener
+// is registered by lib/obd2.ts on module load.
+
+type ParserWarningListener = (msg: string) => void;
+let _warningListener: ParserWarningListener | null = null;
+
+export function setParserWarningListener(fn: ParserWarningListener): void {
+  _warningListener = fn;
+}
+
+function emitParserWarning(msg: string): void {
+  if (DEBUG_OBD2) console.warn(msg);
+  _warningListener?.(msg);
+}
+
 // ---- DTC byte encoding ----
 
 // Decode two raw OBD-II response bytes into a DTC code string.
@@ -128,8 +147,8 @@ export function assemblePayloads(frames: CanFrame[]): Map<string, number[]> {
       const len = pci & 0x0F;
       if (len === 0) continue;
       const payload = frame.data.slice(1, 1 + len);
-      if (DEBUG_OBD2 && payload.length < len) {
-        console.warn(
+      if (payload.length < len) {
+        emitParserWarning(
           `[dtc-parser] SUSPICIOUS: SF ${frame.canId} declares length ${len} ` +
             `but frame only has ${payload.length} data bytes`,
         );
@@ -160,15 +179,15 @@ export function assemblePayloads(frames: CanFrame[]): Map<string, number[]> {
               `assembled=${ff.payload.length}/${ff.totalLength}`,
           );
         }
-      } else if (DEBUG_OBD2) {
-        console.warn(
+      } else {
+        emitParserWarning(
           `[dtc-parser] SUSPICIOUS: CF from ${frame.canId} with no preceding FF — ` +
             `orphan CF ignored`,
         );
       }
 
-    } else if (DEBUG_OBD2) {
-      console.warn(
+    } else {
+      emitParserWarning(
         `[dtc-parser] WARN: unknown PCI type 0x${pci.toString(16).toUpperCase()} ` +
           `from ${frame.canId} — frame skipped`,
       );
@@ -177,8 +196,8 @@ export function assemblePayloads(frames: CanFrame[]): Map<string, number[]> {
 
   // Finalize: trim multi-frame payloads to the total length declared in the FF.
   for (const [canId, ff] of ffState.entries()) {
-    if (DEBUG_OBD2 && ff.payload.length < ff.totalLength) {
-      console.warn(
+    if (ff.payload.length < ff.totalLength) {
+      emitParserWarning(
         `[dtc-parser] SUSPICIOUS: ${canId} FF declared ${ff.totalLength} bytes ` +
           `but only ${ff.payload.length} assembled — missing consecutive frames?`,
       );
@@ -221,11 +240,9 @@ export function decodePayloadDtcs(payload: number[], modeEcho: number): string[]
       const a = frameData[1 + j * 2];
       const b = frameData[1 + j * 2 + 1];
       if (a === undefined || b === undefined) {
-        if (DEBUG_OBD2) {
-          console.warn(
-            `[dtc-parser] SUSPICIOUS: count=${count} but ran out of bytes at pair ${j}`,
-          );
-        }
+        emitParserWarning(
+          `[dtc-parser] SUSPICIOUS: count=${count} but ran out of bytes at pair ${j}`,
+        );
         break;
       }
       const code = decodeDtcBytes(a, b);
@@ -254,10 +271,10 @@ export function decodePayloadDtcs(payload: number[], modeEcho: number): string[]
       codes.push(code);
       j += 2;
     }
-    if (DEBUG_OBD2 && j < frameData.length - 1) {
+    if (j < frameData.length - 1) {
       const leftover = frameData.slice(j);
       if (!leftover.every((b) => b === 0x00)) {
-        console.warn(
+        emitParserWarning(
           `[dtc-parser] SUSPICIOUS: ${leftover.length} unconsumed non-null bytes after decode: ` +
             `[${leftover.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ")}]`,
         );
@@ -354,12 +371,12 @@ export function parseDtcResponse(response: string, modeEcho: string): string[] {
 
   if (DEBUG_OBD2) {
     console.log(`[dtc-parser] → [${result.join(", ") || "none"}]`);
-    if (result.length > 20) {
-      console.warn(
-        `[dtc-parser] SUSPICIOUS: ${result.length} codes decoded — ` +
-          `implausibly high for a standard scan`,
-      );
-    }
+  }
+  if (result.length > 20) {
+    emitParserWarning(
+      `[dtc-parser] SUSPICIOUS: ${result.length} codes decoded — ` +
+        `implausibly high for a standard scan`,
+    );
   }
 
   return result;
@@ -370,7 +387,11 @@ export function parseDtcResponse(response: string, modeEcho: string): string[] {
 // Validates the parser against all fixtures. Runs synchronously and logs
 // PASS/FAIL to the Metro console. Called on app startup when DEBUG_OBD2=1
 // so regression failures surface before connecting to a vehicle.
-export function runDtcParserSelfTest(): void {
+export function runDtcParserSelfTest(): {
+  passed: number;
+  failed: number;
+  failures: string[];
+} {
   // Lazy import to keep the production bundle free of fixture data when
   // DEBUG_OBD2 is false (Expo's dead-code elimination removes unused branches).
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -414,4 +435,6 @@ export function runDtcParserSelfTest(): void {
     console.error(`[dtc-test] === ${failed} FAILED / ${passed} PASSED ===`);
     for (const f of failures) console.error(`[dtc-test]     ✗ ${f}`);
   }
+
+  return { passed, failed, failures };
 }

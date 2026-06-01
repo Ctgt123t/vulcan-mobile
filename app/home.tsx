@@ -52,9 +52,15 @@ export default function HomeScreen() {
             title="OBD2 Scan"
             subtitle="Connect to vehicle systems"
             onPress={() => router.push("/obd2")}
-            comingSoon
           />
         </View>
+
+        <Pressable
+          style={styles.diagLogLink}
+          onPress={() => router.push("/diagnostic-logs")}
+        >
+          <Text style={styles.diagLogText}>Diagnostic Log</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -208,5 +214,18 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.2,
+  },
+  diagLogLink: {
+    alignSelf: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    minHeight: HIT_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  diagLogText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "500",
   },
 });

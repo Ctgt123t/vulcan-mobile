@@ -71,7 +71,16 @@ import {
   decodeDtcBytes,
   parseDtcResponse,
   runDtcParserSelfTest,
+  setParserWarningListener,
 } from "./dtcParser";
+import { diagnosticLogger } from "./diagnosticLogger";
+
+// Register the parser warning listener once at module load so structural
+// parse issues write to the on-device diagnostic log in all build types,
+// not just when DEBUG_OBD2 is enabled.
+setParserWarningListener((msg) => {
+  diagnosticLogger.log({ type: "parser_warning", warning: msg });
+});
 
 // ---------- Public types ----------
 
@@ -933,6 +942,18 @@ class Obd2Manager {
   private pollPaused = false;
   private liveData: LiveData = { ...EMPTY_LIVE };
 
+  // Protocol type detected by ATDPN after handshake.
+  // Populated by Part 1 (protocol detection); returns "unknown" until then.
+  private protocolType: "can" | "non-can" | "unknown" = "unknown";
+  private protocolName = "unknown";
+
+  getProtocolType(): "can" | "non-can" | "unknown" {
+    return this.protocolType;
+  }
+  getProtocolName(): string {
+    return this.protocolName;
+  }
+
   // Rolling ring buffer of full LiveValues snapshots, one entry per poll tick.
   // Maintained for RING_BUFFER_DURATION_MS (10s). captureSnapshot() slices the
   // last N ms out of it to produce an averaged snapshot for the diagnostic engine.
@@ -1544,11 +1565,13 @@ class Obd2Manager {
     console.log(`[dtc scan] Mode 03 raw: "${mode03}"`);
     const dtcs = this.parseDtcResponse(mode03, "43");
     console.log(`[dtc scan] Mode 03 parsed: [${dtcs.join(", ") || "none"}]`);
+    diagnosticLogger.log({ type: "dtc_scan", mode: "03", rawResponse: mode03, parsedCodes: dtcs });
 
     const mode07 = (await this.sendCommand("07", 3500)) ?? "";
     console.log(`[dtc scan] Mode 07 raw: "${mode07}"`);
     const pending = this.parseDtcResponse(mode07, "47");
     console.log(`[dtc scan] Mode 07 parsed: [${pending.join(", ") || "none"}]`);
+    diagnosticLogger.log({ type: "dtc_scan", mode: "07", rawResponse: mode07, parsedCodes: pending });
 
     // Mode 0A — permanent / confirmed codes. These survive a clear-codes command
     // and require a completed OBD2 drive cycle to extinguish. Queried as a
@@ -1560,6 +1583,7 @@ class Obd2Manager {
         ? this.parseDtcResponse(mode0A, "4A")
         : [];
     console.log(`[dtc scan] Mode 0A parsed: [${permanent.join(", ") || "none"}]`);
+    diagnosticLogger.log({ type: "dtc_scan", mode: "0A", rawResponse: mode0A, parsedCodes: permanent });
 
     const freezeDtc = (await this.sendCommand("0202", 3000)) ?? "";
     const freezeDtcParsed = this.parseDtcResponse(freezeDtc, "42")[0] ?? null;
@@ -2052,6 +2076,8 @@ class Obd2Manager {
     }
     this.liveData = { ...EMPTY_LIVE };
     this.ringBuffer = [];
+    this.protocolType = "unknown";
+    this.protocolName = "unknown";
     this.liveListeners.forEach((cb) => cb(this.liveData));
     this.setStatus("idle", "");
   }
@@ -2060,8 +2086,16 @@ class Obd2Manager {
 // Run the DTC parser self-test on module load when debug logging is on.
 // All fixtures validate before any vehicle is connected — regressions surface
 // immediately in the Metro console rather than on the next real-vehicle test.
-if (DEBUG_OBD2) {
-  runDtcParserSelfTest();
+// Run self-test and log the result to the on-device diagnostic log.
+// The console trace is gated by DEBUG_OBD2; the log write is always active.
+{
+  const selfTestResult = runDtcParserSelfTest();
+  diagnosticLogger.log({
+    type: "self_test",
+    selfTestPassed: selfTestResult.passed,
+    selfTestFailed: selfTestResult.failed,
+    selfTestFailures: selfTestResult.failures,
+  });
 }
 
 export const obd2 = new Obd2Manager();

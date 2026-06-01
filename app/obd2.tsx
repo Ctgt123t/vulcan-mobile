@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -44,6 +44,7 @@ import {
 } from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
 import { HIT_TARGET, colors } from "../lib/theme";
+import { diagnosticLogger } from "../lib/diagnosticLogger";
 import type { DtcDefinition } from "../lib/types";
 import {
   formatLiveValue,
@@ -75,7 +76,7 @@ type DefinitionState =
 export default function Obd2Screen() {
   const router = useRouter();
   const { status, statusMessage, devices, liveData, isConnected } = useObd2();
-  const { vehicle, source: vehicleSource } = useVehicle();
+  const { vehicle, vin, source: vehicleSource } = useVehicle();
   const vehicleLabel = [vehicle.year, vehicle.make, vehicle.model]
     .filter((s) => s && s.trim().length > 0)
     .join(" ");
@@ -108,6 +109,50 @@ export default function Obd2Screen() {
     null,
   );
 
+  // Diagnostic logging: start/end sessions on connection transitions, capture
+  // periodic PID snapshots. Session start includes vehicle and protocol info.
+  const prevConnected = useRef(false);
+  useEffect(() => {
+    if (isConnected && !prevConnected.current) {
+      diagnosticLogger.startSession({
+        vehicle: vehicle.year
+          ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
+          : undefined,
+        protocol: obd2.getProtocolName(),
+        protocolType: obd2.getProtocolType(),
+        adapterName: savedAdapter?.name,
+      });
+    } else if (!isConnected && prevConnected.current) {
+      diagnosticLogger.endSession();
+    }
+    prevConnected.current = isConnected;
+  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Periodic PID snapshot — 30s while connected, plus triggered by DTC scan
+  // and Smart Diagnose. Gives a time-series view of sensor state.
+  useEffect(() => {
+    if (!isConnected) return;
+    const id = setInterval(() => {
+      const pidData: Record<
+        string,
+        { name: string; value: number | null; unit: string | null; category: string }
+      > = {};
+      for (const [key, lv] of Object.entries(liveData)) {
+        pidData[key] = { name: lv.name, value: lv.value, unit: lv.unit, category: lv.category };
+      }
+      if (Object.keys(pidData).length > 0) {
+        diagnosticLogger.log({
+          type: "pid_snapshot",
+          vehicle: vehicle.year
+            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
+            : undefined,
+          pidData,
+        });
+      }
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Whenever new DTCs come back from a scan, kick off a parallel lookup
   // against the backend's curated database. Codes not in the DB (404) are
   // marked "unknown" — the UI shows a fallback line for those rather than
@@ -124,7 +169,10 @@ export default function Obd2Screen() {
   }, [vehicle.make, vehicle.engineType]);
 
   useEffect(() => {
-    const all = [...dtcs, ...pendingDtcs];
+    // permanent codes must be included — they use the same definitions cache
+    // and DtcCard. Omitting permanentDtcs leaves definitions["P0442"] as
+    // undefined forever, so DtcCard shows the spinner with no fetch ever fired.
+    const all = [...dtcs, ...pendingDtcs, ...permanentDtcs];
     const toFetch = all.filter((code) => !definitions[code]);
     if (toFetch.length === 0) return;
 
@@ -165,7 +213,7 @@ export default function Obd2Screen() {
     // already-fetched codes are no-ops. Vehicle make / engineType changes
     // are handled separately by the cache-clearing effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dtcs.join(","), pendingDtcs.join(",")]);
+  }, [dtcs.join(","), pendingDtcs.join(","), permanentDtcs.join(",")]);
 
   // ---------- PID selection + live polling ----------
   //
@@ -408,6 +456,18 @@ export default function Obd2Screen() {
       setPendingDtcs(result.pending);
       setPermanentDtcs(result.permanent);
       setFreezeFrame(result.freezeFrame);
+      // Event-triggered PID snapshot: capture live data at the moment of
+      // the scan so the snapshot and DTC result share a timestamp context.
+      const pidData: Record<
+        string,
+        { name: string; value: number | null; unit: string | null; category: string }
+      > = {};
+      for (const [key, lv] of Object.entries(liveData)) {
+        pidData[key] = { name: lv.name, value: lv.value, unit: lv.unit, category: lv.category };
+      }
+      if (Object.keys(pidData).length > 0) {
+        diagnosticLogger.log({ type: "pid_snapshot", pidData });
+      }
     } finally {
       setReadingDtcs(false);
     }
