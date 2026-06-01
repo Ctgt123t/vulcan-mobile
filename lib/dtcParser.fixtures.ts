@@ -200,6 +200,59 @@ export const DTC_PARSER_FIXTURES: DtcParserFixture[] = [
       "7E8's CF has no FF — silently dropped. 7EB's SF has count=0. " +
       "No codes decoded, no crash.",
   },
+  // ---- Non-CAN protocol fixtures (ISO 9141, KWP2000, J1850 with ATH0) ----
+  //
+  // After detecting a non-CAN protocol via ATDPN, the handshake sends ATH0
+  // (headers off). All subsequent responses arrive as bare data bytes with no
+  // framing headers — exactly the flat-scan format these fixtures exercise.
+  // The dtcParser routes here automatically when parseCanFrames() returns null
+  // (no 3-char CAN ID tokens found).
+
+  {
+    label: "NON-CAN — Mode 03 ATH0, zero stored codes",
+    rawResponse: "43 00",
+    modeEcho: "43",
+    expectedCodes: [],
+    notes:
+      "ISO 9141 / KWP2000 / J1850 with ATH0. Mode echo + count=0. " +
+      "This is the most common response on older vehicles with no stored codes.",
+  },
+  {
+    label: "NON-CAN — Mode 03 ATH0, 1 stored code, SAE no-count with null terminator",
+    rawResponse: "43 04 42 00 00",
+    modeEcho: "43",
+    expectedCodes: ["P0442"],
+    notes:
+      "ATH0. Mode echo + P0442 bytes + null terminator. No count byte — SAE no-count format.",
+  },
+  {
+    label: "NON-CAN — Mode 03 ATH0, 2 stored codes, SAE no-count",
+    rawResponse: "43 04 42 01 71 00 00",
+    modeEcho: "43",
+    expectedCodes: ["P0442", "P0171"],
+    notes:
+      "ATH0, two codes in SAE no-count format. " +
+      "Flat-scan pairs: [04,42]→P0442, [01,71]→P0171, [00,00]→null stop.",
+  },
+  {
+    label: "NON-CAN — Mode 0A ATH0, 1 permanent code, count-byte format",
+    rawResponse: "4A 01 04 42",
+    modeEcho: "4A",
+    expectedCodes: ["P0442"],
+    notes:
+      "Mode 0A permanent codes with ATH0. Count-byte format: echo + count=1 + P0442. " +
+      "Confirms count-byte detection works in the flat-scan path.",
+  },
+  {
+    label: "NON-CAN — Mode 07 ATH0, zero pending codes",
+    rawResponse: "47 00",
+    modeEcho: "47",
+    expectedCodes: [],
+    notes:
+      "Mode 07 pending codes with ATH0. Mode echo + count=0. " +
+      "Tests the flat-scan path with the Mode 07 echo byte.",
+  },
+
   // NOTE — truncated multi-frame (FF with no CF) is intentionally NOT a test
   // fixture. When a FF arrives but its CFs don't, the assembled payload is
   // shorter than declared. The count-byte heuristic fails on the truncated

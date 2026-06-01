@@ -71,6 +71,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **AI:** Claude Opus 4.6 for Diagnose mode, Claude Sonnet 4.6 for Ask Vulcan mode. Both system prompts begin with a shared `APP_CONTEXT` block (`server/index.js`) so Claude reasons as an integrated diagnostic tool — aware that the app retrieves VIN/DTCs/live data through the Vulcan OBD2 connection, knows the four app modes, and treats codes appearing in conversation as confirmed scans rather than hypothetical. Updates to the shared identity belong in `APP_CONTEXT` so both modes stay consistent
 - **OBD2:** `react-native-ble-plx` for BLE, `react-native-bluetooth-classic` for Classic Bluetooth
 - **DTC parsing:** Three modes queried on every scan — Mode 03 (stored), Mode 07 (pending), Mode 0A (permanent/confirmed). See DTC Parsing Architecture section below.
+- **Protocol detection:** `ATDPN` queried after the `0100` handshake pass. CAN (codes 6–9): ATH1 stays, frame-aware parser, multi-PID batching. Non-CAN (codes 1–5): ATH0 applied, flat-scan parser, single-PID polling. Protocol name shown in status bar.
 - **Builds:** EAS Build for iOS and Android
 
 ## App Structure — Four Main Modes
@@ -191,6 +192,35 @@ Cost-aware deep OBD2 integration that folds in the deferred "Claude auto-applies
 - **Auto-pause on inactivity** — if no PID values change meaningfully for X minutes (vehicle off, adapter idle), polling pauses and the monitoring session is paused. Resumes on activity.
 
 **Scaling implication:** the LOCAL polling + trigger logic is per-device with zero backend load. The Claude calls when triggers fire ARE backend load but bounded by the safeguards above to dozens of calls per session at most.
+
+## Protocol Detection Architecture
+
+After the `0100` sanity check passes in `runHandshake()`, the handshake issues `ATDPN` to query the protocol the ELM327 locked onto during auto-detection.
+
+### Classification
+
+| Code | Protocol | Family | Handling |
+|------|----------|--------|---------|
+| 1 | J1850 PWM | Non-CAN | ATH0, single-PID polling |
+| 2 | J1850 VPW | Non-CAN | ATH0, single-PID polling |
+| 3 | ISO 9141-2 | Non-CAN | ATH0, single-PID polling |
+| 4 | KWP2000 (5-baud) | Non-CAN | ATH0, single-PID polling |
+| 5 | KWP2000 (fast) | Non-CAN | ATH0, single-PID polling |
+| 6–9 | ISO 15765-4 CAN variants | **CAN** | ATH1 unchanged, frame-aware parser, multi-PID batching |
+| parse fail | unknown | CAN | Treated as CAN (safe fallback) |
+
+### Key invariants
+
+- **CAN path is completely unchanged.** ATDPN adds one query to the handshake; if the result is CAN, no further action is taken. ATH1, the frame-aware dtcParser pipeline, and multi-PID batching (up to 6) are all untouched.
+- **ATH0 for non-CAN.** Strips non-CAN 3-byte headers from responses. `parseDtcResponse` already falls back to flat-scan when no 3-char tokens are found. `extractPidDataBytes` and `parseMultiPidResponse` both tokenize to 2-char hex and work identically with headers off.
+- **VIN decode (Mode 09)** works with ATH0 — `parseVinFromResponse` filters to 2-char hex tokens regardless of headers. Older vehicles without Mode 09 support return NO DATA → `getVin()` returns null → silent fallback to manual entry (already handled).
+- **Single-PID polling on non-CAN.** Batch size is 1 vs 6 for CAN. Older protocols handle multi-PID requests inconsistently; single-PID avoids the fallback noise during first contact with an unknown vehicle.
+- **Protocol in status bar.** The `setStatus("connected", ...)` message includes the detected protocol name: "Connected · ISO 9141", "Connected · CAN", etc.
+- **Protocol in diagnostic log.** Session start entries (per `diagnosticLogger.startSession`) include `protocol` and `protocolType` so every shop visit is tagged with the vehicle's protocol.
+
+### Storage
+
+`Obd2Manager.protocolType` and `protocolName` are set during handshake and cleared to "unknown" on disconnect.
 
 ## DTC Parsing Architecture
 

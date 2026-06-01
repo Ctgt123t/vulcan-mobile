@@ -716,6 +716,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Classify the OBD-II protocol reported by ATDPN.
+//
+// ATDPN returns a single hex digit, but adapter firmware varies in formatting:
+//   "6"        — plain digit (most adapters)
+//   "A6"       — some adapters prefix "A" to signal auto-detection
+//   "AUTO, 6"  — verbose firmware
+// We extract the last hex char in the 1–9 / A–C range.
+//
+// Protocol map (ISO 15031-5 / ELM327 spec):
+//   1 = J1850 PWM    2 = J1850 VPW    3 = ISO 9141-2
+//   4 = KWP (5-baud) 5 = KWP (fast)   6-9 = ISO 15765-4 CAN variants
+//
+// Parse failure → treat as CAN (safe: all tested hardware is CAN, and the
+// CAN path causes no harm on non-CAN vehicles that somehow mislabel).
+function classifyProtocol(rawAtdpn: string): {
+  type: "can" | "non-can" | "unknown";
+  name: string;
+} {
+  const NAMES: Record<number, string> = {
+    1: "J1850 PWM",
+    2: "J1850 VPW",
+    3: "ISO 9141",
+    4: "KWP2000",
+    5: "KWP2000",
+    6: "CAN",
+    7: "CAN",
+    8: "CAN",
+    9: "CAN",
+  };
+
+  // Match the last hex digit in range 1–9/A–C (ignoring prefix/noise)
+  const match = rawAtdpn.match(/[1-9A-Ca-c](?=[^1-9A-Ca-c]*$)/);
+  if (!match) {
+    console.warn(
+      `[obd2] ATDPN parse failed for "${rawAtdpn}" — treating as CAN (safe fallback)`,
+    );
+    return { type: "unknown", name: "unknown" };
+  }
+
+  const code = parseInt(match[0], 16);
+  if (code >= 6 && code <= 9) return { type: "can",     name: "CAN" };
+  if (code >= 1 && code <= 5) return { type: "non-can", name: NAMES[code] ?? "non-CAN" };
+  return { type: "unknown", name: "unknown" };
+}
+
 class ClassicTransport implements Obd2Transport {
   readonly kind: TransportKind = "classic";
   private device: BluetoothDevice | null = null;
@@ -1334,7 +1379,10 @@ class Obd2Manager {
       return { ok: false, message: handshakeFailure };
     }
 
-    this.setStatus("connected", "Connected");
+    this.setStatus(
+      "connected",
+      this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
+    );
     // Remember this adapter so the next session can auto-reconnect without
     // making the user re-scan. Replaces any previously saved adapter.
     saveAdapter({
@@ -1407,7 +1455,10 @@ class Obd2Manager {
       return { ok: false, message: handshakeFailure };
     }
 
-    this.setStatus("connected", "Connected");
+    this.setStatus(
+      "connected",
+      this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
+    );
     // Refresh the timestamp so the most-recently-used adapter stays accurate.
     saveAdapter({
       deviceId: saved.deviceId,
@@ -1483,6 +1534,31 @@ class Obd2Manager {
       return "Adapter reached the ECU but the vehicle returned no data. Try cycling the key and retrying.";
     }
     if (/41\s*00/.test(pids)) {
+      // Protocol detection: query the protocol the ELM327 locked onto during
+      // the 0100 auto-detect pass. ATDPN is only valid after 0100 succeeds.
+      if (DEBUG_OBD2) console.log(`[obd2 handshake] → ATDPN`);
+      const dpnRaw = (await this.sendCommand("ATDPN", 2000))?.trim() ?? "";
+      const { type: pType, name: pName } = classifyProtocol(dpnRaw);
+      this.protocolType = pType;
+      this.protocolName = pName;
+      // Always log — protocol identity is critical context for field debugging.
+      console.log(
+        `[obd2 handshake] protocol: "${dpnRaw}" → ${pType} (${pName})`,
+      );
+
+      // Non-CAN: switch to headers-off mode so response frames arrive without
+      // the 3-byte non-CAN headers. The flat-scan path in dtcParser already
+      // handles this format, and extractPidDataBytes/parseMultiPidResponse
+      // both work on the resulting 2-char token stream.
+      //
+      // CAN vehicles: ATH1 is already set and must stay — the frame-aware
+      // parser depends on 3-char CAN IDs to route frames. No ATH0 is sent.
+      if (pType === "non-can") {
+        if (DEBUG_OBD2) console.log(`[obd2 handshake] non-CAN: → ATH0 (headers off)`);
+        await this.sendCommand("ATH0", 2000);
+        console.log(`[obd2 handshake] ATH0 applied for ${pName}`);
+      }
+
       console.log(`[obd2 handshake] === PASS ===`);
       return null;
     }
@@ -1799,7 +1875,11 @@ class Obd2Manager {
 
     // Fast tier — batch up to 6 unique mode-01 PIDs per multi-PID command.
     const fastCodes = Array.from(fastByCode.keys());
-    for (let i = 0; i < fastCodes.length; i += 6) {
+    // Non-CAN vehicles (ISO 9141, KWP2000, J1850) can mishandle multi-PID
+    // requests — start with single-PID polling so failures are clean misses
+    // rather than noisy partial-response fallback cascades. CAN stays at 6.
+    const batchSize = this.protocolType === "non-can" ? 1 : 6;
+    for (let i = 0; i < fastCodes.length; i += batchSize) {
       const codes = fastCodes.slice(i, i + 6);
       const signals = codes.flatMap((c) => fastByCode.get(c) ?? []);
       await this.pollMultiplePids(codes, signals);
