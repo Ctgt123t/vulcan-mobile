@@ -21,6 +21,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - OBDb PID database, persistent Railway Volume storage (confirmed surviving redeploys)
 - iOS startup crash resolved (reanimated v4 / worklets misconfig)
 - Debug logging gated behind `EXPO_PUBLIC_DEBUG_OBD2`
+- **DTC parsing verified accurate on 2011 GMC Sierra 4.8L** — multi-ECU CAN responses correctly parsed (0 phantom codes), P0442 surfaces correctly under Permanent Codes, O2 sensors read ~0.45V (not 115V). See DTC Parsing Architecture section.
 - **Diagnostic engine Stage 1 (single-shot assessment):** OBD2 screen → Smart Diagnose → structured differential with stance, hypotheses + evidence, single next step. New route `/smart-diagnose`, new endpoint `/api/assess`, ring buffer in `Obd2Manager`. See architecture section below.
 
 **Open action items (near-term):**
@@ -108,6 +109,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - Diagnose mode scans the presenting complaint for spec mentions and proactively injects any verified specs as a system context block so Claude reasons against real data instead of recollection
 - **Selectable live PID monitoring** (`app/obd2.tsx` + `app/obd2-pids.tsx`) — the OBD2 screen's live data view polls only the signals the technician has selected. Selection is keyed by OBDb **signal id** (e.g. `RPM`, `MIL`, `DTC_CNT`), not command code, so signals sharing a command response (MIL + DTC_CNT + 22 readiness bits all live at `01 01`) can be selected and decoded independently. The selection screen at `/obd2-pids` groups signals by category (Engine / Fuel System / Air-Intake / Oxygen Sensors / Emissions / Speed-Transmission / Electrical / Other) — categories are assigned server-side in `pidDatabase.js:categorizeSignal`. Status signals (bit-level / enum) get a `STATUS` badge in the picker. Saved presets and per-vehicle selected/unsupported sets live in AsyncStorage under `vulcan:pids:*:v2:<vehicleKey>`. **Scaling:** all preference storage is per-device, no backend per-user state added
 - **PID polling driver** (`lib/obd2.ts`) — `startPolling(selectedPids, options)` drives the tick loop. Selected signals are grouped by command code; each unique command is sent ONCE per cycle and every selected signal at that code is decoded from the shared response using its own bit-range (`startBit`, `length`). Mode 01 commands batched up to 6 per request via ELM327 multi-PID syntax. Mode 22 manufacturer commands poll sequentially every Nth tick. **Critical detail:** `LiveValues` is keyed by signal id and updated immutably (`{...liveData, [id]: {...}}`) — in-place mutation would short-circuit React's `prevState === nextState` check and gauges would never re-render. Single-command fallback fires automatically when a multi-PID batch returns partial results (common on GM ECUs that only answer the first PID). Per-signal consecutive-miss counter promotes to `unsupportedPids` only after `MAX_CONSECUTIVE_MISSES`. All `sendCommand` IO is serialized via a Promise mutex inside `Obd2Manager` so bitmask queries / VIN reads / poll commands can't race on the shared CommandBuffer. `getSupportedMode01Pids()` walks PID 00/20/40/60/80/A0/C0/E0 support bitmasks for selection-UI filtering
+- **`decodePidGeneric` byte-slicing fix:** When `startBit=null` and `length=N` (byte-aligned signal), the function slices the input to `ceil(N/8)` bytes before computing `raw`. Without this, a command returning multiple signals (e.g. PID `0x14` returns [O2 voltage, STFT B1S1]) would fold all bytes into `raw` before applying the divisor, producing ~115V instead of ~0.45V. The fix is in `lib/obd2.ts:decodePidGeneric`. Signals with `startBit != null` (bit-field extraction path) are unaffected.
 - **Live data display** has two sub-sections driven by `isLiveMonitorable` / `isStatusSignal`. Byte-aligned scalar readings (RPM, coolant temp, throttle, fuel trims) render as numeric gauges. Bit-level + enum signals (MIL, readiness flags, DTC count) render in a separate Status panel as colored `MIL: ON` / `Catalyst Ready: Ready` / `Stored DTCs: 3` rows. Both sub-sections update on the same polling loop
 - **Units handling** lives in `lib/units.ts`. `formatLiveValue(raw, obdbUnit, {system, signalName, signalId})` and `formatStatusValue(raw, unit, enum)` are pure display-layer conversions that take raw OBDb-unit values (celsius / kPa / km/h / kilometers) and return US-imperial output by default (°F / psi / mph / mi). Internal `LiveValue.value` stays in the raw decoded units so any downstream consumer (Diagnose-mode injection when that lands, records export) has a single source of truth. `UnitSystem` is `"imperial"` by default — a future user preference reads from AsyncStorage and passes the alternate system into the formatters without any API change. Signal-aware overrides: barometric pressure (BARO / signal name contains "baromet") stays in **kPa** to match scan-tool convention and stay comparable to MAP; EVAP vapor pressure (EVAP_VP / EVAP_VPA / EVAP_VP_WIDE / signal name contains "vapor pressure") converts to **inH₂O** since the values are tiny and US service literature uses inH₂O for EVAP leak diagnosis. MAF stays in g/s in both systems (universal tech convention)
 - PID definitions live in `server/pidDatabase.js`:
@@ -224,7 +226,11 @@ Some ECUs (confirmed on 2011 GMC Sierra PCM) prepend a count byte `B` before the
 
 ### Multi-frame responses
 
-For >3 DTCs a vehicle uses ISO-TP multi-frame (first-frame PCI = `0x10-0x1F`). Detected by `bytes[i-2] & 0xF0 === 0x10`. Currently falls back to stream-scan until `00 00` — same as the old behavior. Full ISO-TP reassembly across consecutive frames is a future improvement; a `WARN` is emitted in `DEBUG_OBD2` builds when this path is taken.
+For >3 DTCs a vehicle uses ISO-TP multi-frame. The three-pass pipeline in `lib/dtcParser.ts` handles this fully:
+- **First Frame (FF)**: PCI `0x10–0x1F`. Total payload length = `((PCI & 0x0F) << 8) | data[1]`. First 6 payload bytes carried in the FF.
+- **Consecutive Frames (CF)**: PCI `0x20–0x2F`. Each CF carries 7 more payload bytes. CFs from the same CAN ID are appended to the FF accumulator regardless of interleaving with other ECUs' frames.
+- **Flow control**: handled automatically by the ELM327. We never send FC frames in application code.
+- Payload is trimmed to the total length declared in the FF after all CFs are collected.
 
 ### Module structure
 
@@ -249,14 +255,17 @@ The three-pass pipeline correctly handles interleaved multi-ECU CAN responses:
 
 ### Debug assertions (DEBUG_OBD2=1)
 
-The parser emits `[dtc parse] WARN:` or `[dtc parse] SUSPICIOUS:` console messages when:
-- No PCI context was available (stream-scan fallback used)
-- Multi-frame ISO-TP detected (reassembly fallback)
-- Count-byte claimed N codes but fewer bytes were available (truncated frame)
-- Unconsumed non-null bytes remain in a no-count frame after the null-pair stop
+The parser (prefix `[dtc-parser]`) emits `WARN:` or `SUSPICIOUS:` messages when:
+- Non-CAN / ATH0 path taken (no 3-char CAN ID tokens found)
+- SF frame declares a length but the frame is shorter than declared
+- FF assembled fewer bytes than the declared total (missing CFs)
+- Orphan CF arrived with no preceding FF from that CAN ID
+- Count-byte claimed N codes but fewer bytes were available
+- Unconsumed non-null bytes after no-count decode stop
 - Decoded code count exceeds 20 (implausibly high — indicates format mismatch)
+- Unknown PCI type encountered
 
-Keep `EXPO_PUBLIC_DEBUG_OBD2=1` set during first-run testing on any new vehicle make/model to catch format surprises early.
+Keep `EXPO_PUBLIC_DEBUG_OBD2=1` set during first-run testing on any new vehicle make/model. The self-test also runs at app startup and logs `[dtc-test] ALL N PASSED` — if it fails, do not proceed to vehicle testing.
 
 ## Diagnostic Engine Architecture
 
@@ -284,7 +293,7 @@ The diagnostic engine is a local-state + LLM-reasoning hybrid. Core principles (
 ```
 Tech taps "Smart Diagnose" on OBD2 screen
   ↓
-obd2.tsx calls setSmartDiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, freezeFrame})
+obd2.tsx calls setSmartDiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, permanentDtcs, freezeFrame})
   ↓
 Navigate to /smart-diagnose
   ↓
