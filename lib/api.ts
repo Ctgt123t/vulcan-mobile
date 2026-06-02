@@ -7,7 +7,7 @@ import type {
   Tsb,
   VehicleInfo,
 } from "./types";
-import type { DiagnosticAssessment, DiagnosticSnapshot } from "./assessmentTypes";
+import type { ApiCostData, DiagnosticAssessment, DiagnosticSnapshot } from "./assessmentTypes";
 
 const BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(
   /\/+$/,
@@ -288,6 +288,11 @@ export async function ask(
 
 export class AssessError extends Error {}
 
+export interface AssessResult {
+  assessment: DiagnosticAssessment;
+  cost: ApiCostData | null;
+}
+
 export async function assess(
   vehicle: VehicleInfo,
   vin: string | null,
@@ -296,7 +301,8 @@ export async function assess(
   snapshot: DiagnosticSnapshot,
   recalls: Recall[] = [],
   tsbs: Tsb[] = [],
-): Promise<DiagnosticAssessment> {
+  sessionId?: string | null,
+): Promise<AssessResult> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new AssessError(
       "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
@@ -316,6 +322,7 @@ export async function assess(
     snapshot,
     recalls,
     tsbs,
+    sessionId: sessionId ?? null,
   });
 
   let res: Response;
@@ -351,8 +358,11 @@ export async function assess(
     throw new AssessError(msg);
   }
 
-  const result = json as { assessment: DiagnosticAssessment };
-  return result.assessment;
+  const result = json as { assessment: DiagnosticAssessment; cost?: ApiCostData | null };
+  return {
+    assessment: result.assessment,
+    cost: result.cost ?? null,
+  };
 }
 
 // Looks up a DTC against the backend's SAE + manufacturer-specific database
@@ -386,14 +396,24 @@ export async function fetchDtcDefinition(
     "ngrok-skip-browser-warning": "true",
   };
 
+  // 15-second timeout so a slow Claude fallback (uncached code) degrades to
+  // the error state rather than spinning indefinitely.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET", headers });
-  } catch {
+    res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if ((err as Error).name === "AbortError") {
+      throw new DiagnoseError("Definition lookup timed out. Try again.");
+    }
     throw new DiagnoseError(
       "Network error. Check your connection and try again.",
     );
   }
+  clearTimeout(timeoutId);
 
   if (res.status === 404) return null;
   if (!res.ok) {

@@ -373,8 +373,20 @@ function EntryDetail({ entry }: { entry: DiagnosticLogEntry }) {
     case "assessment": {
       const a = entry.assessment;
       if (!a) return null;
+      const c = entry.apiCost;
       return (
         <View style={styles.detailBlock}>
+          {c && (
+            <>
+              <Text style={styles.detailLabel}>API COST</Text>
+              <Text style={styles.detailValue}>
+                ${c.cost.total.toFixed(4)} total — input ${c.cost.input.toFixed(4)} · cache-write ${c.cost.cacheWrite.toFixed(4)} · cache-read ${c.cost.cacheRead.toFixed(4)} · output ${c.cost.output.toFixed(4)}
+              </Text>
+              <Text style={styles.detailMono}>
+                tokens: in={c.tokens.input} cw={c.tokens.cacheWrite} cr={c.tokens.cacheRead} out={c.tokens.output} · {c.model}
+              </Text>
+            </>
+          )}
           <Text style={styles.detailLabel}>Stance</Text>
           <Text style={styles.detailValue}>{a.stance} — {a.stance_reason}</Text>
           {a.hypotheses.map((h, i) => (

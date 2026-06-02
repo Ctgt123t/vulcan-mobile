@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { cacheFile } from "./cacheDir.js";
+import { logApiCost } from "./costLogger.js";
 
 // ----------------------------------------------------------------------------
 // Claude fallback for DTC codes that aren't in the static database.
@@ -207,6 +208,8 @@ export async function fetchDtcFallback(code, make, callClaude) {
       persist();
       throw err;
     }
+
+    logApiCost(response.usage, FALLBACK_MODEL, { callType: "dtc-fallback" });
 
     const toolUse = response.content.find((b) => b.type === "tool_use");
     if (!toolUse || toolUse.name !== "provide_dtc_definition") {

@@ -109,6 +109,30 @@ export interface UnverifiedSpec {
   purpose: string;
 }
 
+// ---- API cost data (returned by /api/assess alongside the assessment) ----
+
+export interface ApiTokenCounts {
+  input: number;      // uncached input tokens
+  cacheWrite: number; // tokens written to 5-min ephemeral cache
+  cacheRead: number;  // tokens served from cache (cheaper)
+  output: number;
+}
+
+export interface ApiCostBreakdown {
+  input: number;      // USD
+  cacheWrite: number; // USD
+  cacheRead: number;  // USD
+  output: number;     // USD
+  total: number;      // USD — sum of all four
+}
+
+// Full cost data for one Claude API call, as returned by the server.
+export interface ApiCostData {
+  model: string;
+  tokens: ApiTokenCounts;
+  cost: ApiCostBreakdown;
+}
+
 export interface DiagnosticAssessment {
   presenting_complaint: string;
   stance: Stance;

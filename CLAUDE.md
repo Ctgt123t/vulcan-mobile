@@ -354,6 +354,57 @@ The `NextStep` type includes `requested_data?: RequestedDataItem[]` (present whe
 
 Claude may apply diagnostic logic freely from its training. It may NOT state specific numeric factory specifications (torque, pressures, capacities, expected sensor ranges) unless that value was injected in the verified data blocks. Any needed but unavailable spec must be listed in `unverified_specs_needed` with parameter name and purpose. This rule is in the system prompt and enforced by making `unverified_specs_needed` a required schema field.
 
+## API Cost Measurement
+
+Every Claude API call is instrumented on the server. Cost data is captured from `response.usage`, computed against verified per-token rates, and persisted to the Railway Volume.
+
+### Pricing config (`server/costConfig.js`)
+
+Single file with all per-token rates. **Verify rates before making pricing decisions** — the file header shows the last-verified date and source URL. Update the date when rates change.
+
+| Model | Input | Cache Write (5m) | Cache Read | Output |
+|-------|-------|-----------------|------------|--------|
+| claude-opus-4-6 | $5/MTok | $6.25/MTok | $0.50/MTok | $25/MTok |
+| claude-sonnet-4-6 | $3/MTok | $3.75/MTok | $0.30/MTok | $15/MTok |
+| claude-haiku-4-5-20251001 | $1/MTok | $1.25/MTok | $0.10/MTok | $5/MTok |
+
+### Cost logger (`server/costLogger.js`)
+
+- **Per-call**: `logApiCost(usage, model, { sessionId, callType })` — fire-and-forget, zero latency impact
+- **Aggregates**: today / this week / all-time, by call type, by model
+- **Cost breakdown**: uncached input vs cache-write vs cache-read vs output (tells you which optimisation lever matters)
+- **Persists**: `costEntries.json` (last 500 calls) + `costAggregate.json` on the Railway Volume
+- **Startup log**: prints today's cost + all-time total on every Railway deploy
+- **Periodic log**: prints a summary line to Railway logs every 10 API calls
+
+### Reading the results
+
+**Railway logs** (during a session): look for `[cost]` lines showing per-call breakdown and `[cost] summary` lines every 10 calls.
+
+**Aggregate endpoint**: `GET /api/costs/summary` returns the full aggregate + per-session breakdown + 50 most recent calls. Example:
+```
+curl https://vulcan-backend-production.up.railway.app/api/costs/summary | python -m json.tool
+```
+
+**On-device diagnostic log** (shop testing): every Smart Diagnose assessment entry shows the full cost breakdown. Open Diagnostic Log → expand a session → expand an assessment entry to see tokens and dollar cost.
+
+**Cost breakdown fields explained:**
+- `input`: tokens NOT served from cache — full price
+- `cacheWrite`: tokens written to 5-min ephemeral cache — 1.25× input price (one-time cost)
+- `cacheRead`: tokens served from cache — 0.1× input price (very cheap)
+- `output`: generated tokens — most expensive per token at Opus pricing
+
+If `cacheRead` is large relative to `input`, caching is working well. If `output` dominates, model tiering (Haiku for lightweight steps) is the lever to pull.
+
+### Call types logged
+
+| callType | Endpoint | Model |
+|----------|----------|-------|
+| `assessment` | `/api/assess` (Smart Diagnose) | claude-opus-4-6 |
+| `diagnose` | `/api/diagnose` (conversational Diagnose) | claude-opus-4-6 |
+| `ask-vulcan` | `/api/ask` | claude-sonnet-4-6 |
+| `dtc-fallback` | background DTC lookup | claude-sonnet-4-6 |
+
 ## Current Development Priorities
 
 - **Claude-directed live monitoring** — see roadmap section above

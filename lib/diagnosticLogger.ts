@@ -18,7 +18,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Share } from "react-native";
-import type { DiagnosticAssessment } from "./assessmentTypes";
+import type { ApiCostData, DiagnosticAssessment } from "./assessmentTypes";
 
 export type LogEntryType =
   | "session_start"
@@ -61,6 +61,7 @@ export interface DiagnosticLogEntry {
   // assessment
   assessment?: DiagnosticAssessment;
   operatingCondition?: string;
+  apiCost?: ApiCostData | null; // cost of the Claude call that produced this assessment
   // self_test
   selfTestPassed?: number;
   selfTestFailed?: number;
@@ -273,9 +274,16 @@ class DiagnosticLogger {
             break;
           case "assessment": {
             const h = e.assessment?.hypotheses?.[0];
+            const costStr = e.apiCost ? ` — $${e.apiCost.cost.total.toFixed(4)}` : "";
             lines.push(
-              `  [${t}] Smart Diagnose: ${h ? `${h.name} (${h.confidence})` : "no hypotheses"}`,
+              `  [${t}] Smart Diagnose: ${h ? `${h.name} (${h.confidence})` : "no hypotheses"}${costStr}`,
             );
+            if (e.apiCost) {
+              lines.push(
+                `       tokens: in=${e.apiCost.tokens.input} cw=${e.apiCost.tokens.cacheWrite} ` +
+                `cr=${e.apiCost.tokens.cacheRead} out=${e.apiCost.tokens.output}`,
+              );
+            }
             break;
           }
           case "pid_snapshot": {

@@ -100,16 +100,18 @@ export default function SmartDiagnoseScreen() {
         snapshot,
         recalls,
         tsbs,
+        diagnosticLogger.getCurrentSessionId(),
       );
       diagnosticLogger.log({
         type: "assessment",
         vehicle: vehicle.year
           ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
           : undefined,
-        assessment: result,
+        assessment: result.assessment,
         operatingCondition: condition,
+        apiCost: result.cost,
       });
-      setPhase({ kind: "result", assessment: result });
+      setPhase({ kind: "result", assessment: result.assessment });
     } catch (err) {
       const msg =
         err instanceof AssessError

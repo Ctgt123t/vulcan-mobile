@@ -36,6 +36,7 @@ import {
   getVehiclePids,
   pidStats,
 } from "./pidDatabase.js";
+import { logApiCost, getCostSummary, costStats } from "./costLogger.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -393,7 +394,7 @@ function buildTsbBlock(tsbs) {
 }
 
 app.post("/api/diagnose", async (req, res) => {
-  const { vehicle, messages, recalls, tsbs } = req.body ?? {};
+  const { vehicle, messages, recalls, tsbs, sessionId } = req.body ?? {};
 
   if (!vehicle || typeof vehicle !== "object") {
     return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
@@ -494,6 +495,11 @@ app.post("/api/diagnose", async (req, res) => {
       }),
     );
 
+    logApiCost(response.usage, DIAGNOSE_MODEL, {
+      sessionId: typeof sessionId === "string" ? sessionId : null,
+      callType: "diagnose",
+    });
+
     const toolUse = response.content.find((b) => b.type === "tool_use");
     if (!toolUse) {
       return res.status(502).json({
@@ -542,7 +548,7 @@ Guidelines:
 - Respond in plain text. No tools, no JSON, no structured output. Just a helpful answer.`;
 
 app.post("/api/ask", async (req, res) => {
-  const { messages, vehicle, recalls, tsbs } = req.body ?? {};
+  const { messages, vehicle, recalls, tsbs, sessionId } = req.body ?? {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "Missing or empty 'messages'." });
@@ -715,6 +721,11 @@ app.post("/api/ask", async (req, res) => {
       .map((b) => b.text)
       .join("")
       .trim();
+
+    logApiCost(response.usage, ASK_MODEL, {
+      sessionId: typeof sessionId === "string" ? sessionId : null,
+      callType: "ask-vulcan",
+    });
 
     if (cacheKey && text.length > 0) {
       setCached(cacheKey, vehicle, lastUserText, text);
@@ -1040,7 +1051,7 @@ Always state explicitly when you are reasoning about the relationship between th
 Call emit_diagnostic_assessment exactly once with your complete structured assessment. Do not produce any plain-text response.`;
 
 app.post("/api/assess", async (req, res) => {
-  const { vehicle, vin, mileage, complaint, snapshot, recalls, tsbs } =
+  const { vehicle, vin, mileage, complaint, snapshot, recalls, tsbs, sessionId } =
     req.body ?? {};
 
   if (!vehicle || typeof vehicle !== "object") {
@@ -1160,6 +1171,11 @@ app.post("/api/assess", async (req, res) => {
       }),
     );
 
+    const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
+      sessionId: typeof sessionId === "string" ? sessionId : null,
+      callType: "assessment",
+    });
+
     const toolUse = response.content.find((b) => b.type === "tool_use");
     if (!toolUse || toolUse.name !== "emit_diagnostic_assessment") {
       return res.status(502).json({
@@ -1167,10 +1183,17 @@ app.post("/api/assess", async (req, res) => {
       });
     }
 
-    return res.json({ assessment: toolUse.input });
+    // Return cost alongside the assessment so the app can log it per-session.
+    return res.json({ assessment: toolUse.input, cost: costData ?? null });
   } catch (err) {
     return respondWithError(res, err, "assess");
   }
+});
+
+// Cost summary — per-session and aggregate breakdown.
+// curl https://<railway-url>/api/costs/summary | jq .
+app.get("/api/costs/summary", (_req, res) => {
+  res.json(getCostSummary());
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -1182,12 +1205,18 @@ app.listen(PORT, "0.0.0.0", () => {
   const dfb = dtcFallbackStats();
   const vs = vehicleSpecsStats();
   const p = pidStats();
+  const cs = costStats();
   console.log(
     `[startup] cache rollup: ` +
       `askVulcan=${c.entries}entries/hits=${c.hits}/misses=${c.misses} | ` +
       `dtcFallback=${dfb.entries}entries/hits=${dfb.hits}/claudeCalls=${dfb.claudeCalls} | ` +
       `vehicleSpecs=${vs.entries}entries/hits=${vs.hits}/providerCalls=${vs.providerCalls} | ` +
       `pids=${p.cachedVehicles}vehicles/hits=${p.hits}/fetches=${p.fetches}`,
+  );
+  console.log(
+    `[startup] api cost: today=$${cs.todayCost.toFixed(4)} ` +
+      `(${cs.todayCalls} calls, ${cs.todaySessions} sessions) | ` +
+      `allTime=$${cs.allTimeCost.toFixed(4)} (${cs.allTimeCalls} calls)`,
   );
   console.log(`Vulcan backend listening on http://0.0.0.0:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
