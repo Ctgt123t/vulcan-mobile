@@ -150,19 +150,22 @@ export default function Obd2Screen() {
     prevConnected.current = isConnected;
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-stamp the session's vehicle when the VIN decodes after connect.
-  // Fires whenever vin or vehicle identity changes while connected.
+  // Re-stamp all session entries when the Mode 09 VIN is available post-connect.
+  // Gate is raw VIN only — vehicle.year is NOT required so the no-decode case
+  // (NHTSA offline/timeout) still gets attributed by raw VIN. Sessions are
+  // per-connect so the sweep is unambiguous: every entry under sessionId
+  // belongs to this physical vehicle connection.
   useEffect(() => {
     if (!isConnected) return;
-    if (!vin || !vehicle.year) return;
-    // Only re-stamp if the VIN differs from what we recorded at session start.
+    if (!vin) return; // raw Mode 09 VIN is the only required identifier
+    // Only sweep if the VIN changed from what was recorded at session start.
     if (vin === sessionStartVinRef.current) return;
     sessionStartVinRef.current = vin;
     diagnosticLogger.updateSessionVehicle({
-      year: vehicle.year,
+      year: vehicle.year,   // empty string when NHTSA decode failed — intentional
       make: vehicle.make,
       model: vehicle.model,
-      vin,
+      vin,                  // always the raw Mode 09 VIN
     });
   }, [vin, vehicle.year, vehicle.make, vehicle.model, isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 

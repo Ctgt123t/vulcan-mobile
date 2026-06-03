@@ -145,19 +145,25 @@ class DiagnosticLogger {
     return this.currentSessionId;
   }
 
-  // Re-stamp the active session's vehicle after OBD2 VIN decode completes.
-  // Fixes the "one vehicle behind" bug where startSession() fires before the
-  // new VIN has been decoded, stamping the previous vehicle on the new session.
+  // Re-stamp every entry in the active session with the resolved vehicle.
+  // Called once per connection when the Mode 09 VIN decodes (or when the raw
+  // VIN is available even if NHTSA decode failed). Sweeps all entries rather
+  // than just session_start so the JSON export is consistently attributed —
+  // DTC scan entries, PID snapshots, and assessments all agree with the
+  // session header. Sessions are per-connect so every entry under the current
+  // sessionId belongs to one physical vehicle connection; the sweep is safe.
   updateSessionVehicle(vehicle: VehicleRef): void {
     if (!this.currentSessionId) return;
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (e.sessionId === this.currentSessionId && e.type === "session_start") {
-        this.entries[i] = { ...e, vehicle };
-        this.dirty = true;
-        this.scheduleFlush();
-        return;
+    let updated = false;
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i].sessionId === this.currentSessionId) {
+        this.entries[i] = { ...this.entries[i], vehicle };
+        updated = true;
       }
+    }
+    if (updated) {
+      this.dirty = true;
+      this.scheduleFlush();
     }
   }
 
@@ -275,7 +281,9 @@ class DiagnosticLogger {
     for (const session of sessions) {
       const v = session.vehicle;
       const vehicleLabel = v
-        ? `${v.year} ${v.make} ${v.model}${v.vin ? ` (${v.vin})` : ""}`
+        ? ([v.year, v.make, v.model].filter(Boolean).join(" ") ||
+            (v.vin ? `VIN ${v.vin}` : "Unknown vehicle")) +
+          (v.vin ? ` (${v.vin})` : "")
         : "Unknown vehicle";
       const date = new Date(session.startedAt).toLocaleString();
       lines.push(`\n== ${vehicleLabel} ==`);

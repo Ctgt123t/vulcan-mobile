@@ -24,7 +24,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **DTC parsing verified accurate on 2011 GMC Sierra 4.8L** — multi-ECU CAN responses correctly parsed (0 phantom codes), P0442 surfaces correctly under Permanent Codes, O2 sensors read ~0.45V (not 115V). See DTC Parsing Architecture section.
 - **Diagnostic engine Stage 1 (single-shot assessment):** OBD2 screen → Smart Diagnose → structured differential with stance, hypotheses + evidence, single next step. New route `/smart-diagnose`, new endpoint `/api/assess`, ring buffer in `Obd2Manager`. See architecture section below.
 - **Cost tracking across all modes:** `/api/ask` and `/api/diagnose` return cost in their responses. The mobile app logs `ask_vulcan` and `diagnose_turn` entries to the on-device diagnostic log with full token/cost breakdown. `updateSessionVehicle()` added to `DiagnosticLogger` for vehicle re-attribution after VIN decode.
-- **Vehicle attribution fix:** The OBD2 screen's diagnostic session now correctly re-stamps its vehicle via `updateSessionVehicle()` once the new VIN decodes after connection, fixing the "one vehicle behind" session attribution bug.
+- **Vehicle attribution fix:** `updateSessionVehicle()` sweeps every entry in the current session (not just `session_start`) when the Mode 09 VIN resolves post-connect. Gate is raw VIN only — no `vehicle.year` required — so NHTSA decode failures still get attributed by VIN. Sessions are per-connect so the full-session sweep is unambiguous. Pre-2008 / no-Mode-09 vehicles can't self-attribute; see Known Gaps.
 - **Intake form keyboard fix (Android):** Smart Diagnose and Diagnose intake forms now track keyboard height and apply extra `paddingBottom` so the mileage/complaint fields stay visible above the keyboard on Android.
 
 **Open action items (near-term):**
@@ -166,6 +166,10 @@ Apple's MFi restriction blocks Bluetooth Classic on iOS for non-licensed periphe
 **For end-user recommendations:** Vulcan should prefer BLE-capable adapters in marketing/onboarding copy. Classic Bluetooth adapters work on Android only — be explicit about this when guiding users to a purchase.
 
 ## Known Gaps
+
+### Pre-2008 / no-Mode-09 diagnostic log attribution
+
+Vehicles that don't support Mode 09 PID 02 return `null` from `obd2.getVin()`, so no raw VIN is ever available. `updateSessionVehicle()` is never called, and the diagnostic session stays attributed to whatever vehicle was in context at connect time (typically the previous session's vehicle). This is **expected behavior, not a bug** — there is no hardware identifier to key on without Mode 09. For clean shop-test data on these vehicles, the tech should manually set the vehicle in context before connecting. This limitation is related to the offline-resilience gap: even when Mode 09 is supported, a failed NHTSA decode (no network) still triggers `updateSessionVehicle()` using the raw VIN, so at minimum the VIN is correct even when year/make/model are blank. What can't be recovered is the case where Mode 09 returns null entirely.
 
 ### Offline resilience
 

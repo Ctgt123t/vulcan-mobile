@@ -155,7 +155,8 @@ function SessionCard({
 }) {
   const v = session.vehicle;
   const vehicleLabel = v
-    ? `${v.year} ${v.make} ${v.model}`
+    ? ([v.year, v.make, v.model].filter(Boolean).join(" ") ||
+        (v.vin ? `VIN ${v.vin}` : "Unknown vehicle"))
     : "Unknown vehicle";
   const date = new Date(session.startedAt);
   const dateLabel = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
