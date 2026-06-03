@@ -285,6 +285,8 @@ function EntryIcon({ type }: { type: DiagnosticLogEntry["type"] }) {
     parser_warning: { name: "warning", color: colors.dangerText },
     pid_snapshot: { name: "pulse-outline", color: colors.okText },
     assessment: { name: "analytics-outline", color: colors.accent },
+    ask_vulcan: { name: "chatbubble-outline", color: colors.accent },
+    diagnose_turn: { name: "medkit-outline", color: colors.warnText },
     protocol: { name: "hardware-chip-outline", color: colors.okText },
     self_test: { name: "checkmark-circle-outline", color: colors.okText },
     session_start: { name: "play-circle-outline", color: colors.muted },
@@ -315,6 +317,15 @@ function summarizeEntry(entry: DiagnosticLogEntry): string {
       return h
         ? `Smart Diagnose: ${h.name} (${h.confidence})`
         : "Smart Diagnose: no hypotheses";
+    }
+    case "ask_vulcan": {
+      const costStr = entry.apiCost ? ` — $${entry.apiCost.cost.total.toFixed(4)}` : "";
+      const q = entry.queryText ? ` "${entry.queryText}"` : "";
+      return `Ask Vulcan:${q}${costStr}`;
+    }
+    case "diagnose_turn": {
+      const costStr = entry.apiCost ? ` — $${entry.apiCost.cost.total.toFixed(4)}` : "";
+      return `Diagnose (${entry.diagnoseTurnKind ?? "turn"})${costStr}`;
     }
     case "protocol":
       return `Protocol: ${entry.protocol ?? "unknown"}`;
@@ -403,6 +414,23 @@ function EntryDetail({ entry }: { entry: DiagnosticLogEntry }) {
               <Text style={styles.detailValue}>{a.data_ceiling_note}</Text>
             </>
           )}
+        </View>
+      );
+    }
+
+    case "ask_vulcan":
+    case "diagnose_turn": {
+      const c = entry.apiCost;
+      if (!c) return null;
+      return (
+        <View style={styles.detailBlock}>
+          <Text style={styles.detailLabel}>API COST</Text>
+          <Text style={styles.detailValue}>
+            ${c.cost.total.toFixed(4)} total — input ${c.cost.input.toFixed(4)} · cache-write ${c.cost.cacheWrite.toFixed(4)} · cache-read ${c.cost.cacheRead.toFixed(4)} · output ${c.cost.output.toFixed(4)}
+          </Text>
+          <Text style={styles.detailMono}>
+            tokens: in={c.tokens.input} cw={c.tokens.cacheWrite} cr={c.tokens.cacheRead} out={c.tokens.output} · {c.model}
+          </Text>
         </View>
       );
     }

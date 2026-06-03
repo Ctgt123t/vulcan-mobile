@@ -171,7 +171,8 @@ export async function diagnose(
   messages: ChatMessage[],
   recalls: Recall[] = [],
   tsbs: Tsb[] = [],
-): Promise<AssistantTurn> {
+  sessionId?: string | null,
+): Promise<{ turn: AssistantTurn; cost: ApiCostData | null }> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
       "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
@@ -188,6 +189,7 @@ export async function diagnose(
     messages: truncateForApi(messages),
     recalls,
     tsbs,
+    sessionId: sessionId ?? null,
   });
 
   let res: Response;
@@ -223,7 +225,8 @@ export async function diagnose(
     throw new DiagnoseError(msg);
   }
 
-  return (json as DiagnoseResponse).turn;
+  const resp = json as DiagnoseResponse & { cost?: ApiCostData | null };
+  return { turn: resp.turn, cost: resp.cost ?? null };
 }
 
 export async function ask(
@@ -231,7 +234,8 @@ export async function ask(
   vehicle?: VehicleInfo,
   recalls: Recall[] = [],
   tsbs: Tsb[] = [],
-): Promise<string> {
+  sessionId?: string | null,
+): Promise<{ text: string; cost: ApiCostData | null }> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
       "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
@@ -248,6 +252,7 @@ export async function ask(
     vehicle,
     recalls,
     tsbs,
+    sessionId: sessionId ?? null,
   });
 
   let res: Response;
@@ -283,7 +288,8 @@ export async function ask(
     throw new DiagnoseError(msg);
   }
 
-  return (json as { text: string }).text ?? "";
+  const resp = json as { text: string; cost?: ApiCostData | null };
+  return { text: resp.text ?? "", cost: resp.cost ?? null };
 }
 
 export class AssessError extends Error {}

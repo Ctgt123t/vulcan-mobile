@@ -111,9 +111,30 @@ export default function Obd2Screen() {
 
   // Diagnostic logging: start/end sessions on connection transitions, capture
   // periodic PID snapshots. Session start includes vehicle and protocol info.
+  //
+  // Vehicle attribution fix: when the adapter connects, the VehicleContext
+  // still holds the PREVIOUS vehicle (we keep it displayed per UX preference).
+  // The new VIN is decoded asynchronously by VehicleContext after connect.
+  // We start the session immediately (so events are grouped correctly) and
+  // re-stamp the session vehicle once the new VIN decodes via
+  // updateSessionVehicle(). This prevents the "one vehicle behind" bug where
+  // all entries in the new session are attributed to the prior vehicle.
   const prevConnected = useRef(false);
+  const sessionStartVinRef = useRef<string | null>(null);
+
+  // Keep live refs for vehicle/vin so the periodic PID snapshot interval
+  // reads current values rather than the stale closure from when isConnected
+  // first became true.
+  const vehicleForLog = useRef(vehicle);
+  const vinForLog = useRef(vin);
+  useEffect(() => {
+    vehicleForLog.current = vehicle;
+    vinForLog.current = vin;
+  }, [vehicle, vin]);
+
   useEffect(() => {
     if (isConnected && !prevConnected.current) {
+      sessionStartVinRef.current = vin ?? null;
       diagnosticLogger.startSession({
         vehicle: vehicle.year
           ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
@@ -124,12 +145,29 @@ export default function Obd2Screen() {
       });
     } else if (!isConnected && prevConnected.current) {
       diagnosticLogger.endSession();
+      sessionStartVinRef.current = null;
     }
     prevConnected.current = isConnected;
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Re-stamp the session's vehicle when the VIN decodes after connect.
+  // Fires whenever vin or vehicle identity changes while connected.
+  useEffect(() => {
+    if (!isConnected) return;
+    if (!vin || !vehicle.year) return;
+    // Only re-stamp if the VIN differs from what we recorded at session start.
+    if (vin === sessionStartVinRef.current) return;
+    sessionStartVinRef.current = vin;
+    diagnosticLogger.updateSessionVehicle({
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+      vin,
+    });
+  }, [vin, vehicle.year, vehicle.make, vehicle.model, isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Periodic PID snapshot — 30s while connected, plus triggered by DTC scan
-  // and Smart Diagnose. Gives a time-series view of sensor state.
+  // and Smart Diagnose. Uses live vehicle/vin refs to avoid stale closures.
   useEffect(() => {
     if (!isConnected) return;
     const id = setInterval(() => {
@@ -141,10 +179,12 @@ export default function Obd2Screen() {
         pidData[key] = { name: lv.name, value: lv.value, unit: lv.unit, category: lv.category };
       }
       if (Object.keys(pidData).length > 0) {
+        const v = vehicleForLog.current;
+        const currentVin = vinForLog.current;
         diagnosticLogger.log({
           type: "pid_snapshot",
-          vehicle: vehicle.year
-            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
+          vehicle: v.year
+            ? { year: v.year, make: v.make, model: v.model, vin: currentVin ?? null }
             : undefined,
           pidData,
         });

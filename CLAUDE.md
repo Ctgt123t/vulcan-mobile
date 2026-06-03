@@ -23,6 +23,9 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - Debug logging gated behind `EXPO_PUBLIC_DEBUG_OBD2`
 - **DTC parsing verified accurate on 2011 GMC Sierra 4.8L** — multi-ECU CAN responses correctly parsed (0 phantom codes), P0442 surfaces correctly under Permanent Codes, O2 sensors read ~0.45V (not 115V). See DTC Parsing Architecture section.
 - **Diagnostic engine Stage 1 (single-shot assessment):** OBD2 screen → Smart Diagnose → structured differential with stance, hypotheses + evidence, single next step. New route `/smart-diagnose`, new endpoint `/api/assess`, ring buffer in `Obd2Manager`. See architecture section below.
+- **Cost tracking across all modes:** `/api/ask` and `/api/diagnose` return cost in their responses. The mobile app logs `ask_vulcan` and `diagnose_turn` entries to the on-device diagnostic log with full token/cost breakdown. `updateSessionVehicle()` added to `DiagnosticLogger` for vehicle re-attribution after VIN decode.
+- **Vehicle attribution fix:** The OBD2 screen's diagnostic session now correctly re-stamps its vehicle via `updateSessionVehicle()` once the new VIN decodes after connection, fixing the "one vehicle behind" session attribution bug.
+- **Intake form keyboard fix (Android):** Smart Diagnose and Diagnose intake forms now track keyboard height and apply extra `paddingBottom` so the mileage/complaint fields stay visible above the keyboard on Android.
 
 **Open action items (near-term):**
 
@@ -404,6 +407,12 @@ If `cacheRead` is large relative to `input`, caching is working well. If `output
 | `diagnose` | `/api/diagnose` (conversational Diagnose) | claude-opus-4-6 |
 | `ask-vulcan` | `/api/ask` | claude-sonnet-4-6 |
 | `dtc-fallback` | background DTC lookup | claude-sonnet-4-6 |
+
+All four call types feed the same server-side cost aggregate (`/api/costs/summary`).
+
+The on-device diagnostic log also captures cost for `assessment`, `ask_vulcan`, and `diagnose_turn` entry types. Each shows the full token + dollar breakdown when expanded. DTC fallback costs are captured in the server aggregate only (the DTC endpoint returns the entry without cost; fallback fires rarely and is not high-volume).
+
+`/api/diagnose` and `/api/ask` both return `cost` in their response bodies so the mobile app can log per-turn cost. Early-return paths in `/api/ask` (DTC direct-answer, spec direct-answer, cache hit) return `cost: null` since no Claude call was made.
 
 ## Current Development Priorities
 

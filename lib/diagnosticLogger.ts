@@ -28,6 +28,8 @@ export type LogEntryType =
   | "parser_warning"
   | "pid_snapshot"
   | "assessment"
+  | "ask_vulcan"
+  | "diagnose_turn"
   | "self_test";
 
 export interface VehicleRef {
@@ -61,7 +63,11 @@ export interface DiagnosticLogEntry {
   // assessment
   assessment?: DiagnosticAssessment;
   operatingCondition?: string;
-  apiCost?: ApiCostData | null; // cost of the Claude call that produced this assessment
+  apiCost?: ApiCostData | null; // cost of the Claude call that produced this entry
+  // ask_vulcan / diagnose_turn
+  callType?: string;   // "ask-vulcan" | "diagnose" — mirrors server callType tag
+  queryText?: string;  // truncated user message for ask_vulcan entries
+  diagnoseTurnKind?: string; // "question" | "diagnosis" for diagnose_turn entries
   // self_test
   selfTestPassed?: number;
   selfTestFailed?: number;
@@ -137,6 +143,22 @@ class DiagnosticLogger {
 
   getCurrentSessionId(): string | null {
     return this.currentSessionId;
+  }
+
+  // Re-stamp the active session's vehicle after OBD2 VIN decode completes.
+  // Fixes the "one vehicle behind" bug where startSession() fires before the
+  // new VIN has been decoded, stamping the previous vehicle on the new session.
+  updateSessionVehicle(vehicle: VehicleRef): void {
+    if (!this.currentSessionId) return;
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (e.sessionId === this.currentSessionId && e.type === "session_start") {
+        this.entries[i] = { ...e, vehicle };
+        this.dirty = true;
+        this.scheduleFlush();
+        return;
+      }
+    }
   }
 
   getEntries(): DiagnosticLogEntry[] {
@@ -278,6 +300,29 @@ class DiagnosticLogger {
             lines.push(
               `  [${t}] Smart Diagnose: ${h ? `${h.name} (${h.confidence})` : "no hypotheses"}${costStr}`,
             );
+            if (e.apiCost) {
+              lines.push(
+                `       tokens: in=${e.apiCost.tokens.input} cw=${e.apiCost.tokens.cacheWrite} ` +
+                `cr=${e.apiCost.tokens.cacheRead} out=${e.apiCost.tokens.output}`,
+              );
+            }
+            break;
+          }
+          case "ask_vulcan": {
+            const costStr = e.apiCost ? ` — $${e.apiCost.cost.total.toFixed(4)}` : "";
+            const q = e.queryText ? ` "${e.queryText}"` : "";
+            lines.push(`  [${t}] Ask Vulcan:${q}${costStr}`);
+            if (e.apiCost) {
+              lines.push(
+                `       tokens: in=${e.apiCost.tokens.input} cw=${e.apiCost.tokens.cacheWrite} ` +
+                `cr=${e.apiCost.tokens.cacheRead} out=${e.apiCost.tokens.output}`,
+              );
+            }
+            break;
+          }
+          case "diagnose_turn": {
+            const costStr = e.apiCost ? ` — $${e.apiCost.cost.total.toFixed(4)}` : "";
+            lines.push(`  [${t}] Diagnose (${e.diagnoseTurnKind ?? "turn"})${costStr}`);
             if (e.apiCost) {
               lines.push(
                 `       tokens: in=${e.apiCost.tokens.input} cw=${e.apiCost.tokens.cacheWrite} ` +

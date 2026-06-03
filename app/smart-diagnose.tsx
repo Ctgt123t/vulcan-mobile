@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Keyboard,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -56,6 +58,17 @@ export default function SmartDiagnoseScreen() {
   const [complaint, setComplaint] = useState("");
   const [condition, setCondition] = useState<OperatingCondition>("WARM_IDLE");
   const [mileage, setMileage] = useState(vehicle.mileage ?? "");
+  const [androidKbHeight, setAndroidKbHeight] = useState(0);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      if (Platform.OS === "android") setAndroidKbHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      if (Platform.OS === "android") setAndroidKbHeight(0);
+    });
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
 
   // The OBD2 screen holds the live DTC and freeze-frame state. We need to
   // read those to build the snapshot. Since we navigate here from the OBD2
@@ -151,7 +164,12 @@ export default function SmartDiagnoseScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <Navbar showBack />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[
+        styles.content,
+        Platform.OS === "android" && androidKbHeight > 0
+          ? { paddingBottom: androidKbHeight + 16 }
+          : null,
+      ]}>
         {phase.kind === "intake" && (
           <IntakeView
             vehicle={[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ")}

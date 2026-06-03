@@ -29,6 +29,7 @@ import {
   isLikelyVin,
 } from "../lib/api";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
+import { diagnosticLogger } from "../lib/diagnosticLogger";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type {
   ChatMessage,
@@ -132,8 +133,20 @@ export default function AskScreen() {
         hasVehicle ? vehicle : undefined,
         recalls,
         tsbs,
+        diagnosticLogger.getCurrentSessionId(),
       );
-      setMessages([...next, { role: "assistant", content: reply }]);
+      setMessages([...next, { role: "assistant", content: reply.text }]);
+      if (reply.cost) {
+        diagnosticLogger.log({
+          type: "ask_vulcan",
+          vehicle: hasVehicle
+            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
+            : undefined,
+          callType: "ask-vulcan",
+          queryText: trimmed.slice(0, 80),
+          apiCost: reply.cost,
+        });
+      }
     } catch (err) {
       const msg =
         err instanceof DiagnoseError

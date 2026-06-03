@@ -495,7 +495,7 @@ app.post("/api/diagnose", async (req, res) => {
       }),
     );
 
-    logApiCost(response.usage, DIAGNOSE_MODEL, {
+    const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
       sessionId: typeof sessionId === "string" ? sessionId : null,
       callType: "diagnose",
     });
@@ -514,6 +514,7 @@ app.post("/api/diagnose", async (req, res) => {
           question: toolUse.input.question,
           diagnosis: null,
         },
+        cost: costData ?? null,
       });
     }
 
@@ -524,6 +525,7 @@ app.post("/api/diagnose", async (req, res) => {
           question: null,
           diagnosis: toolUse.input,
         },
+        cost: costData ?? null,
       });
     }
 
@@ -636,7 +638,7 @@ app.post("/api/ask", async (req, res) => {
       console.log(
         `[retrieval] DTC direct-answer: ${dtcCodes.join(", ")} (no Claude call)`,
       );
-      return res.json({ text });
+      return res.json({ text, cost: null });
     }
 
     // Mixed: DTC + real question. Inject verified definitions and continue.
@@ -665,7 +667,7 @@ app.post("/api/ask", async (req, res) => {
         console.log(
           `[retrieval] spec direct-answer: ${specIntent.specType} from ${specResult.source}${specResult.fromCache ? " (cached)" : ""} (no Claude call)`,
         );
-        return res.json({ text });
+        return res.json({ text, cost: null });
       }
       // Provider miss — prepend the spec caution preamble before going to
       // Claude so it doesn't fabricate values.
@@ -696,7 +698,7 @@ app.post("/api/ask", async (req, res) => {
     cacheKey = buildCacheKey(vehicle, lastUserText);
     const hit = getCached(cacheKey);
     if (hit) {
-      return res.json({ text: hit });
+      return res.json({ text: hit, cost: null });
     }
   }
 
@@ -722,7 +724,7 @@ app.post("/api/ask", async (req, res) => {
       .join("")
       .trim();
 
-    logApiCost(response.usage, ASK_MODEL, {
+    const costData = logApiCost(response.usage, ASK_MODEL, {
       sessionId: typeof sessionId === "string" ? sessionId : null,
       callType: "ask-vulcan",
     });
@@ -731,7 +733,7 @@ app.post("/api/ask", async (req, res) => {
       setCached(cacheKey, vehicle, lastUserText, text);
     }
 
-    return res.json({ text });
+    return res.json({ text, cost: costData ?? null });
   } catch (err) {
     return respondWithError(res, err, "ask");
   }

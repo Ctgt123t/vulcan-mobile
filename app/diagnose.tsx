@@ -30,6 +30,7 @@ import {
   isLikelyVin,
 } from "../lib/api";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
+import { diagnosticLogger } from "../lib/diagnosticLogger";
 import {
   type DiagnosticRecord,
   type RecordOutcome,
@@ -95,16 +96,19 @@ export default function Screen() {
   // the keyboard height. On iOS this stays 0 and KAV does the work.
   const [androidKbHeight, setAndroidKbHeight] = useState(0);
 
-  // Auto-scroll on keyboard open + capture keyboard height for Android.
+  // Keyboard height tracking (all phases) + auto-scroll in chat phase.
+  // The KAV on iOS handles intake; Android needs manual paddingBottom tracking
+  // for both the intake ScrollView and the chat input bar.
   useEffect(() => {
-    if (phase !== "chat") return;
     const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
       if (Platform.OS === "android") {
         setAndroidKbHeight(e.endCoordinates.height);
       }
-      setTimeout(() => {
-        listRef.current?.scrollToEnd({ animated: true });
-      }, 60);
+      if (phase === "chat") {
+        setTimeout(() => {
+          listRef.current?.scrollToEnd({ animated: true });
+        }, 60);
+      }
     });
     const hideSub = Keyboard.addListener("keyboardDidHide", () => {
       if (Platform.OS === "android") setAndroidKbHeight(0);
@@ -232,11 +236,25 @@ export default function Screen() {
     setLoading(true);
     setError(null);
     try {
-      const turn = await diagnose(vehicle, nextMessages, recalls, tsbs);
+      const result = await diagnose(
+        vehicle, nextMessages, recalls, tsbs,
+        diagnosticLogger.getCurrentSessionId(),
+      );
       setMessages([
         ...nextMessages,
-        { role: "assistant", content: JSON.stringify(turn) },
+        { role: "assistant", content: JSON.stringify(result.turn) },
       ]);
+      if (result.cost) {
+        diagnosticLogger.log({
+          type: "diagnose_turn",
+          vehicle: vehicle.year
+            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
+            : undefined,
+          callType: "diagnose",
+          diagnoseTurnKind: result.turn.kind,
+          apiCost: result.cost,
+        });
+      }
     } catch (err) {
       const msg =
         err instanceof DiagnoseError
@@ -385,7 +403,12 @@ export default function Screen() {
           keyboardVerticalOffset={0}
         >
           <ScrollView
-            contentContainerStyle={styles.intakeContent}
+            contentContainerStyle={[
+              styles.intakeContent,
+              Platform.OS === "android" && androidKbHeight > 0
+                ? { paddingBottom: androidKbHeight + 16 }
+                : null,
+            ]}
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.h1}>Diagnose</Text>
