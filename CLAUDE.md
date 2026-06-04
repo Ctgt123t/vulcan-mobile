@@ -137,7 +137,7 @@ disconnect, errors, the duplicate-signalKey assertion warning) always log.
 - Use **Windows CMD** (not PowerShell) for all terminal commands
 - Development builds connect to local Expo dev server via `npx expo start --dev-client`
 - Preview builds are standalone, built with `eas build --profile preview --platform ios/android`
-- OTA updates for JS-only changes: `eas update --channel development --message "description"`
+- OTA updates for JS-only changes: `eas update --channel preview --message "description"`. **The shop/testing build runs on the `preview` channel** — JS-only fixes are shipped there so the standalone preview build on the test devices picks them up. (The `development` channel pairs with the dev-client build connected to the local Metro server; use it only when iterating against `npx expo start --dev-client`.)
 - Native module changes require full EAS rebuild
 - Push to GitHub for Railway backend deploys
 
@@ -169,7 +169,9 @@ Apple's MFi restriction blocks Bluetooth Classic on iOS for non-licensed periphe
 
 ### Pre-2008 / no-Mode-09 diagnostic log attribution
 
-Vehicles that don't support Mode 09 PID 02 return `null` from `obd2.getVin()`, so no raw VIN is ever available. `updateSessionVehicle()` is never called, and the diagnostic session stays attributed to whatever vehicle was in context at connect time (typically the previous session's vehicle). This is **expected behavior, not a bug** — there is no hardware identifier to key on without Mode 09. For clean shop-test data on these vehicles, the tech should manually set the vehicle in context before connecting. This limitation is related to the offline-resilience gap: even when Mode 09 is supported, a failed NHTSA decode (no network) still triggers `updateSessionVehicle()` using the raw VIN, so at minimum the VIN is correct even when year/make/model are blank. What can't be recovered is the case where Mode 09 returns null entirely.
+Vehicles that don't support Mode 09 PID 02 return `null` from `obd2.getVin()`, so no raw VIN is ever available. `updateSessionVehicle()` is never called, and the diagnostic session stays attributed to whatever vehicle was in context at connect time (typically the previous session's vehicle). This is **expected behavior, not a bug** — there is no hardware identifier to key on without Mode 09. For clean shop-test data on these vehicles, the tech should manually set the vehicle in context before connecting.
+
+This limitation is related to the offline-resilience gap, but the decode-failure case behaves correctly: when Mode 09 *does* return a VIN but the NHTSA decode fails (no network), the new VIN is detected and — because it differs from the vehicle currently in context — the stale year/make/model are **cleared** rather than carried forward. The session (and the global vehicle context) attributes to the bare VIN with a blank name, rendering as just the VIN. It does **not** mislabel the session with the previous car's name. The VIN is always the reliable source of truth for which physical vehicle a session belongs to; the name is best-effort and may be blank until decode succeeds or the tech fills it in manually (which re-stamps the session). What can't be recovered is the case where Mode 09 returns null entirely — no VIN, no hardware identifier to key on.
 
 ### Offline resilience
 
