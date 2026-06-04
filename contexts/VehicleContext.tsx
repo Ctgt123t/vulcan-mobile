@@ -242,9 +242,24 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
 
       const decoded = await decodeVin(detectedVin).catch(() => null);
       if (!decoded) {
-        // Keep raw VIN so the tech sees it; year/make/model stay blank.
+        // VIN read OK but NHTSA decode failed. We only reach here when the VIN
+        // differs from what context holds (the equal case returns at the guard
+        // above), so the current year/make/model belong to a *different*
+        // physical car. The VIN is the source of truth for which vehicle this
+        // session is — so blank the stale name rather than carry it forward
+        // attached to the new VIN. The session/global label then renders as the
+        // bare VIN (honest and obviously incomplete) instead of the previous
+        // car's identity. Preserve mileage; refreshMetadata clears the prior
+        // car's recalls/TSBs since the blanked vehicle has no identity.
+        const vinOnly: VehicleInfo = {
+          ...EMPTY_VEHICLE,
+          mileage: vehicleRef.current.mileage ?? "",
+        };
+        setVehicleState(vinOnly);
         setVin(detectedVin);
-        await persist(vehicleRef.current, detectedVin, sourceRef.current);
+        setSource("obd2-auto");
+        await persist(vinOnly, detectedVin, "obd2-auto");
+        await refreshMetadata(vinOnly);
         return;
       }
 

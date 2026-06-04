@@ -120,7 +120,20 @@ export default function Obd2Screen() {
   // updateSessionVehicle(). This prevents the "one vehicle behind" bug where
   // all entries in the new session are attributed to the prior vehicle.
   const prevConnected = useRef(false);
-  const sessionStartVinRef = useRef<string | null>(null);
+  // Signature of the vehicle identity last stamped onto the session by the
+  // re-attribution sweep: `${vin}|${year}|${make}|${model}`. Tracked instead of
+  // the VIN alone so the sweep re-fires when the name fills in for the SAME VIN
+  // (e.g. a failed NHTSA decode that the tech later completes manually), while
+  // still deduping identical identities so renders don't trigger redundant
+  // sweeps. Seeded with the connect-moment identity so the (possibly stale)
+  // vehicle showing at connect isn't re-stamped until real new identity arrives.
+  const lastStampedSigRef = useRef<string | null>(null);
+  const vehicleSig = (
+    v: string | null,
+    y: string,
+    mk: string,
+    md: string,
+  ) => `${v ?? ""}|${y}|${mk}|${md}`;
 
   // Keep live refs for vehicle/vin so the periodic PID snapshot interval
   // reads current values rather than the stale closure from when isConnected
@@ -134,7 +147,12 @@ export default function Obd2Screen() {
 
   useEffect(() => {
     if (isConnected && !prevConnected.current) {
-      sessionStartVinRef.current = vin ?? null;
+      lastStampedSigRef.current = vehicleSig(
+        vin,
+        vehicle.year,
+        vehicle.make,
+        vehicle.model,
+      );
       diagnosticLogger.startSession({
         vehicle: vehicle.year
           ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin ?? null }
@@ -145,7 +163,7 @@ export default function Obd2Screen() {
       });
     } else if (!isConnected && prevConnected.current) {
       diagnosticLogger.endSession();
-      sessionStartVinRef.current = null;
+      lastStampedSigRef.current = null;
     }
     prevConnected.current = isConnected;
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -155,12 +173,19 @@ export default function Obd2Screen() {
   // (NHTSA offline/timeout) still gets attributed by raw VIN. Sessions are
   // per-connect so the sweep is unambiguous: every entry under sessionId
   // belongs to this physical vehicle connection.
+  //
+  // The sweep re-fires whenever the identity SIGNATURE changes — not just the
+  // VIN. That covers the case where a decode fails (session attributed to the
+  // bare VIN with blank name), then the tech fills the vehicle in manually
+  // later: the VIN is unchanged but the name is now known, so the signature
+  // changes and the session re-stamps with the completed identity. Identical
+  // signatures are skipped, so this never sweeps redundantly on a re-render.
   useEffect(() => {
     if (!isConnected) return;
     if (!vin) return; // raw Mode 09 VIN is the only required identifier
-    // Only sweep if the VIN changed from what was recorded at session start.
-    if (vin === sessionStartVinRef.current) return;
-    sessionStartVinRef.current = vin;
+    const sig = vehicleSig(vin, vehicle.year, vehicle.make, vehicle.model);
+    if (sig === lastStampedSigRef.current) return;
+    lastStampedSigRef.current = sig;
     diagnosticLogger.updateSessionVehicle({
       year: vehicle.year,   // empty string when NHTSA decode failed — intentional
       make: vehicle.make,
