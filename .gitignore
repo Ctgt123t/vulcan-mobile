@@ -9,3 +9,6 @@ ios/
 android/
 .DS_Store
 expo-env.d.ts
+
+# Local dev launcher (machine-specific double-click scripts; not part of the app)
+launcher/

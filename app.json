@@ -5,32 +5,92 @@
     "version": "1.0.0",
     "scheme": "vulcan",
     "orientation": "default",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "splash": {
-      "backgroundColor": "#0f1117",
+      "image": "./assets/icon.png",
+      "backgroundColor": "#FFFFFF",
       "resizeMode": "contain"
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.vulcandiagnostics.app",
+      "buildNumber": "1",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSCameraUsageDescription": "Vulcan uses the camera to scan VIN barcodes on door jamb stickers and to capture photos for inspection reports.",
+        "NSMicrophoneUsageDescription": "Vulcan uses the microphone to transcribe spoken notes during a diagnosis.",
+        "NSPhotoLibraryUsageDescription": "Vulcan accesses photos to attach images to inspection reports.",
+        "NSPhotoLibraryAddUsageDescription": "Vulcan saves inspection report photos to your photo library.",
+        "NSBluetoothAlwaysUsageDescription": "Vulcan connects to OBD2 scan tools over Bluetooth to read live vehicle data.",
+        "NSBluetoothPeripheralUsageDescription": "Vulcan connects to OBD2 scan tools over Bluetooth to read live vehicle data.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.vulcandiagnostics.android",
+      "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "backgroundColor": "#0f1117"
-      }
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#004B87"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "plugins": [
       "expo-router",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Vulcan uses the camera to scan VIN barcodes from the driver door jamb sticker."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Vulcan accesses photos to attach images to inspection reports.",
+          "cameraPermission": "Vulcan uses the camera to capture photos for inspection reports."
+        }
+      ],
+      "expo-font",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "Vulcan connects to OBD2 scan tools over Bluetooth to read live vehicle data."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3f691182-3d69-4231-9282-785f7cdc4bf5"
+      }
+    },
+    "owner": "ctgt123t",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3f691182-3d69-4231-9282-785f7cdc4bf5"
     }
   }
 }
