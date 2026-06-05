@@ -102,7 +102,7 @@ export default function RecordsScreen() {
       ? "No confirmed fixes yet. Confirmed diagnoses will appear here."
       : filter === "incorrect"
         ? "No rejected diagnoses yet. Tap 'Not Correct' on a diagnosis to log it here."
-        : "No inspections yet. Run a multi-point inspection from the home screen.";
+        : "No inspection reports yet. Run a multi-point inspection report from the home screen.";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
@@ -121,7 +121,7 @@ export default function RecordsScreen() {
         />
         <TabBtn
           active={filter === "inspection"}
-          label={`Inspections · ${inspectionCount}`}
+          label={`Reports · ${inspectionCount}`}
           onPress={() => setFilter("inspection")}
         />
       </View>
@@ -279,7 +279,7 @@ function InspectionCard({
         <Text style={styles.cardDate}>{formatDate(record.date)}</Text>
         <View style={[styles.outcomeBadge, styles.outcomeInspect]}>
           <Text style={[styles.outcomeText, { color: colors.accent }]}>
-            INSPECTION
+            REPORT
           </Text>
         </View>
       </View>
@@ -467,7 +467,7 @@ function InspectionDetail({
         >
           <Text style={styles.closeText}>Close</Text>
         </TouchableOpacity>
-        <Text style={styles.detailTitle}>Inspection</Text>
+        <Text style={styles.detailTitle}>Inspection Report</Text>
         <TouchableOpacity
           onPress={onSharePdf}
           style={styles.closeBtn}

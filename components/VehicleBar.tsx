@@ -46,7 +46,7 @@ export default function VehicleBar({
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: colors.surface2,
+    backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
@@ -67,8 +67,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   name: {
-    color: colors.accent,
-    fontSize: 13,
+    color: colors.heading,
+    fontSize: 14,
     fontWeight: "600",
     letterSpacing: 0.1,
   },

@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+// PLACEHOLDER AUTH SCREEN — real authentication (Supabase, Firebase, Clerk, etc.)
+// will replace this. For now `onSignIn` skips all credential checks and routes
+// straight to /home so the rest of the navigation flow can be exercised.
+
+import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
-  ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,437 +15,105 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Navbar from "../components/Navbar";
-import Results from "../components/Results";
-import VehicleBar from "../components/VehicleBar";
-import { DiagnoseError, diagnose, healthCheck, type HealthResult } from "../lib/api";
+import BrandMark from "../components/BrandMark";
 import { HIT_TARGET, colors } from "../lib/theme";
-import type { AssistantTurn, ChatMessage, VehicleInfo } from "../lib/types";
 
-const EMPTY_VEHICLE: VehicleInfo = {
-  year: "",
-  make: "",
-  model: "",
-  trim: "",
-  engineType: "",
-  mileage: "",
-};
+export default function SignInScreen() {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-type Phase = "intake" | "chat";
-
-export default function Screen() {
-  const [phase, setPhase] = useState<Phase>("intake");
-  const [vehicle, setVehicle] = useState<VehicleInfo>(EMPTY_VEHICLE);
-  const [symptom, setSymptom] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [answer, setAnswer] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<HealthResult | null>(null);
-  const [healthLoading, setHealthLoading] = useState(false);
-
-  const listRef = useRef<FlatList<ChatMessage> | null>(null);
-
-  useEffect(() => {
-    console.log(
-      "[app] startup EXPO_PUBLIC_API_BASE_URL =",
-      JSON.stringify(process.env.EXPO_PUBLIC_API_BASE_URL),
-    );
-  }, []);
-
-  useEffect(() => {
-    if (phase === "chat") {
-      const id = setTimeout(() => {
-        listRef.current?.scrollToEnd({ animated: true });
-      }, 50);
-      return () => clearTimeout(id);
-    }
-  }, [messages.length, loading, phase]);
-
-  async function onTestHealth() {
-    setHealthLoading(true);
-    setHealth(null);
-    const result = await healthCheck();
-    setHealth(result);
-    setHealthLoading(false);
+  function onSignIn() {
+    // PLACEHOLDER: no credential check. Replace with a real auth call before
+    // shipping; see DEV_SETUP.md for the migration plan.
+    router.replace("/home");
   }
 
-  function updateVehicle<K extends keyof VehicleInfo>(
-    field: K,
-    value: VehicleInfo[K],
-  ) {
-    setVehicle((v) => ({ ...v, [field]: value }));
-  }
-
-  function lastAssistantTurn(): AssistantTurn | null {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") {
-        try {
-          return JSON.parse(messages[i].content) as AssistantTurn;
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-
-  async function callApi(nextMessages: ChatMessage[]): Promise<void> {
-    setLoading(true);
-    setError(null);
-    try {
-      const turn = await diagnose(vehicle, nextMessages);
-      setMessages([
-        ...nextMessages,
-        { role: "assistant", content: JSON.stringify(turn) },
-      ]);
-    } catch (err) {
-      const msg =
-        err instanceof DiagnoseError
-          ? err.message
-          : "Unexpected error. Try again.";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function intakeValid(): boolean {
-    return (
-      vehicle.year.trim().length > 0 &&
-      vehicle.make.trim().length > 0 &&
-      vehicle.model.trim().length > 0 &&
-      vehicle.mileage.trim().length > 0 &&
-      symptom.trim().length > 0
-    );
-  }
-
-  async function onSubmitIntake() {
-    if (!intakeValid()) return;
-    const first: ChatMessage = { role: "user", content: symptom.trim() };
-    setMessages([first]);
-    setPhase("chat");
-    await callApi([first]);
-  }
-
-  async function onSubmitAnswer() {
-    const trimmed = answer.trim();
-    if (!trimmed) return;
-    const next: ChatMessage[] = [
-      ...messages,
-      { role: "user", content: trimmed },
-    ];
-    setMessages(next);
-    setAnswer("");
-    await callApi(next);
-  }
-
-  function resetSession() {
-    setPhase("intake");
-    setMessages([]);
-    setAnswer("");
-    setSymptom("");
-    setError(null);
-  }
-
-  const latestTurn = lastAssistantTurn();
-  const isFinal = latestTurn?.kind === "diagnosis";
-
-  if (phase === "intake") {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar />
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={0}
-        >
-          <ScrollView
-            contentContainerStyle={styles.intakeContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Text style={styles.h1}>Vulcan</Text>
-            <Text style={styles.subtitle}>
-              Technician-side diagnostic assistant. Enter the vehicle and the
-              presenting complaint to begin.
-            </Text>
-
-            <View style={styles.debugCard}>
-              <Text style={styles.debugLabel}>BACKEND</Text>
-              <Text style={styles.debugUrl} numberOfLines={2}>
-                {process.env.EXPO_PUBLIC_API_BASE_URL ?? "(unset)"}
-              </Text>
-              <TouchableOpacity
-                style={[styles.debugBtn, healthLoading && styles.submitDisabled]}
-                onPress={onTestHealth}
-                disabled={healthLoading}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.debugBtnText}>
-                  {healthLoading ? "Pinging /health…" : "Test /health"}
-                </Text>
-              </TouchableOpacity>
-              {health && (
-                <View
-                  style={[
-                    styles.debugResult,
-                    health.ok ? styles.debugOk : styles.debugFail,
-                  ]}
-                >
-                  <Text style={styles.debugResultText}>
-                    {health.ok
-                      ? `OK ${health.status} — ${health.body}`
-                      : health.error
-                        ? `FAIL — ${health.error}`
-                        : `FAIL ${health.status} — ${health.body || "(empty body)"}`}
-                  </Text>
-                  <Text style={styles.debugResultUrl} numberOfLines={2}>
-                    {health.url}
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            <View style={styles.card}>
-              <View style={styles.row3}>
-                <Field
-                  label="Year"
-                  value={vehicle.year}
-                  onChangeText={(v) => updateVehicle("year", v)}
-                  placeholder="2015"
-                  keyboardType="number-pad"
-                />
-                <Field
-                  label="Make"
-                  value={vehicle.make}
-                  onChangeText={(v) => updateVehicle("make", v)}
-                  placeholder="Toyota"
-                  autoCapitalize="words"
-                />
-                <Field
-                  label="Model"
-                  value={vehicle.model}
-                  onChangeText={(v) => updateVehicle("model", v)}
-                  placeholder="Camry"
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={styles.row2}>
-                <Field
-                  label="Trim Level"
-                  value={vehicle.trim ?? ""}
-                  onChangeText={(v) => updateVehicle("trim", v)}
-                  placeholder="LE, XSE, TRD"
-                />
-                <Field
-                  label="Engine Type"
-                  value={vehicle.engineType ?? ""}
-                  onChangeText={(v) => updateVehicle("engineType", v)}
-                  placeholder="2.5L 4-cyl, 3.5L V6"
-                />
-              </View>
-
-              <Field
-                label="Mileage"
-                value={vehicle.mileage}
-                onChangeText={(v) => updateVehicle("mileage", v)}
-                placeholder="98,500"
-                keyboardType="number-pad"
-              />
-
-              <View style={styles.field}>
-                <Text style={styles.label}>PRESENTING COMPLAINT</Text>
-                <TextInput
-                  style={[styles.input, styles.textarea]}
-                  multiline
-                  placeholder="Customer reports intermittent misfire at idle, MIL on. P0301 stored. No recent service history."
-                  placeholderTextColor={colors.muted}
-                  value={symptom}
-                  onChangeText={setSymptom}
-                  textAlignVertical="top"
-                />
-              </View>
-
-              <TouchableOpacity
-                style={[
-                  styles.submit,
-                  (!intakeValid() || loading) && styles.submitDisabled,
-                ]}
-                onPress={onSubmitIntake}
-                disabled={!intakeValid() || loading}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.submitText}>
-                  {loading ? "Starting…" : "Begin diagnosis"}
-                </Text>
-              </TouchableOpacity>
-
-              {error && (
-                <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>{error}</Text>
-                </View>
-              )}
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    );
+  function onSignUp() {
+    // PLACEHOLDER: sign-up flow is not implemented yet.
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar />
-      <VehicleBar vehicle={vehicle} onReset={resetSession} />
-
+    <SafeAreaView
+      style={styles.safe}
+      edges={["top", "bottom", "left", "right"]}
+    >
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <FlatList
-          ref={listRef}
-          style={styles.thread}
-          contentContainerStyle={styles.threadContent}
-          data={messages}
-          keyExtractor={(_, i) => String(i)}
-          renderItem={({ item }) => <MessageRow message={item} />}
-          ListFooterComponent={
-            <>
-              {loading && (
-                <View style={styles.assistantTurn}>
-                  <Text style={styles.assistantLabel}>
-                    DIAGNOSTIC ASSISTANT
-                  </Text>
-                  <View style={[styles.bubble, styles.bubbleAssistant]}>
-                    <View style={styles.loadingRow}>
-                      <ActivityIndicator
-                        size="small"
-                        color={colors.accent}
-                      />
-                      <Text style={styles.loadingText}>Thinking…</Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-              {error && (
-                <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>{error}</Text>
-                </View>
-              )}
-            </>
-          }
-          onContentSizeChange={() =>
-            listRef.current?.scrollToEnd({ animated: true })
-          }
-        />
-
-        {!isFinal && (
-          <SafeAreaView edges={["bottom"]} style={styles.footerBar}>
-            <View style={styles.answerRow}>
-              <TextInput
-                style={styles.answerInput}
-                multiline
-                placeholder="Type your response…"
-                placeholderTextColor={colors.muted}
-                value={answer}
-                onChangeText={setAnswer}
-                editable={!loading}
-                textAlignVertical="top"
-              />
-              <TouchableOpacity
-                style={[
-                  styles.sendBtn,
-                  (loading || answer.trim().length === 0) &&
-                    styles.submitDisabled,
-                ]}
-                onPress={onSubmitAnswer}
-                disabled={loading || answer.trim().length === 0}
-                activeOpacity={0.85}
-                accessibilityLabel="Send"
-              >
-                <Text style={styles.sendBtnText}>Send</Text>
-              </TouchableOpacity>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.brand}>
+            <BrandMark size={52} />
+            <Text style={styles.brandName}>Vulcan</Text>
+            <View style={styles.proBadge}>
+              <Text style={styles.proBadgeText}>PRO</Text>
             </View>
-          </SafeAreaView>
-        )}
+          </View>
+          <Text style={styles.tagline}>
+            Technician-side diagnostic assistant.
+          </Text>
+
+          <View style={styles.card}>
+            <View style={styles.field}>
+              <Text style={styles.label}>EMAIL</Text>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="tech@shop.com"
+                placeholderTextColor={colors.muted}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>PASSWORD</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="••••••••"
+                placeholderTextColor={colors.muted}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={styles.submit}
+              onPress={onSignIn}
+              activeOpacity={0.85}
+              accessibilityLabel="Sign in"
+            >
+              <Text style={styles.submitText}>Sign in</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.placeholderNote}>
+              Placeholder — real authentication coming soon.
+            </Text>
+          </View>
+
+          <View style={styles.signupRow}>
+            <Text style={styles.signupText}>No account yet? </Text>
+            <TouchableOpacity
+              onPress={onSignUp}
+              activeOpacity={0.6}
+              accessibilityLabel="Sign up"
+              hitSlop={12}
+            >
+              <Text style={styles.signupLink}>Sign up</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  keyboardType,
-  autoCapitalize,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (v: string) => void;
-  placeholder?: string;
-  keyboardType?: "default" | "number-pad";
-  autoCapitalize?: "none" | "words" | "sentences" | "characters";
-}) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label.toUpperCase()}</Text>
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={colors.muted}
-        keyboardType={keyboardType ?? "default"}
-        autoCapitalize={autoCapitalize ?? "none"}
-        autoCorrect={false}
-      />
-    </View>
-  );
-}
-
-function MessageRow({ message }: { message: ChatMessage }) {
-  if (message.role === "user") {
-    return (
-      <View style={styles.userWrap}>
-        <View style={[styles.bubble, styles.bubbleUser]}>
-          <Text style={styles.bubbleText}>{message.content}</Text>
-        </View>
-      </View>
-    );
-  }
-
-  let turn: AssistantTurn | null = null;
-  try {
-    turn = JSON.parse(message.content) as AssistantTurn;
-  } catch {
-    return (
-      <View style={styles.assistantTurn}>
-        <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
-        <View style={[styles.bubble, styles.bubbleAssistant]}>
-          <Text style={styles.bubbleText}>{message.content}</Text>
-        </View>
-      </View>
-    );
-  }
-
-  if (turn.kind === "question") {
-    return (
-      <View style={styles.assistantTurn}>
-        <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
-        <View style={[styles.bubble, styles.bubbleAssistant]}>
-          <Text style={styles.bubbleText}>{turn.question}</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.assistantTurn}>
-      <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
-      <Results data={turn.diagnosis} />
-    </View>
   );
 }
 
@@ -454,103 +125,53 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  intakeContent: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 48,
+  content: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 32,
   },
-  h1: {
-    fontSize: 26,
-    fontWeight: "600",
+  brand: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginBottom: 8,
+  },
+  brandName: {
     color: colors.heading,
-    marginBottom: 6,
-    letterSpacing: -0.3,
+    fontSize: 32,
+    fontWeight: "700",
+    letterSpacing: -0.5,
   },
-  subtitle: {
+  proBadge: {
+    backgroundColor: colors.accentFade,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  proBadgeText: {
+    color: colors.accent,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+  },
+  tagline: {
     color: colors.muted,
     fontSize: 14,
-    marginBottom: 24,
-    lineHeight: 21,
+    textAlign: "center",
+    marginBottom: 32,
   },
   card: {
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    borderRadius: 8,
-    padding: 16,
-  },
-  debugCard: {
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 14,
-  },
-  debugLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    color: colors.muted,
-    marginBottom: 6,
-  },
-  debugUrl: {
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    marginBottom: 10,
-  },
-  debugBtn: {
-    minHeight: 36,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    backgroundColor: colors.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  debugBtnText: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  debugResult: {
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-  },
-  debugOk: {
-    backgroundColor: colors.surface2,
-    borderColor: colors.border,
-  },
-  debugFail: {
-    backgroundColor: colors.dangerBg,
-    borderColor: colors.dangerBorder,
-  },
-  debugResultText: {
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  debugResultUrl: {
-    marginTop: 4,
-    fontSize: 11,
-    color: colors.muted,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  row3: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  row2: {
-    flexDirection: "row",
-    gap: 10,
+    borderRadius: 10,
+    padding: 18,
   },
   field: {
-    flex: 1,
     marginBottom: 14,
   },
   label: {
@@ -571,12 +192,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 6,
   },
-  textarea: {
-    minHeight: 120,
-    paddingTop: 12,
-  },
   submit: {
-    marginTop: 4,
+    marginTop: 6,
     minHeight: HIT_TARGET,
     backgroundColor: colors.accent,
     borderRadius: 6,
@@ -584,122 +201,33 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 18,
   },
-  submitDisabled: {
-    opacity: 0.45,
-  },
   submitText: {
     color: "#fff",
     fontSize: 15,
     fontWeight: "600",
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
-  errorBox: {
+  placeholderNote: {
     marginTop: 12,
-    backgroundColor: colors.dangerBg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.dangerBorder,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 6,
-  },
-  errorText: {
-    color: colors.dangerText,
-    fontSize: 13,
-  },
-  thread: {
-    flex: 1,
-  },
-  threadContent: {
-    padding: 16,
-    gap: 14,
-  },
-  assistantTurn: {
-    alignItems: "flex-start",
-    gap: 6,
-    marginBottom: 14,
-  },
-  assistantLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    color: colors.accent,
-    paddingLeft: 2,
-  },
-  userWrap: {
-    alignItems: "flex-end",
-    marginBottom: 14,
-  },
-  bubble: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  bubbleUser: {
-    maxWidth: "88%",
-    backgroundColor: colors.userBg,
-    borderColor: colors.userBorder,
-    borderBottomRightRadius: 4,
-  },
-  bubbleAssistant: {
-    width: "100%",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderBottomLeftRadius: 4,
-  },
-  bubbleText: {
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  loadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  loadingText: {
     color: colors.muted,
-    fontSize: 14,
+    fontSize: 11,
+    textAlign: "center",
     fontStyle: "italic",
   },
-  footerBar: {
-    backgroundColor: colors.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  answerRow: {
+  signupRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  answerInput: {
-    flex: 1,
-    minHeight: HIT_TARGET,
-    maxHeight: 160,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: colors.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
-  },
-  sendBtn: {
-    minHeight: HIT_TARGET,
-    minWidth: HIT_TARGET + 24,
-    backgroundColor: colors.accent,
-    borderRadius: 8,
-    alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 16,
+    alignItems: "center",
+    marginTop: 22,
+    minHeight: HIT_TARGET,
   },
-  sendBtnText: {
-    color: "#fff",
-    fontWeight: "600",
+  signupText: {
+    color: colors.muted,
     fontSize: 14,
-    letterSpacing: 0.3,
+  },
+  signupLink: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "600",
   },
 });
