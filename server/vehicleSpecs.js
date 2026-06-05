@@ -53,6 +53,11 @@ let cache = {
   misses: 0,
   providerCalls: 0,
   providerErrors: 0,
+  // Spec questions that fell through to Claude with NO structured vehicle to
+  // look up against (open-ended Ask Vulcan). Previously these bypassed the
+  // provider chain entirely and were counted nowhere — this makes the true
+  // Claude-spec-answer rate visible alongside the provider `misses`.
+  noVehicleFallthroughs: 0,
 };
 
 try {
@@ -65,6 +70,7 @@ try {
       misses: parsed.misses ?? 0,
       providerCalls: parsed.providerCalls ?? 0,
       providerErrors: parsed.providerErrors ?? 0,
+      noVehicleFallthroughs: parsed.noVehicleFallthroughs ?? 0,
     };
     const total = cache.hits + cache.misses;
     const hitRate = total > 0 ? `${((cache.hits / total) * 100).toFixed(1)}%` : "n/a";
@@ -367,6 +373,15 @@ export function formatSpecContextBlock(entries) {
 // even on a hit-adjacent question).
 export const SPEC_CAUTION_PREAMBLE = `You are being asked a factual vehicle specification question that our authoritative data sources could not answer. If you are not highly confident in the specific value, say so clearly and recommend the user verify with an OEM source or service manual. Do not guess capacities, torque values, fluid types, or intervals — wrong values here cause real damage.`;
 
+// Record a spec-intent question that reached Claude without a structured
+// vehicle (so no provider lookup was possible). Lightweight telemetry: the
+// caller already prepends SPEC_CAUTION_PREAMBLE — this just keeps the count
+// visible at /metrics so the no-vehicle path isn't a measurement blind spot.
+export function recordNoVehicleSpecFallthrough() {
+  cache.noVehicleFallthroughs++;
+  persist();
+}
+
 // ----------- Metrics --------------------------------------------------------
 
 export function vehicleSpecsStats() {
@@ -376,6 +391,7 @@ export function vehicleSpecsStats() {
     misses: cache.misses,
     providerCalls: cache.providerCalls,
     providerErrors: cache.providerErrors,
+    noVehicleFallthroughs: cache.noVehicleFallthroughs,
     providers: PROVIDERS.map((p) => ({
       id: p.id,
       configured: p.configured(),

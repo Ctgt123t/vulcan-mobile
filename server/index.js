@@ -29,6 +29,7 @@ import {
   formatSpecAnswer,
   formatSpecContextBlock,
   lookupSpec,
+  recordNoVehicleSpecFallthrough,
   vehicleSpecsStats,
 } from "./vehicleSpecs.js";
 import {
@@ -652,15 +653,27 @@ app.post("/api/ask", async (req, res) => {
   }
 
   // 3: Vehicle spec lookup (oil capacity, torque, maintenance schedule, etc.)
-  // Spec questions need a vehicle context to be answerable. If a provider
-  // hits, return the answer directly. If not, fall through to Claude but
-  // prepend the anti-hallucination preamble so the model is explicit about
-  // uncertainty instead of confidently guessing values.
-  let specIntent = null;
+  //
+  // Detect spec intent FIRST, independent of whether a structured vehicle is
+  // present. The anti-hallucination guardrail must cover the open-ended Ask
+  // Vulcan case too: a spec question with no year/make/model in context can't
+  // be verified against a provider, and previously went straight to Claude
+  // with NO guardrail — producing confidently-wrong figures. Now any spec
+  // question that can't be answered from a verified provider gets the caution
+  // preamble so Claude admits uncertainty and points to how to confirm.
+  const specIntent = detectSpecIntent(lastUserText);
   let specWentToClaude = false;
-  if (vehicle && typeof vehicle === "object" && vehicle.year && vehicle.make && vehicle.model) {
-    specIntent = detectSpecIntent(lastUserText);
-    if (specIntent) {
+  if (specIntent) {
+    const hasVehicle =
+      vehicle &&
+      typeof vehicle === "object" &&
+      vehicle.year &&
+      vehicle.make &&
+      vehicle.model;
+
+    if (hasVehicle) {
+      // Vehicle present — try the provider chain. Hit → verified answer,
+      // no Claude call (unchanged). Miss → guardrail + fall through.
       const specResult = await lookupSpec(vehicle, specIntent.specType);
       if (specResult) {
         const text = formatSpecAnswer(specIntent.specType, specResult, vehicle);
@@ -669,12 +682,22 @@ app.post("/api/ask", async (req, res) => {
         );
         return res.json({ text, cost: null });
       }
-      // Provider miss — prepend the spec caution preamble before going to
-      // Claude so it doesn't fabricate values.
       systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
       specWentToClaude = true;
       console.log(
         `[retrieval] spec MISS for ${specIntent.specType} — Claude with anti-hallucination preamble`,
+      );
+    } else {
+      // No structured vehicle to look up against — can't verify any figure,
+      // so apply the guardrail so Claude says it lacks a confirmed value and
+      // tells the user how to verify, rather than guessing. Previously this
+      // path was unguarded AND counted nowhere — record it so the true
+      // Claude-spec-answer rate is visible at /metrics.
+      systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
+      specWentToClaude = true;
+      recordNoVehicleSpecFallthrough();
+      console.log(
+        `[retrieval] spec MISS (no vehicle context) for ${specIntent.specType} — Claude with anti-hallucination preamble`,
       );
     }
   }
