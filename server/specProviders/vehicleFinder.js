@@ -45,9 +45,38 @@ const RESOURCE_BY_SPEC_TYPE = {
 const idCache = new Map();
 
 function normalizeKey(vehicle) {
-  return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim ?? ""]
+  return [vehicle.year, vehicle.make, vehicle.model, vehicle.series ?? "", vehicle.trim ?? ""]
     .map((s) => String(s).toLowerCase().trim())
     .join("|");
+}
+
+// Fold NHTSA's separate `Series` field into the model string we send to the
+// resolve. NHTSA returns light-duty truck class ("1500"/"2500") in `Series`
+// while `Model` carries only the nameplate ("Sierra"); Vehicle Finder keys its
+// records off the full model string ("Sierra 1500") and IGNORES any
+// series/submodel query param (verified live), so the class must live in the
+// model we query with.
+//
+// Make/model-agnostic and deliberately conservative — only fold when the series
+// adds a clean numeric class the model doesn't already carry. This skips:
+//   - empty series        → Ford F-150, Ram 1500 (Model is already granular)
+//   - non-numeric series   → Ford F-250 "Super Duty - Single Rear Wheel"
+//   - class already in Model → manual "Sierra 1500", Ram "1500"
+// so it never corrupts a make/model that already resolves correctly.
+//
+// Known limitation: NHTSA gives heavy-duty trucks Series "2500"/"3500" but
+// Vehicle Finder names them "2500HD"/"3500HD", so the folded "Silverado 2500"
+// 404s on resolve. The 404→null handling below turns that into a clean spec
+// miss (Claude fallthrough with the anti-hallucination preamble), NOT a wrong
+// answer or a provider error. Revisit with a class-suffix map if HD trucks
+// prove common in real use.
+function combineModelSeries(model, series) {
+  const m = String(model ?? "").trim();
+  const s = String(series ?? "").trim();
+  if (!s) return m;
+  if (!/^\d{3,4}$/.test(s)) return m; // only clean class numbers (1500/2500/3500)
+  if (new RegExp(`\\b${s}\\b`).test(m)) return m; // already present — don't double
+  return `${m} ${s}`;
 }
 
 async function resolveVehicleId(vehicle, fetcher) {
@@ -57,12 +86,17 @@ async function resolveVehicleId(vehicle, fetcher) {
   const params = new URLSearchParams({
     year: String(vehicle.year),
     make: String(vehicle.make),
-    model: String(vehicle.model),
+    model: combineModelSeries(vehicle.model, vehicle.series),
   });
   const url = `${BASE_URL}/vehicles?${params.toString()}`;
   const res = await fetcher(url, {
     headers: { "X-API-Key": API_KEY, Accept: "application/json" },
   });
+  // A 404 from the resolve means Vehicle Finder simply has no record for this
+  // make/model/year string (e.g. the folded "Silverado 2500" HD-naming gap
+  // above). Treat it as a clean miss, not an error — the orchestrator falls
+  // through to Claude with the spec-caution preamble.
+  if (res.status === 404) return null;
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     console.warn(

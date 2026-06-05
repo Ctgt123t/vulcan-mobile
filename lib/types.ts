@@ -2,6 +2,13 @@ export interface VehicleInfo {
   year: string;
   make: string;
   model: string;
+  // NHTSA returns light-duty truck class ("1500"/"2500") in a separate Series
+  // field while Model holds only the nameplate ("Sierra"). We carry it raw and
+  // fold it into the model ONLY for the Vehicle Finder spec resolve (see
+  // server/specProviders/vehicleFinder.js combineModelSeries). The model field
+  // itself stays clean ("Sierra") so OBDb PID and NHTSA recall lookups — which
+  // key off make/model — don't regress.
+  series?: string;
   trim?: string;
   engineType?: string;
   mileage: string;

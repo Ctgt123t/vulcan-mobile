@@ -267,6 +267,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         year: decoded.year,
         make: decoded.make,
         model: decoded.model,
+        series: decoded.series,
         trim: decoded.trim,
         engineType: decoded.engineType,
         mileage: vehicleRef.current.mileage ?? "",

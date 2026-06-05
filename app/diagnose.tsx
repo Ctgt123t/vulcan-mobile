@@ -179,6 +179,7 @@ export default function Screen() {
           year: d.year || vehicle.year,
           make: d.make || vehicle.make,
           model: d.model || vehicle.model,
+          series: d.series || vehicle.series,
           trim: d.trim || vehicle.trim,
           engineType: d.engineType || vehicle.engineType,
           mileage: vehicle.mileage,
@@ -519,7 +520,7 @@ export default function Screen() {
                       label="Model"
                       value={vehicle.model}
                       onChangeText={(v) => updateVehicle("model", v)}
-                      placeholder="Camry"
+                      placeholder="Camry, Sierra 1500"
                       autoCapitalize="words"
                     />
                   </View>

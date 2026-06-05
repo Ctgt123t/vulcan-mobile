@@ -397,6 +397,7 @@ function AddVehicleModal({
           year: d.year || v.year,
           make: d.make || v.make,
           model: d.model || v.model,
+          series: d.series || v.series,
           trim: d.trim || v.trim,
           engineType: d.engineType || v.engineType,
         }));
@@ -545,7 +546,7 @@ function AddVehicleModal({
                 label="Model"
                 value={localVehicle.model}
                 onChangeText={(v) => updateField("model", v)}
-                placeholder="Camry"
+                placeholder="Camry, Sierra 1500"
                 autoCapitalize="words"
               />
               <ManualField

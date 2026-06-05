@@ -36,6 +36,9 @@ export interface VinDecoded {
   year: string;
   make: string;
   model: string;
+  // Raw NHTSA Series ("1500"/"2500"/""/free-text). Used downstream only to
+  // disambiguate the Vehicle Finder spec resolve; see VehicleInfo.series.
+  series: string;
   trim: string;
   engineType: string;
 }
@@ -123,6 +126,7 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
     ModelYear?: string;
     Make?: string;
     Model?: string;
+    Series?: string;
     Trim?: string;
     Trim2?: string;
     EngineCylinders?: string;
@@ -155,6 +159,8 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
     year: (row.ModelYear ?? "").trim(),
     make: row.Make ? titleCase(row.Make) : "",
     model: row.Model ? titleCase(row.Model) : "",
+    // Raw, untouched by titleCase — it's a query disambiguator, not display text.
+    series: (row.Series ?? "").trim(),
     trim: row.Trim ? titleCase(row.Trim) : row.Trim2 ? titleCase(row.Trim2) : "",
     engineType: buildEngineType(
       row.DisplacementL ?? "",

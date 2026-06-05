@@ -99,7 +99,12 @@ function persist() {
 
 function normalizeVehicle(v) {
   if (!v || typeof v !== "object") return "";
-  return [v.year, v.make, v.model, v.trim, v.engineType]
+  // `series` is part of the key so a truck whose class disambiguates the spec
+  // (Sierra 1500 vs 2500) doesn't collide, and so any pre-fix entry cached
+  // under the coarse "Sierra" (no series) is never served to the VIN path,
+  // which now carries series. Adding this segment intentionally orphans old
+  // entries — each vehicle re-fetches once, then caches forever as before.
+  return [v.year, v.make, v.model, v.series, v.trim, v.engineType]
     .map((x) => String(x ?? "").toLowerCase().trim())
     .join("|");
 }
@@ -203,6 +208,7 @@ export async function lookupSpec(vehicle, specType, params = null) {
             year: vehicle.year,
             make: vehicle.make,
             model: vehicle.model,
+            series: vehicle.series,
             trim: vehicle.trim,
             engineType: vehicle.engineType,
           },
