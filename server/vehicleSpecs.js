@@ -374,10 +374,12 @@ export function formatSpecContextBlock(entries) {
 
 // ----------- Anti-hallucination preamble -----------------------------------
 
-// Prepended to the system context when a spec question goes to Claude
-// (either because no provider hit OR because we want defensive framing
-// even on a hit-adjacent question).
-export const SPEC_CAUTION_PREAMBLE = `You are being asked a factual vehicle specification question that our authoritative data sources could not answer. If you are not highly confident in the specific value, say so clearly and recommend the user verify with an OEM source or service manual. Do not guess capacities, torque values, fluid types, or intervals — wrong values here cause real damage.`;
+// Prepended to the system context when a spec question goes to Claude with
+// no verified value to anchor on. Reinforces the provenance-based factory-spec
+// rule that lives in APP_CONTEXT (server/index.js) for the specific
+// no-verified-data case — provenance-based ("this number wasn't given to you
+// as verified data"), NOT confidence-based.
+export const SPEC_CAUTION_PREAMBLE = `Our authoritative data sources could not return a verified value for this specification — which means you do NOT have this number as verified data. Do not state a specific figure as fact. Tell the technician plainly you don't have a confirmed spec and point them to the OEM service manual or source to verify. You can still help: explain where to find it, or give a clearly-labeled from-memory ballpark they must confirm before relying on it. Never present a recalled number as the confirmed spec — a wrong capacity, torque, viscosity, pressure, or interval here causes real damage.`;
 
 // Record a spec-intent question that reached Claude without a structured
 // vehicle (so no provider lookup was possible). Lightweight telemetry: the
