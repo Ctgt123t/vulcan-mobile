@@ -39,6 +39,7 @@ import {
   pidStats,
 } from "./pidDatabase.js";
 import { logApiCost, getCostSummary, costStats } from "./costLogger.js";
+import { initDb } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -1258,4 +1259,10 @@ app.listen(PORT, "0.0.0.0", () => {
   );
   console.log(`Vulcan backend listening on http://0.0.0.0:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+
+  // Probe the Supabase data-layer connection (fire-and-forget so it never
+  // delays the health check). Logs "[db] connected" on success or a loud
+  // "[db] ERROR" on failure — it does not crash the server, since the data
+  // layer has no live consumers yet (foundation only).
+  initDb();
 });
