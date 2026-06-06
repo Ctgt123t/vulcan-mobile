@@ -26,6 +26,8 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - **Cost tracking across all modes:** `/api/ask` and `/api/diagnose` return cost in their responses. The mobile app logs `ask_vulcan` and `diagnose_turn` entries to the on-device diagnostic log with full token/cost breakdown. `updateSessionVehicle()` added to `DiagnosticLogger` for vehicle re-attribution after VIN decode.
 - **Vehicle attribution fix:** `updateSessionVehicle()` sweeps every entry in the current session (not just `session_start`) when the Mode 09 VIN resolves post-connect. Gate is raw VIN only — no `vehicle.year` required — so NHTSA decode failures still get attributed by VIN. Sessions are per-connect so the full-session sweep is unambiguous. Pre-2008 / no-Mode-09 vehicles can't self-attribute; see Known Gaps.
 - **Intake form keyboard fix (Android):** Smart Diagnose and Diagnose intake forms now track keyboard height and apply extra `paddingBottom` so the mileage/complaint fields stay visible above the keyboard on Android.
+- **Ask Vulcan accuracy hardening:** Ask Vulcan now runs **Opus 4.6** (was Sonnet — Sonnet fabricated free-form mechanical facts). A factory-spec provenance rule and an internal-consistency rule live in the shared `APP_CONTEXT`, so all three Claude modes inherit them; for conversational modes the spec rule is **label-not-suppress** (lead with the likely value + a verify note) while Smart Diagnose's `ASSESS_SYSTEM_PROMPT` keeps its stricter no-ballpark variant. The Ask Vulcan response cache now **excludes spec-shaped questions**, is **version+model-keyed**, and **self-prunes** stale entries on load. See Tech Stack (AI) and Backend (response caching).
+- **Supabase/Postgres data-layer foundation:** backend connects to Supabase via `pg` over the transaction pooler (`server/db.js`, reads `SUPABASE_DB_URL`); schema created via numbered SQL migrations (`npm run migrate`) — `source` / `vehicle_variant` / `spec` / `component_fact` / `spec_miss`, with a provenance FK on every fact. **Foundation only: the extraction pipeline is NOT built, the JSON→Postgres data migration is deferred, and the existing JSON caches are untouched.** See Backend → Database layer.
 
 **Open action items (near-term):**
 
@@ -39,7 +41,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 
 **Pre-launch work not yet started:**
 
-- **Infrastructure:** migrate JSON-file storage to Postgres/Supabase (bundle in self-hosted NHTSA vPIC VIN decoder + NHTSA recall/TSB caching); fallback AI provider (Claude → GPT-4o for 529s); real auth (Supabase); billing (RevenueCat + Stripe); Sentry; Mixpanel; API cost monitoring + usage limits; build proprietary spec database; move confirmed-fix database to cloud
+- **Infrastructure:** migrate JSON-file storage to the Supabase/Postgres data layer (connection + schema now in place — see Backend → Database layer; remaining: build the extraction pipeline, then move cache data off the JSON files) (bundle in self-hosted NHTSA vPIC VIN decoder + NHTSA recall/TSB caching); fallback AI provider (Claude → GPT-4o for 529s); real auth (Supabase); billing (RevenueCat + Stripe); Sentry; Mixpanel; API cost monitoring + usage limits; build proprietary spec database; move confirmed-fix database to cloud
 - **Product:** UI redesign for premium feel; decide whether to remove Inspection Report; speech-to-text; compatible-adapters screen
 - **Legal/business:** form LLC + EIN; trademark Vulcan (Class 9 & 42, VulcanDX backup); switch Apple/Google accounts to Organization; CPA/attorney consult
 - **Launch:** TestFlight + Google Play internal testing; finalize tiered pricing ($40-50/mo target); App Store listing prep
@@ -53,7 +55,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 | 3a. Diagnostic engine — Stage 1 (single-shot assessment) | COMPLETE |
 | 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | NEXT |
 | 3c. Diagnostic engine — Stage 3 (adaptive stance UI, guided checklists) | NOT STARTED |
-| 4. Pre-launch infrastructure | NOT STARTED |
+| 4. Pre-launch infrastructure | IN PROGRESS — Supabase data-layer foundation landed (connection + schema); extraction pipeline + data migration pending |
 | 5. Testing & launch | NOT STARTED |
 
 ## Scalability Requirements
@@ -154,6 +156,7 @@ disconnect, errors, the duplicate-signalKey assertion warning) always log.
 - OTA updates for JS-only changes: `eas update --channel preview --message "description"`. **The shop/testing build runs on the `preview` channel** — JS-only fixes are shipped there so the standalone preview build on the test devices picks them up. (The `development` channel pairs with the dev-client build connected to the local Metro server; use it only when iterating against `npx expo start --dev-client`.)
 - Native module changes require full EAS rebuild
 - Push to GitHub for Railway backend deploys
+- The **Railway CLI is authenticated** for this project (linked to service `vulcan-backend`). Use it to verify deploys went live and inspect logs without the dashboard: `railway status`, `railway logs --service vulcan-backend` (add `--build` for build logs, `--deployment` for runtime/startup logs). This is how to confirm a redeploy is live and read startup lines like `[startup] cache rollup`, `[cache] loaded … pruned …`, and `[db] connected to Supabase`. (`railway ssh` needs an SSH key, which is not configured — prefer log inspection.)
 
 **Deploying changes — Claude Code's responsibility:** When a task involves backend/server changes, Claude Code must commit and push to GitHub `main` as the final step so Railway redeploys — this is not the user's job to do manually. Backend changes do NOT reach the live server via OTA updates (`eas update` only ships the mobile JS bundle to devices; server code only deploys when pushed to GitHub). A task that changes both mobile and server code requires BOTH an `eas update` (for mobile) AND a `git push` (for server) — these are always separate steps and both must be completed. Never consider a task with server changes finished until the push to GitHub is done. Always confirm to the user that both the OTA update and the GitHub push were completed.
 
@@ -439,5 +442,5 @@ The on-device diagnostic log also captures cost for `assessment`, `ask_vulcan`, 
 - **Claude-directed live monitoring** — see roadmap section above
 - **Offline resilience** — graceful VIN-decode-failure handling + local OBD2 buffering
 - **iOS native cleanup** — Expo config plugin to exclude the Classic Bluetooth pod from iOS builds (see Known Platform Issues)
-- **Pre-launch infrastructure** — Supabase/Postgres migration to replace JSON-file caches; auth; billing; analytics; error/crash tracking (Sentry or similar)
+- **Pre-launch infrastructure** — Supabase/Postgres data layer (foundation connected + schema in place; remaining: extraction pipeline, then migrate cache data off the JSON files); auth; billing; analytics; error/crash tracking (Sentry or similar)
 - **TestFlight beta + App Store launch prep**
