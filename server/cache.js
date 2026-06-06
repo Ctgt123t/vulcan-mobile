@@ -52,8 +52,22 @@ try {
       writes: parsed.writes ?? 0,
       entries: parsed.entries ?? {},
     };
+    // Prune entries from a prior cache version on load. Any key that doesn't
+    // carry the current CACHE_VERSION prefix is from an old model/prompt regime
+    // — already unreachable (buildCacheKey only ever produces current-version
+    // keys), so this just reclaims disk and is permanent self-cleaning for
+    // every future CACHE_VERSION bump. It also removed the 2026-06 stale
+    // pre-fix entries on first deploy of v2.
+    const prefix = `${CACHE_VERSION}::`;
+    const before = Object.keys(state.entries).length;
+    for (const key of Object.keys(state.entries)) {
+      if (!key.startsWith(prefix)) delete state.entries[key];
+    }
+    const pruned = before - Object.keys(state.entries).length;
+    if (pruned > 0) persist();
     console.log(
-      `[cache] loaded ${Object.keys(state.entries).length} entries (hits=${state.hits}, misses=${state.misses})`,
+      `[cache] loaded ${Object.keys(state.entries).length} entries (hits=${state.hits}, misses=${state.misses})` +
+        (pruned > 0 ? ` — pruned ${pruned} stale pre-${CACHE_VERSION} entries` : ""),
     );
   }
 } catch (err) {
