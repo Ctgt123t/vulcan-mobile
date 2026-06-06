@@ -28,6 +28,7 @@ import {
   detectSpecIntent,
   formatSpecAnswer,
   formatSpecContextBlock,
+  isSpecShapedQuestion,
   lookupSpec,
   recordNoVehicleSpecFallthrough,
   vehicleSpecsStats,
@@ -704,10 +705,17 @@ app.post("/api/ask", async (req, res) => {
     }
   }
 
-  // 4: Response cache (only single-turn factual questions with a vehicle).
-  // Skip the cache for spec questions that fell through to Claude — the
-  // cached answer would lock in a possibly-wrong guess. New spec questions
-  // for that vehicle should always re-attempt the provider chain.
+  // 4: Response cache (only single-turn NON-SPEC factual questions with a
+  // vehicle). Spec-shaped questions are NEVER cached — they must be generated
+  // live and spec-guarded every time, because a cached spec answer survives
+  // prompt/model changes and freezes a possibly-stale figure for 30 days
+  // (the 2026-06 stale-cache bug: "oil change specs" slipped detectSpecIntent
+  // but matched the old cacheable-question heuristic, so a pre-fix answer was
+  // served long after the guardrail/model shipped). isSpecShapedQuestion is a
+  // deliberately broad detector for exactly this exclusion — when in doubt it
+  // treats the question as a spec and skips the cache. This single gate sets
+  // cacheKey, which controls BOTH the read below and the write later, so a
+  // spec question is neither served from nor written to the cache.
   const cacheEligible =
     messages.length === 1 &&
     vehicle &&
@@ -716,11 +724,12 @@ app.post("/api/ask", async (req, res) => {
     vehicle.make &&
     vehicle.model &&
     !specWentToClaude &&
+    !isSpecShapedQuestion(lastUserText) &&
     isCacheableQuestion(lastUserText);
 
   let cacheKey = null;
   if (cacheEligible) {
-    cacheKey = buildCacheKey(vehicle, lastUserText);
+    cacheKey = buildCacheKey(vehicle, lastUserText, ASK_MODEL);
     const hit = getCached(cacheKey);
     if (hit) {
       return res.json({ text: hit, cost: null });

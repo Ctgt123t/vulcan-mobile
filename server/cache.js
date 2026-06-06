@@ -23,6 +23,18 @@ const CACHE_PATH = cacheFile("cache.json");
 
 const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Cache key version stamp. BUMP THIS BY HAND whenever the Ask Vulcan system
+// prompt changes in a way that should invalidate previously-cached answers
+// (e.g. a behavioral/guardrail change). The model name is also folded into
+// the key (see buildCacheKey), so a model swap auto-invalidates without a
+// bump. Both mechanisms turn old-regime entries into cache MISSES so they
+// regenerate under the current model+prompt instead of being served stale.
+//
+// History:
+//   v1  (implicit) — unversioned legacy keys "<vehicle>::<question>"
+//   v2  — versioned + model-stamped; spec-shaped questions no longer cached
+export const CACHE_VERSION = "v2";
+
 let state = {
   hits: 0,
   misses: 0,
@@ -71,8 +83,9 @@ function normalizeVehicle(v) {
     .join("|");
 }
 
-export function buildCacheKey(vehicle, question) {
-  return `${normalizeVehicle(vehicle)}::${normalizeQuestion(question)}`;
+export function buildCacheKey(vehicle, question, model) {
+  const m = String(model ?? "").toLowerCase().trim();
+  return `${CACHE_VERSION}::${m}::${normalizeVehicle(vehicle)}::${normalizeQuestion(question)}`;
 }
 
 // Heuristic: which questions are "factual and vehicle specific" enough to

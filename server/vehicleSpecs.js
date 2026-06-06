@@ -150,12 +150,41 @@ export function detectAllSpecIntents(text) {
   return hits;
 }
 
-// Catch ALL spec-shaped questions, even ones that won't route to a provider
-// (e.g. coolant when no provider supplies coolant data). Used by the Ask
-// Vulcan handler to decide whether to prepend the anti-hallucination
-// preamble before calling Claude.
-export function isSpecQuestion(text) {
-  return detectSpecIntent(text) !== null;
+// Broad, deliberately over-inclusive spec detector used ONLY for the
+// cache-exclusion decision — NOT for guardrail injection (that stays
+// detectSpecIntent / SPEC_PATTERNS, which is intentionally narrow so the
+// caution preamble only fires on clear spec asks).
+//
+// The risk profile is inverted from the guardrail detector. A spec answer
+// must always be generated live and guarded — never frozen for 30 days in
+// the response cache — because the cache survives prompt/model changes. The
+// brittle narrowness of detectSpecIntent is exactly what let "oil change
+// specs" slip past it and get cached as generic Q&A (the 2026-06 stale-cache
+// bug). So here, when in doubt, treat it as a spec and DO NOT cache: a false
+// positive costs one uncached answer (cheap); a false negative freezes a
+// stale, unguarded spec (the bug). This is now load-bearing, not cosmetic.
+const SPEC_SHAPED_PATTERNS = [
+  /\bspec(s|ification|ifications)?\b/i,
+  /\bcapacit/i, // capacity / capacities
+  /\btorque\b/i,
+  /\b(ft|foot)[-\s.]?lbs?\b|\blb[-\s.]?ft\b|\bnewton[-\s]?met|\bn[-\s.]?m\b/i,
+  /\bpsi\b|\bpressure\b|\bkpa\b/i,
+  /\bviscosit/i,
+  /\b\d{1,2}w[-\s]?\d{2}\b/i, // oil weight: 0w20, 0w-20, 5w30, 10w-40
+  /\boil\b|\bcoolant\b|\bantifreeze\b|\bfluid\b|\batf\b|\brefrigerant\b|\br[-\s]?134a\b|\b1234yf\b/i,
+  /\bgap\b|\bclearance\b/i,
+  /\binterval\b|\bevery\s+\d/i,
+  /\btire\s+pressure\b/i,
+  /\bgear\s+ratio\b|\bbolt\s+pattern\b/i,
+  /\bhow\s+(much|many)\b/i,
+  /\bfill\b/i,
+];
+
+export function isSpecShapedQuestion(text) {
+  if (typeof text !== "string" || text.length === 0) return false;
+  // Subsume the narrow guardrail set, then widen.
+  if (detectSpecIntent(text)) return true;
+  return SPEC_SHAPED_PATTERNS.some((re) => re.test(text));
 }
 
 // ----------- Provider orchestration ----------------------------------------
