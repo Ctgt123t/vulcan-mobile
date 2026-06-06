@@ -374,12 +374,12 @@ export function formatSpecContextBlock(entries) {
 
 // ----------- Anti-hallucination preamble -----------------------------------
 
-// Prepended to the system context when a spec question goes to Claude with
-// no verified value to anchor on. Reinforces the provenance-based factory-spec
-// rule that lives in APP_CONTEXT (server/index.js) for the specific
-// no-verified-data case — provenance-based ("this number wasn't given to you
-// as verified data"), NOT confidence-based.
-export const SPEC_CAUTION_PREAMBLE = `Our authoritative data sources could not return a verified value for this specification — which means you do NOT have this number as verified data. Do not state a specific figure as fact. Tell the technician plainly you don't have a confirmed spec and point them to the OEM service manual or source to verify. You can still help: explain where to find it, or give a clearly-labeled from-memory ballpark they must confirm before relying on it. Never present a recalled number as the confirmed spec — a wrong capacity, torque, viscosity, pressure, or interval here causes real damage.`;
+// Prepended to the system context when a spec question goes to Claude with no
+// verified value to anchor on. Reinforces the label-not-suppress factory-spec
+// rule in APP_CONTEXT (server/index.js) for the specific no-verified-data
+// case: lead with the commonly-known figure as a likely value plus a verify
+// note, rather than refusing — but never assert it as a confirmed factory spec.
+export const SPEC_CAUTION_PREAMBLE = `Our authoritative data sources could not return a verified value for this specification, so you do not have it as confirmed data. Do not refuse to answer: if you know the commonly-accepted figure, lead with it as a likely value and tell the technician to confirm it against the OEM service manual or the cap/label — e.g. "typically around X — verify against the manual." Just don't present it as a precise, authoritative factory number stated as gospel; it is an informed starting point they must confirm. If you don't have a reliable ballpark, say so plainly and point them to the OEM source. A wrong capacity, torque, viscosity, pressure, or interval asserted as fact causes real damage — the verify note is what prevents that.`;
 
 // Record a spec-intent question that reached Claude without a structured
 // vehicle (so no provider lookup was possible). Lightweight telemetry: the
