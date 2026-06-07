@@ -92,9 +92,9 @@ const DEFAULT_PDF = path.join(
   "extraction_test",
   "2011-sierra-owner-manual.pdf.pdf", // actual on-disk name (double extension)
 );
-const PDF_PATH = process.argv[2]
-  ? path.resolve(process.argv[2])
-  : DEFAULT_PDF;
+// First NON-flag CLI arg is the PDF path (so `--full` is not mistaken for it).
+const argPdf = process.argv.slice(2).find((a) => !a.startsWith("--"));
+const PDF_PATH = argPdf ? path.resolve(argPdf) : DEFAULT_PDF;
 
 // Controlled vocab — must match the spec_type CHECK constraint, now widened by
 // 0002_widen_specs_and_audit_columns.sql. Keep these in lock-step with the SQL.
@@ -588,8 +588,23 @@ async function main() {
       totals.cost.total += costData.cost.total;
     }
     if (!out) { console.warn(`[extract] chunk ${ci + 1}: no tool_use returned, skipping`); continue; }
-    for (const s of out.specs || []) rawSpecs.push(s);
-    for (const f of out.component_facts || []) rawFacts.push(f);
+    // Remap chunk-relative page -> absolute 1-indexed PDF page. Claude numbers
+    // pages within the chunk PDF it received (1..idx.length); idx[P-1] is that
+    // page's original 0-indexed position in the full document. If Claude's value
+    // is outside the chunk range (e.g. it echoed a printed "12-2"), keep it raw
+    // and warn rather than mis-map — the verbatim_quote remains the strong anchor.
+    const remapPage = (item, kind) => {
+      const p = Number(item.page);
+      if (Number.isInteger(p) && p >= 1 && p <= idx.length) {
+        item.page = idx[p - 1] + 1;
+      } else {
+        console.warn(
+          `[extract] chunk ${ci + 1}: ${kind} page ${item.page} out of chunk range [1,${idx.length}] — keeping raw (not remapped)`,
+        );
+      }
+    };
+    for (const s of out.specs || []) { remapPage(s, "spec"); rawSpecs.push(s); }
+    for (const f of out.component_facts || []) { remapPage(f, "fact"); rawFacts.push(f); }
     for (const d of out.other_data_types_present || []) discoverySet.add(String(d).trim());
     console.log(`[extract] chunk ${ci + 1}: ${(out.specs || []).length} specs, ${(out.component_facts || []).length} facts`);
   }
@@ -756,6 +771,42 @@ async function main() {
     console.log("  (none reported)");
   }
   console.log(line + "\n");
+
+  // --- Per-run replayable snapshot --------------------------------------
+  // Write the full run to a gitignored file so a regression baseline survives
+  // independently of the DB — a later migration deleting rows can never destroy
+  // it again (the gap that lost the original source_id=2 first slice). Captures
+  // stored rows (with absolute pages + quotes), quarantined items, the discovery
+  // list, the page selection, and the cost split — a complete, replayable record.
+  const runsDir = path.join(__dirname, "..", "extraction_runs");
+  fs.mkdirSync(runsDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dumpPath = path.join(runsDir, `run_${sourceId}_${stamp}.json`);
+  const dump = {
+    source_id: sourceId,
+    written_at: new Date().toISOString(),
+    pdf: path.basename(PDF_PATH),
+    pdf_pages: pageCount,
+    whole_document_tokens: preflightTokens,
+    mode: FORCE_FULL ? "full" : "trim",
+    selection: selectionNote,
+    pages_fed: selectedPages.length,
+    selected_pages_1indexed: selectedPages.map((p) => p + 1),
+    chunks: chunks.length,
+    truncated: anyTruncated,
+    tokens: totals.tokens,
+    cost: totals.cost,
+    stored_specs: passedSpecs,
+    stored_component_facts: passedFacts,
+    quarantined_specs: quarantinedSpecs,
+    quarantined_component_facts: quarantinedFacts,
+    discovery,
+  };
+  fs.writeFileSync(dumpPath, JSON.stringify(dump, null, 2));
+  console.log(
+    `[extract] run snapshot written: ${path.relative(process.cwd(), dumpPath)} ` +
+      `(${passedSpecs.length} specs, ${passedFacts.length} facts, ${quarantinedSpecs.length + quarantinedFacts.length} quarantined)\n`,
+  );
 
   await pool.end();
 }
