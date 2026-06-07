@@ -4,3 +4,6 @@ cache.json
 dtcCache.json
 vehicleSpecCache.json
 pidCache.json
+costEntries.json
+costAggregate.json
+extraction_test/
