@@ -1,0 +1,321 @@
+# VULCAN — UNIFIED DATA LAYER STRATEGY
+
+> **Purpose of this document.** This is a standing strategy document for Vulcan's unified vehicle-data layer (the "spec database" and everything around it). It captures the *plan*, the *reasoning behind each decision*, a *concrete proposed schema*, and the *open questions still to resolve* — so that a fresh conversation, a future session, or Claude Code can pick this up fully oriented. It is intended to live in the Vulcan Project knowledge alongside the project brief and CLAUDE.md. Keep it current as decisions firm up.
+>
+> **Status:** Foundation BUILT & VERIFIED LIVE. Extraction engine PROVEN via first slice test (see §6.1), then PRODUCTIONIZED in Batch A — trim-before-extract, widened `spec_type` vocab (+ an `other`-label rule), and persisted audit columns (absolute page + `verbatim_quote`, both NOT NULL) are DONE & validated, plus a per-run snapshot dump and chunk→absolute page remap. **Measured cost: ~$2.2 per large manual (~66% cut from the $6.31 full-manual baseline) — NOT the originally-assumed sub-$1** (the assumption was specs living in ~50–80 pages; they actually span ~170 — see §6.1). A `--full` baseline diff proved the trim drops **zero core specs**. NEXT: Tier 1 feed at scale. Still deferred: stronger/fuzzy dedup, and schema expansion for richer manual data (fuses/bulbs/towing/etc.). The six open questions are resolved or scoped (§9).
+>
+> **What's live:** `pg` (node-postgres) connection in `server/db.js` over the transaction pooler (port 6543), reading `SUPABASE_DB_URL`; tables `source`, `vehicle_variant` (8-col granular UNIQUE), `spec`, `component_fact`, `spec_miss`, each fact carrying a NOT NULL `source_id` provenance FK; controlled vocab via CHECK constraints; numbered SQL migrations run manually via `npm run migrate` (tracked in `schema_migrations`). Fail-soft: missing env var is fatal at startup, but a present-but-unreachable DB logs a loud error and keeps the core app (OBD2/Claude endpoints) serving — the spec DB is an enhancement over the honest fallback, never a hard dependency. RLS enabled; the pooler owner-role bypasses it. Existing JSON caches untouched; JSON→Postgres migration of those still deferred. Extraction PoC script committed at `server/scripts/extractFromPdf.js` (manual-run, not wired to any endpoint).
+
+---
+
+## 1. Why this exists — the core insight
+
+Vulcan's value is an AI that **reasons like a master technician over real vehicle data**. The reliability of that depends on a single architectural principle, learned the hard way through the Ask Vulcan spec failures:
+
+> **Verified data is the factual foundation; AI is the reasoning layer on top. The model must never be the source of truth for a specific fact it would otherwise recall from memory.**
+
+When the model recites a fact from training (e.g. "2023 Impreza oil capacity = X"), it hallucinates — confidently, unpredictably, and differently on each run. This was proven repeatedly: same model, same question, different wrong answers; it even contradicted a part number it cited in its own response. No prompt tweak and no model upgrade fixes this, because there is no stable failure to target. **The only reliable fix is verified data.**
+
+The same model reasoning *over facts it is given* (real OBD2 readings, injected DTC definitions, retrieved specs) is reliable — that is what current LLMs are good at, and that is what the diagnostic engine does. The database is what systematically converts Vulcan from "trust the AI's memory" to "trust the AI's reasoning over real data." **Every fact moved from model-recall to database-provided is a hallucination structurally eliminated.**
+
+This makes the data layer the **keystone** of the whole project, not just a feature: it is what makes the AI trustworthy enough for the product vision.
+
+---
+
+## 2. Scope — the five data types (and what's already solved)
+
+"Build a vehicle database" is really **five different problems**. Three are already solved; two are the actual gap. Recognizing this shrinks the project from "import all vehicle data" (overwhelming, stalls) to "fill two specific gaps" (tractable).
+
+| # | Data type | What it answers | Status |
+|---|---|---|---|
+| 1 | **DTC definitions** | What does P0442 mean? | ✅ **Solved** — 18,805 codes, manufacturer-specific, Claude-fallback caching |
+| 2 | **VIN decoding** | VIN → year/make/model/engine | ✅ **Mostly solved** — NHTSA; self-hosted vPIC on roadmap |
+| 3 | **PID / signal definitions** | What live data does this vehicle expose? | ✅ **Solved** — OBDb (CC-licensed), trim/year filtered |
+| 4 | **Service specs** | Oil capacity, torques, fluids, intervals | ❌ **THE GAP** — Vehicle Finder was a dud (3 spec types only, sparse) |
+| 5 | **Component / configuration facts** | Filter type, location, what's-where | ❌ **NEW GAP** — identified from the Subaru filter fabrication; model invents these as confidently as numbers |
+
+**Decision — scope:** Build a **unified store architecture** that has a home for all five types, but **populate in priority order**: fill the empty rooms first (4 and 5), migrate the already-working three (1, 2, 3) later, deliberately, only once the new store is proven.
+
+**Reasoning:** "Unify everything" is correct as an *end-state architecture* but dangerous as a *build order*. The DTC/PID/VIN systems contain hard-won correctness (the phantom-code parser rewrite, the O2 voltage fix, the spec-series fix). Rebuilding them all at once to "unify" would reopen solved problems and risk regression for no new capability. Instead: design one schema that *can* hold all five, deliver immediate value by filling the real gaps (specs + component facts), and absorb the working three on a safe schedule.
+
+---
+
+## 3. Strategy — generation from source documents
+
+**Decision — primary strategy:** Generate the database by having **Claude extract structured data from source documents**, into Vulcan's own verified store.
+
+**Reasoning — why generation over aggregation:**
+- **Aggregation** (pull in existing structured databases) is the path that kept stalling. The free sources are thin (Vehicle Finder), the good ones are proprietary and legally off-limits (Identifix, AllData, Mitchell1, Innova), and you're at the mercy of their coverage/licensing.
+- **Generation** gives Vulcan control over the three things Vehicle Finder failed at: **coverage** (you decide what's in it), **granularity** (build it trim-aware from day one — the "Sierra" vs "Sierra 1500" lesson), and **fail-loud behavior** (you decide what an unknown returns).
+- **The pattern is already proven in production:** the DTC Claude-fallback does exactly this — when a code isn't in the static DB, Claude produces a structured definition via tool use, cached so it's generated only once. Scaling a trusted existing technique, not inventing a new one.
+- It converts existing Claude spend from a recurring per-call cost into an **asset-building** activity: generate-and-store-once, never pay to generate again. The opposite of Vehicle Finder's per-call dependency.
+
+**The mortal danger (must be designed around):** Generation done naively is **the Ask Vulcan hallucination problem in a can — worse, because a wrong value written to a "verified" database is frozen, trusted, and served with authority forever.** The entire viability of this strategy rests on one rule:
+
+> **Claude extracts from a provided source document; Claude does NOT generate facts from memory.** "Here is the Subaru maintenance table, extract the oil capacity" (reliable — reading a provided document) is categorically different from "What's the oil capacity for a 2023 Impreza?" (hallucination-bait — recalling from memory). The source document is the ground truth; Claude is the extraction engine, not the source.
+
+This is the same reasoning-over-provided-facts vs. generating-facts distinction that governs the diagnostic engine.
+
+---
+
+## 4. Verification standard — Option C (strict store + honest fallback + miss-logging)
+
+**Decision:** Strict storage, honest live fallback, miss-logging to drive acquisition.
+
+Three layers, no contamination between them:
+
+1. **Storage is STRICT.** Only doc-extracted, provenance-tracked specs enter the database. "In the DB" *always* means "verified from a real source." This keeps the database categorically trustworthy and is what makes it an asset. **Non-negotiable.**
+2. **The miss path is HONEST and LIVE (never stored).** When the DB has no entry, the app falls through to the existing guard-railed Claude, which gives a best-effort answer explicitly framed as "I don't have this confirmed, here's the likely value, verify it." This answer is **ephemeral** — shown once, never written back to the database as if it were data.
+3. **Miss-logging drives acquisition.** Every DB miss is logged ("techs asked for 2023 Tacoma trans-fluid spec 14×, no entry"). The miss-log becomes the *prioritization queue* for source acquisition — gaps tell you which documents to get next, ranked by real demand. (Metrics scaffolding already exists — the bigger cousin of the `noVehicleFallthroughs` counter.)
+
+**Why not the alternatives:**
+- **Strict-only (A)** is correct on storage but was missing the fallback framing — handled here by layer 2.
+- **Tiered (B) — storing Claude-memory specs flagged "unverified" — was rejected.** It industrializes the Ask Vulcan failure and gives it false solidity. Labels erode in users' minds over repetition ("the app gave me a number" becomes trusted); and the moment the DB contains unverified entries, "it's in the DB" stops meaning "it's true," destroying the one property that made building a database worthwhile. The fix for misses is a *guess shown once, clearly as a guess* (layer 2) — NOT *a guess written into the verified store forever* (B).
+
+**The accepted cost:** the database is **sparse early and fills over time**, at a rate governed by source acquisition. This is fine: sparse-early means *honest*-early, not *broken*-early, because the guard-railed fallback means the app never lies on day one (it either knows-verified or says-verify) and grows more *complete* over time.
+
+---
+
+## 5. Proposed schema (DRAFT — not final)
+
+Designed to (a) hold all five data types in one store, (b) be trim/engine-granular from the start, (c) carry provenance for every fact, and (d) make "fail loud" natural (a missing row is an explicit miss, never a silent wrong substitution).
+
+### 5.1 Core principle: a vehicle is identified granularly
+
+The single biggest spec-data bug was coarse vehicle identity ("Sierra" silently returning a wrong record vs. "Sierra 1500"). The schema must make the vehicle key granular and explicit.
+
+```
+vehicle_variant
+---------------
+id                 (PK)
+year               int          -- e.g. 2023
+make               text         -- canonical, e.g. "GMC" (store canonical; map aliases separately)
+model              text         -- e.g. "Sierra"
+series_trim        text         -- e.g. "1500" / "1500 Denali"  (the disambiguator)
+engine_code        text         -- e.g. "FB20", "L83 5.3L V8"
+engine_descriptor  text         -- human label, e.g. "5.3L 8-cyl"
+drivetrain         text NULL    -- e.g. "4WD" where it disambiguates specs
+market             text NULL     -- e.g. "US" (specs vary by market)
+notes              text NULL
+UNIQUE (year, make, model, series_trim, engine_code, drivetrain, market)
+```
+
+> **RESOLVED (5.A) — key on mechanical configuration, not trim badge; default to engine-level, split finer only where specs actually differ.** Specs diverge based on *mechanical* hardware (engine, sometimes drivetrain/transmission), not marketing trim. A "1500 Denali" and "1500 SLT" with the same engine take the same oil — the difference is cosmetic. But "1500" vs "2500" *is* mechanical (different trucks). So the real uniqueness key is `year + make + model + series_trim(where mechanical, e.g. 1500/2500) + engine + drivetrain(where it matters)`. Keep the trim/drivetrain columns so the schema *can* go fine, but **resolve queries at the engine level by default**, only splitting a spec to a finer key when you observe that the value actually differs (e.g. a trans-fluid capacity that varies 2WD vs 4WD on the same engine). Data-driven, not guessed — avoids both the coarse-wrong-record bug AND the fragmented-empty-rows failure. (This also means many apparent source "conflicts" — 6.C — are really a too-coarse key merging two real variants.)
+
+### 5.2 Specs (data type 4) — key/value with provenance
+
+```
+spec
+----
+id                 (PK)
+vehicle_variant_id (FK -> vehicle_variant.id)
+spec_type          text         -- controlled vocab: "oil_capacity", "oil_viscosity",
+                                 --   "drain_plug_torque", "coolant_type", "coolant_capacity",
+                                 --   "trans_fluid_type", "brake_fluid_type", "battery_group",
+                                 --   "service_interval_oil", "spark_plug_gap", "tire_pressure", ...
+value_numeric      numeric NULL -- e.g. 6.0
+value_unit         text NULL    -- e.g. "qt", "ft-lb", "kPa"  (store canonical; convert at display)
+value_text         text NULL    -- e.g. "0W-20", "DOT 3", "dexos1 Gen 2"  (for non-numeric specs)
+qualifier          text NULL    -- e.g. "with filter" / "without filter" / "severe service"
+confidence         text         -- always "verified" in strict store (kept for future-proofing)
+source_id          (FK -> source.id)   -- PROVENANCE: which document this came from
+extracted_at       timestamp
+UNIQUE (vehicle_variant_id, spec_type, qualifier)
+```
+
+### 5.3 Component / configuration facts (data type 5)
+
+```
+component_fact
+--------------
+id                 (PK)
+vehicle_variant_id (FK)
+component          text         -- "oil_filter", "oil_filter_location", "cabin_filter_location", ...
+fact_type          text         -- "type" / "location" / "part_number" / "access_notes"
+value_text         text         -- e.g. "spin-on", "front, driver's side near oil fill cap", "15208AA170"
+source_id          (FK -> source.id)
+extracted_at       timestamp
+UNIQUE (vehicle_variant_id, component, fact_type)
+```
+
+> Component facts (filter type/location) are stored exactly like specs — strict, provenance-tracked — because the model fabricates them as confidently as numbers. They are NOT free-form model output.
+
+### 5.4 Source / provenance (the trust backbone)
+
+```
+source
+------
+id                 (PK)
+source_type        text         -- "owner_manual" / "manufacturer_spec_sheet" / "gov_nhtsa"
+                                 --   / "gov_epa" / "obdb" / "retrieval_grounded" / "tech_contributed"
+title              text         -- e.g. "2023 Subaru Impreza Owner's Manual, Maintenance section"
+url_or_ref         text NULL    -- where it came from (citation / file ref)
+publisher          text NULL    -- e.g. "Subaru of America"
+retrieved_at       timestamp
+license            text NULL    -- e.g. "manufacturer-published", "CC-BY-SA", "public-domain"
+trust_tier         text         -- "tier1_open" / "tier2_retrieval" / "tier3_crowdsource"
+```
+
+> **Provenance is what makes the database defensible and auditable.** Every spec and component fact points at the source it was extracted from. This enables re-verification, dispute resolution, and confidence about *why* a value is trusted. It is also what lets a retrieval-grounded extraction (Tier 2) be trustworthy: the citation is the verification record (provided the citation is real and checkable — see open question 6.B).
+
+### 5.5 Miss log (drives acquisition)
+
+```
+spec_miss
+---------
+id                 (PK)
+vehicle_variant_query  text     -- what was asked for (vehicle + spec_type)
+spec_type          text
+asked_count        int          -- incremented on repeat misses
+last_asked_at      timestamp
+status             text         -- "open" / "sourced" / "wont_fix"
+```
+
+> This is the prioritization engine: rank `open` misses by `asked_count` to decide which source documents to acquire next. Demand-driven coverage growth.
+
+### 5.6 Unified query surface
+
+The app queries one logical interface — "give me everything verified about this vehicle variant" — that reads across `spec`, `component_fact`, and (once migrated) DTC/PID/VIN. A miss on any lookup returns an explicit not-found (→ honest live fallback + miss-log), never a silent wrong substitution.
+
+> **Scaling note (per CLAUDE.md):** this store is Postgres/Supabase, not JSON files. It is the natural anchor for the pre-launch JSON→Postgres migration already on the roadmap. Stateless reads, indexed on the vehicle-variant key. Designed for thousands of concurrent users from the start.
+
+---
+
+## 6. Extraction engine (Layers 1–2) — proposed flow
+
+The pipeline that turns a source document into verified rows. This is the agreed **first build target** because it must exist regardless of which sources feed it.
+
+```
+1. INGEST       A source document enters (PDF, structured gov data, retrieved page).
+                Recorded in `source` with type, publisher, license, trust_tier, ref.
+                ↓
+2. EXTRACT      Claude is given the document content + a strict tool-use schema
+                (emit_extracted_specs / emit_component_facts), and instructed to
+                extract ONLY what appears in the document — never to supply a value
+                from memory. Missing value in doc → omit, do not invent.
+                ↓
+3. NORMALIZE    Units canonicalized (qt/ft-lb/kPa internal; convert at display).
+                Vehicle identity resolved to a `vehicle_variant` (granular key).
+                Spec_type mapped to controlled vocabulary.
+                ↓
+4. VALIDATE     Sanity checks before write: value in plausible range for spec_type
+                (e.g. oil capacity 2–15 qt, not 115); unit matches spec_type;
+                vehicle_variant resolved unambiguously. Fail → quarantine for review,
+                do NOT write. (Same "fail loud, never store garbage" discipline as
+                the DTC parser's assertion harness.)
+                ↓
+5. STORE        Write spec / component_fact rows with source_id provenance + extracted_at.
+                Conflict with existing verified value from a different source → flag for
+                review rather than silently overwrite (open question 6.C).
+```
+
+**Key design commitments:**
+- **Structured output via tool use**, not prompt-and-parse JSON — same as the assess endpoint and DTC fallback. The schema *forces* the shape.
+- **Extraction prompt forbids memory-sourced values explicitly** — the single most important instruction in the whole pipeline. Mirror the diagnostic engine's verified-data-only discipline.
+- **Validation gate before write** — a value that fails plausibility never reaches the store. This is the database equivalent of the DTC parser's self-test: protect against silently-wrong data at the boundary.
+- **Build a test harness** — feed known source documents with known correct values, confirm the pipeline extracts them correctly, before trusting it on bulk data. (Same principle that makes the DTC parser trustworthy: validate logic without needing the physical world.)
+
+> **RESOLVED (6.A) — on-demand first (miss-log driven), batch as an accelerant for proven-popular vehicles.** Do NOT bulk-extract the whole vehicle universe up front — wasted effort/cost on vehicles no one asks about, and you can't validate the pipeline until it runs on real demand. Instead: on-demand extraction driven by the miss-log (tech asks → honest fallback answers live → miss logged → that miss tells you what to extract next). Batch becomes an optimization on top: once the miss-log shows high-demand clusters, batch-extract those proactively to pre-warm the common cases. The miss-log is what tells you which vehicles graduate from on-demand to worth-batching. Earliest extraction work is automatically aimed at real demand.
+>
+> **RESOLVED (6.B) — the two hard parts are now native Claude API features; this is no longer a research risk. (Verified via current Anthropic docs.)** The crux was "how is a retrieved citation made real and checkable, not itself a hallucination." Answer:
+> - **Citations API** grounds output in source documents and returns *structured citation objects with character-level offsets, document indices, and source-text excerpts, guaranteed at the API layer* (not prompted). One reported deployment cut source hallucination from 10% → 0%. This is the proof-of-source mechanism — the extracted value comes with a verifiable pointer to exactly where in the document it appears.
+> - **Domain filtering** (`allowed_domains` on the web search/fetch tools) restricts retrieval to authoritative sources — Anthropic explicitly recommends it "for applications where source reliability is paramount." This IS the trusted-publisher whitelist, as a parameter, not custom code.
+> - **Dynamic filtering** (web_search_20260209 + code execution) lets Claude write code to filter results before they hit context — Anthropic calls out *citation verification and sifting technical documentation* as target use cases (i.e. exactly spec extraction from a manufacturer doc).
+> - **Safety rail (bonus):** the web *fetch* tool cannot dynamically construct URLs — it only fetches URLs from prior search results or explicitly provided — minimizing exfiltration risk. The pipeline can't be tricked into fetching attacker-controlled URLs.
+> - **The Tier-2 safe pattern:** search authoritative `allowed_domains` → extract via Citations with the character-level offset stored as the provenance record → **if no citation grounds the value, do NOT store it** (strict store + fail-loud, now API-backed).
+> - **CAVEAT (do not over-read):** Citations guarantees the value *faithfully appears in the cited source* — NOT that the source is correct or that the right vehicle variant was resolved. A perfectly-cited spec from the wrong model-year manual is still wrong. The validation gate (§6 step 4) and human spot-check remain essential. The API makes *provenance* trustworthy, not *truth*.
+> - **COST NOTE:** web search is billed separately (~$10 / 1,000 searches) on top of tokens — a third cost bucket for Tier 2 only (Tier 1 doc-extraction doesn't incur it). Doesn't break the build-once economics; just measure it.
+>
+> **RESOLVED (6.C) — trust-tier precedence for what's served; flag conflicts, never silently overwrite.** Manufacturer-published doc > retrieved web page > crowdsourced entry — precedence by trust tier reflects actual authority. BUT do not silently overwrite: a disagreement is *information* — often a symptom of a too-coarse vehicle key (5.A) merging two real variants, or one source being wrong. Higher tier wins for the served value; the conflict is logged for review. Many "conflicts" will resolve to "you keyed too coarsely," tying 6.C back to 5.A.
+
+---
+
+## 6.1 First-slice extraction test — RESULTS (PROVEN)
+
+First end-to-end test of the engine. Document: official 2011 GMC Sierra owner's manual PDF (Tier 1, manufacturer-published). Script committed at `server/scripts/extractFromPdf.js` (manual-run only, not wired to any endpoint, doesn't touch live spec path or JSON caches). 72 specs + 48 component facts stored against `source_id=2` in Supabase (read-back confirmed).
+
+**The engine works — and provably doesn't hallucinate.** Answer-key check passed: 5.3L oil → 5.7 L with filter, dexos 5W-30 (matches known GM spec ≈ 6 qt). Also correct: DEX-COOL coolant capacities, spark-plug gaps (1.02 mm V8 / 1.52 mm V6), DEXRON-VI trans fluid + per-gearbox capacities, DOT 3 brake fluid, R134a refrigerant, wheel-nut torque, maintenance intervals. **0 of 120 items stored without a verbatim quote** (the anti-hallucination gate held). Decisive negative result: pages 1–300 (operating/infotainment) returned ZERO specs rather than inventing any.
+
+**Cost finding (the key lever):**
+- The manual was **594 pages / ~1.18M tokens — exceeds Opus's 1M context, cannot be fed whole.** Script caught this on a pre-flight token count and chunked (no silent truncation).
+- **Full extraction = $6.31**, of which **94% was input (reading the document)**; output was $0.36.
+- **Every spec came from the back half (pages 301–594). Front 300 pages cost ~$3 and produced nothing.** This is the cost lever — but the original "specs live in ~50–80 pages → ~85–90% cut → sub-$1/manual" was an *assumption*. **Measured in Batch A (threshold-6 keyword-density trim, 193/594 pages fed): specs actually spread across ~170 back-half pages (sections 9–12), so the achievable cut is ~66% → ~$2.2 per large manual, NOT sub-$1.** Pushing the threshold higher to chase sub-$1 starts dropping real spec pages (the spec content is genuinely that spread out). The economics conclusion is **unchanged**: this is a **one-time, build-once cost per vehicle** (~$2 once), the opposite of Vehicle Finder's pay-per-lookup-forever model — only the headline figure moved.
+- **Trim safety PROVEN by a `--full` baseline diff (Batch A, measured not asserted):** the full-manual run (63 specs) vs the trimmed run (52 specs) confirmed **zero core specs dropped** — oil/coolant/spark-gap/transmission/fuel/axle/brake/refrigerant/torque all present (the count gap is near-dupes + extraction non-determinism, every diff line located in the manual). The **only** genuine trim-caused drop was a **non-core, deferred-scope item (fuel octane)** sitting in a gap between selected page bands. So the trim's failure mode is bounded: it can cost non-core/deferred items in band gaps, never core capacity/fluid/torque specs at threshold 6.
+
+**Two tuning items before scaling (found by the test):**
+1. **Vocab too narrow** — ~30 real specs (fuel-tank capacity, axle/transfer-case fluids, GVWR/axle weights, fast-idle RPM) fell into a generic `other` bucket with no `spec_type`. Captured but untyped; some `other` entries lack a label and aren't useful ("340 kg" of what?). Widen the `spec_type` CHECK vocab and require a descriptive label for any `other`.
+2. **Dedup is exact-match only** — near-duplicates survived (e.g. "DOT 3" vs "DOT 3 Hydraulic Brake Fluid (GM PN…)", prose vs parsed interval forms). Needs value_text normalization / fuzzier dedup.
+
+**Productionization status (Batch A — DONE & validated):**
+- **Trim before extracting** — ✅ DONE. Local pdfjs-dist keyword-density page scan feeds only spec-bearing bands (±margin, fail-safe floor). Measured ~66% cost cut to ~$2.2/manual with **zero core specs dropped** (per the `--full` diff above). Threshold is a named tunable, kept conservative (over-include on purpose).
+- **Widen `spec_type` vocab** — ✅ DONE (per item 1). +8 typed buckets (fuel_capacity, axle/transfer-case fluid type+capacity, gvwr, gawr, idle_speed); `other` now requires a descriptive label (DB CHECK + gate + tool schema); weights canonicalized to kg.
+- **Persist `page` + `verbatim_quote` on rows** — ✅ DONE (per item, now real columns). Both NOT NULL on `spec` + `component_fact`; `page` remapped from chunk-relative to absolute PDF page; a per-run JSON snapshot is dumped so a regression baseline survives independently of the DB.
+- **Stronger dedup/normalization** (per item 2) — ⏸ STILL DEFERRED (exact-match dedup only; near-dups like "DOT 3" vs "DOT 3 Hydraulic Brake Fluid" still survive).
+- **Schema expansion for richer manual data** (fuses/bulbs/towing/etc., per the SCOPE DECISION below) — ⏸ STILL DEFERRED.
+
+**SCOPE DECISION — expand beyond specs/component facts.** The manual is a richer source than the schema currently models. Discovery inventory of other high-value extractable data types to add (future schema/extractor work): **fuse/relay assignments + amperage + circuit-breaker locations; bulb part numbers; warning-light / DIC message meanings; tire specs + TPMS + door-label pressures; towing/trailering capacities by model/engine/axle ratio + GVWR/GAWR/load limits; axle fluids by series; battery specs; fuel/octane requirements.** (Infotainment/personalization procedures = lower value.) Owner's manuals are a deeper data source than "specs + component facts" — plan a schema expansion to capture these. Fuse diagrams flagged as especially valuable.
+
+---
+
+## 7. Source acquisition (Layer 3) — SKETCHED, not yet designed
+
+Deferred to a later detailed pass (the schema + engine come first). Captured here so the plan is whole. Sources are layered by **legitimacy** and **time horizon** — you don't pick one, you layer them.
+
+**Tier 1 — Open / government / manufacturer-published (the safe foundation; start here):**
+- Government data, public-domain and underused: NHTSA/vPIC (deeper than current usage), EPA fuel-economy data (engine/displacement/fuel specifics), possibly CARB.
+- **Manufacturer-published owner's manuals & maintenance schedules** — often posted openly as PDFs on manufacturer sites. Categorically different from scraping a proprietary aggregator: this material is *meant* to be public. Prime extraction source for capacities, intervals, fluid specs. **The big underexplored Tier-1 source.**
+- Template already proven: OBDb (CC), NHTSA, MIT-licensed DTC set.
+
+**Tier 2 — Retrieval-grounded generation (the scale accelerator; likely highest-leverage):**
+- The clean, modern form of the "web scraping" instinct: Claude searches for a spec, finds an authoritative source, and **extracts from the retrieved document with the source cited** — fact comes from a retrieved page, not from memory. Same reliability distinction as the diagnostic engine.
+- Turns source acquisition from "manually collect millions of documents" into "let Claude find + extract, store the citation as proof." Directly attacks the bottleneck that stalled the old planning.
+- **Gated by open question 6.B** (citation must be real/checkable). This is the make-or-break design detail.
+
+**Tier 3 — Crowdsource from Vulcan's own technicians (the long-game moat):**
+- Skeleton already scaffolded: the confirmed-fix database. Extend the concept — your users are pros standing in front of real vehicles with the real specs in hand (door sticker, service manual, oil cap). Capture verified data points from the field: "You just did this oil change — what was the actual capacity?" → tech-verified spec from someone who read it off the car.
+- Slow to start (needs user base), but **compounds into a proprietary dataset no competitor has**, because it's generated by your specific users doing their specific jobs. This is the defensible moat.
+
+**Tier 4 — OFF-LIMITS (boundary stated explicitly):**
+- Identifix, AllData, Mitchell1, Innova — proprietary, licensed; scraping them is legally dangerous and violates Vulcan's clean-data principle. The line: "extract from manufacturer-published owner's manuals" = fine; "scrape AllData" = not. The difference is *who published it and whether it was meant to be public.*
+
+**Layering by time horizon:** Tier 1 + Tier 2 get Vulcan launched (safe foundation + fast scale). Tier 3 makes it defensible over time (the moat). All three feed the *same* extraction engine and the *same* unified store.
+
+---
+
+## 8. Build order (proposed)
+
+1. ~~Design & stand up the unified schema in Postgres/Supabase~~ ✅ **DONE & verified live.**
+2. **Build the extraction engine** (§6) with a test harness. ✅ **First slice PROVEN** (§6.1), then **PRODUCTIONIZED in Batch A** — trim-before-extract, widened vocab (+ `other`-label), persisted audit columns (absolute page + `verbatim_quote` NOT NULL), per-run dump + page remap: all DONE & validated (~$2.2/manual, ~66% cut, **zero core specs dropped** per the `--full` diff). **Still deferred:** stronger/fuzzy dedup, and schema expansion for richer manual data (fuses/bulbs/towing/etc.).
+3. **Tier 1 first feed** — extract from a small set of manufacturer manuals + government data to validate the end-to-end pipeline on real, safe sources. ← **NEXT**
+4. **Wire the honest-fallback + miss-logging** (Option C layers 2–3) into the app's spec path so the app is trustworthy while the DB is still sparse.
+5. **Tier 2 (retrieval-grounded)** once 6.B is designed — the scale accelerator.
+6. **Migrate the working three** (DTC, PID, VIN) into the unified store — deliberately, last, only once the store is proven.
+7. **Tier 3 (crowdsource)** — switch on as the user base grows; the compounding moat.
+
+---
+
+## 9. Decisions & remaining items (consolidated)
+
+**RESOLVED:**
+- **5.A — Vehicle-key granularity:** key on *mechanical configuration* (engine, drivetrain-where-it-matters, mechanically-meaningful series like 1500/2500), NOT trim badge. Default-resolve at engine level; split a spec finer only where its value actually differs. Data-driven. (§5.1)
+- **6.A — Extraction mode:** on-demand first, miss-log driven; batch as an accelerant for proven-popular vehicles. (§6)
+- **6.B — Retrieval-grounded verification:** SOLVED via native API features — Citations API (guaranteed structured source offsets), domain filtering (`allowed_domains` whitelist), dynamic filtering. Store only citation-grounded values; fail loud otherwise. (§6)
+- **6.C — Conflict resolution:** trust-tier precedence for the served value; flag conflicts for review (often a symptom of too-coarse keying). (§6)
+
+**MEASURED (Batch A — was "needs measurement"):**
+- **Cost:** Tier-1 doc extraction is a one-time, build-once per-document spend (asset-building, not recurring per-user — the opposite of Vehicle Finder). **Measured: ~$2.2 per large manual** (594-page Sierra, trimmed at threshold-6, ~66% cut from the $6.31 full-manual baseline; full detail in §6.1). Smaller manuals cost less; multiply per document. **Still to measure:** the separate Tier-2 web-search cost (~$10/1,000 searches), once that tier is built.
+
+**REMAINS OPEN (judgment, resolve as you build):**
+- **Validation thresholds:** the specific plausibility ranges per spec_type for the validation gate (§6 step 4). Start conservative, tune against real data.
+- **Migration timing:** when is the new store "proven" enough to absorb the working DTC/PID/VIN systems? Defined as a *confidence gate*, not a date (see below).
+
+**Migration "proven" gate (resolved as a standard, not a date):** absorb the working three only when (1) the store has run the specs + component-facts workload in production for a meaningful period with no integrity issues, (2) the extraction pipeline has a passing test harness, and (3) a migration rehearsal on a *copy* round-trips the data identically. Migrate **one system at a time** (DTC first — most self-contained and best-tested), keeping the old system as fallback until each is confirmed. Don't migrate to "finish" unification; migrate when the new store has independently earned the trust. No rush — the working systems work.
+
+---
+
+## 10. Connection to the rest of Vulcan
+
+- **Diagnostic engine (Stage 2+):** the database is the verified-fact source the reasoning layer reasons *over*. Stage 2's evidence loop and the database are complementary halves of the "verified facts + sound reasoning" architecture. The stronger the database, the less the diagnostic engine must rely on model recall, the more trustworthy the diagnosis.
+- **Ask Vulcan:** the database is the structural fix for the confident-wrongness that prompt-tuning could not solve. As the DB fills, more spec/component questions get verified answers; misses fall through to the (already-shipped) honest guardrail.
+- **Pre-launch infrastructure:** this store IS the anchor for the planned JSON→Postgres/Supabase migration. Build it as the scalable foundation, not a bolt-on.
+- **The moat:** Tier 3 crowdsourcing turns Vulcan's user base into a proprietary dataset competitors can't replicate — a genuine long-term business defensibility, built on the confirmed-fix skeleton that already exists.
