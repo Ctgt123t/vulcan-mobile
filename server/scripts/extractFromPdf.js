@@ -26,6 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import { PDFDocument } from "pdf-lib";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { pool } from "../db.js";
 import { logApiCost } from "../costLogger.js";
 
@@ -39,6 +40,52 @@ const MODEL = "claude-opus-4-6";
 const MAX_PAGES_PER_CHUNK = 150;
 const CONTEXT_LIMIT = 1_000_000;
 
+// ---- Trim-before-extract (the cost lever) ---------------------------------
+// The first-slice test proved every spec lives in the maintenance / specs /
+// capacities sections (the back half of the Sierra manual); pages 1-300 cost
+// ~$3 and produced ZERO specs. So rather than feed the whole manual, we locate
+// the spec-bearing pages LOCALLY (pdfjs-dist text extraction — zero API cost),
+// score each page against a spec-signal dictionary, expand each hot page by a
+// margin, merge into bands, and feed ONLY those pages to Claude. Target:
+// ~85-90% cost cut for ~100% of specs.
+//
+// Escape hatch: EXTRACT_FULL=1 or a `--full` arg forces whole-document
+// extraction (for A/B validation of the trimmed run against the full run).
+const FORCE_FULL =
+  process.env.EXTRACT_FULL === "1" || process.argv.includes("--full");
+
+// Tunables — named, not buried magic numbers; we tune these against the re-run.
+// Default threshold deliberately favours OVER-inclusion: on the Sierra manual
+// real spec pages are scattered across scores 5-22 (e.g. the Technical Data
+// "Capacities" table scores only 5; the oil-spec and brake-fluid pages score 7),
+// so a high threshold would silently drop specs. 6 keeps the clustered spec
+// pages (isolated score-5 *prose* is dropped; score-5 *spec* pages sit next to
+// score>=6 anchors and are rescued by the margin). Raise toward 8 only after the
+// answer-key re-run confirms which bands actually produced specs.
+const PAGE_SCORE_THRESHOLD = 6; // min keyword score for a page to count as "hot"
+const BAND_MARGIN_PAGES = 5;    // pages added on EACH side of every hot page (over-include)
+const MIN_SELECTED_PAGES = 20;  // sanity floor: fewer selected than this distrusts the trim
+
+// Spec-signal dictionary — the same vocabulary the extractor targets. A page's
+// score is the sum of the weights of the distinct signals it contains (case-
+// insensitive substring match). Strong, unambiguous spec markers outweigh
+// generic ones so a single specs/maintenance heading clears the threshold while
+// an incidental "battery" mention in a prose page does not.
+const SPEC_SIGNALS = [
+  // strong section headings + unambiguous unit/standard markers
+  ["capacities and specifications", 4], ["maintenance schedule", 4],
+  ["recommended fluids", 3], ["capacity", 2], ["specification", 2],
+  ["lb-ft", 2], ["ft-lb", 2], ["lb ft", 2], ["ft lb", 2], ["n·m", 2],
+  ["viscosity", 2], ["dexos", 2], ["dex-cool", 2], ["dexron", 2],
+  ["gawr", 2], ["gvwr", 2], ["r-134a", 2], ["spark plug gap", 2],
+  // generic spec vocabulary
+  ["torque", 1], ["coolant", 1], ["refrigerant", 1], ["lubricant", 1],
+  ["fluid", 1], ["sae ", 1], ["quart", 1], ["liter", 1], ["litre", 1],
+  ["psi", 1], ["kpa", 1], [" rpm", 1], ["transfer case", 1],
+  ["differential", 1], [" axle", 1], ["fuel tank", 1], ["dot 3", 1],
+  ["brake fluid", 1], ["tire pressure", 1], ["idle speed", 1],
+];
+
 const DEFAULT_PDF = path.join(
   __dirname,
   "..",
@@ -49,7 +96,8 @@ const PDF_PATH = process.argv[2]
   ? path.resolve(process.argv[2])
   : DEFAULT_PDF;
 
-// Controlled vocab — must match the CHECK constraint in 0001_init.sql.
+// Controlled vocab — must match the spec_type CHECK constraint, now widened by
+// 0002_widen_specs_and_audit_columns.sql. Keep these in lock-step with the SQL.
 const SPEC_TYPES = [
   "oil_capacity", "oil_viscosity", "oil_type",
   "coolant_capacity", "coolant_type",
@@ -57,7 +105,13 @@ const SPEC_TYPES = [
   "brake_fluid_type", "power_steering_fluid_type",
   "torque", "tire_pressure", "spark_plug_gap",
   "battery_group", "maintenance_interval",
-  "refrigerant_type", "refrigerant_capacity", "other",
+  "refrigerant_type", "refrigerant_capacity",
+  // Batch A additions (0002) — plain key/value specs that previously fell into `other`.
+  "fuel_capacity",
+  "axle_fluid_type", "axle_fluid_capacity",
+  "transfer_case_fluid_type", "transfer_case_fluid_capacity",
+  "gvwr", "gawr", "idle_speed",
+  "other",
 ];
 
 const SYSTEM_PROMPT = `You are a precise automotive data-extraction engine. You are given the official owner's manual PDF for a 2011 GMC Sierra.
@@ -74,9 +128,11 @@ Engine association:
 - Leave engine empty only for values that apply to the whole vehicle.
 
 Spec typing:
-- Use the spec_type that best matches. If none fits, use "other" and describe it in value_text.
+- Use the spec_type that best matches. Prefer a specific type over "other" whenever one fits — the vocabulary now includes fuel_capacity, axle_fluid_type, axle_fluid_capacity, transfer_case_fluid_type, transfer_case_fluid_capacity, gvwr, gawr, and idle_speed (fast-idle / curb-idle RPM), in addition to the oil/coolant/transmission/brake/torque/tire/spark-plug/battery/maintenance/refrigerant types.
+- Only use "other" when NOTHING fits. When you do, value_text is REQUIRED and must be a short descriptive label of WHAT the value is (e.g. "front GAWR", "fast-idle RPM", "wheel-nut starting torque") — never leave it empty. A bare "340 kg" with no subject is useless and will be rejected.
 - Numeric specs: provide value_numeric + value_unit. Textual specs (fluid types, viscosities/grades): provide value_text.
-- qualifier captures conditions like "with filter", "severe service", "cold".
+- Weights (gvwr, gawr): report value_numeric in whichever unit the document prints (kg or lb) and set value_unit to match — do NOT convert it yourself; the pipeline canonicalizes weights downstream.
+- qualifier captures conditions like "with filter", "severe service", "cold", or "front"/"rear" for per-axle ratings.
 
 Also populate other_data_types_present with the CATEGORIES of other extractable data you observed in this manual but did NOT extract (e.g. fuse assignments, bulb part numbers, warning-light meanings) — names only, for planning. Do not extract those.`;
 
@@ -103,6 +159,16 @@ const TOOL = {
             verbatim_quote: { type: "string", description: "Exact text copied from the document proving this value." },
           },
           required: ["spec_type", "page", "verbatim_quote"],
+          // When spec_type is "other", value_text is REQUIRED — it carries the
+          // descriptive label of what the value is (the value itself lives in
+          // value_numeric/value_unit for numeric others). Enforced redundantly
+          // in the validation gate and by the spec_other_requires_label CHECK.
+          allOf: [
+            {
+              if: { properties: { spec_type: { const: "other" } } },
+              then: { required: ["value_text"] },
+            },
+          ],
         },
       },
       component_facts: {
@@ -133,25 +199,60 @@ const TOOL = {
 // ---- Validation gate ------------------------------------------------------
 
 const CAP_UNITS = ["qt", "qts", "quart", "quarts", "l", "liter", "liters", "litre", "litres", "gal", "gallon", "gallons"];
+// Small driveline-fluid volumes (axle / transfer case) also show up in pints,
+// ounces, and millilitres — a superset of CAP_UNITS.
+const FLUID_SMALL_UNITS = [...CAP_UNITS, "pt", "pint", "pints", "oz", "ounce", "ounces", "ml", "milliliter", "milliliters"];
 const PRESS_UNITS = ["psi", "kpa", "bar"];
 const TORQUE_UNITS = ["ft-lb", "ft-lbs", "ftlb", "lb-ft", "lbft", "ft·lb", "nm", "n·m", "n-m"];
 const GAP_UNITS = ["in", "inch", "inches", "\"", "mm"];
 const INTERVAL_UNITS = ["mi", "mile", "miles", "km", "kilometer", "kilometers", "mo", "month", "months", "yr", "year", "years"];
+const WEIGHT_UNITS = ["kg", "kgs", "kilogram", "kilograms", "lb", "lbs", "pound", "pounds"];
+const RPM_UNITS = ["rpm", "r/min", "min-1"];
 
 const NUMERIC_TYPES = new Set([
   "oil_capacity", "coolant_capacity", "transmission_fluid_capacity",
   "refrigerant_capacity", "torque", "tire_pressure", "spark_plug_gap",
   "maintenance_interval",
+  // Batch A numeric additions.
+  "fuel_capacity", "axle_fluid_capacity", "transfer_case_fluid_capacity",
+  "gvwr", "gawr", "idle_speed",
 ]);
+
+// Weights are canonicalized to a single unit so one manual can't store lb while
+// another stores kg for the same spec_type. CANONICAL WEIGHT UNIT = kg (SI);
+// the display layer converts back to lb if it ever wants to. Conversion happens
+// here at normalize time, BEFORE validation (which then checks the kg range).
+const WEIGHT_TYPES = new Set(["gvwr", "gawr"]);
+const LB_TO_KG = 0.45359237;
 
 function norm(u) {
   return String(u ?? "").trim().toLowerCase();
+}
+
+// Mutates and returns the spec with weights canonicalized to kg. No-op for
+// non-weight specs. Called immediately before validateSpec.
+function normalizeSpec(s) {
+  if (WEIGHT_TYPES.has(s.spec_type) && typeof s.value_numeric === "number") {
+    const u = norm(s.value_unit);
+    if (["lb", "lbs", "pound", "pounds"].includes(u)) {
+      s.value_numeric = Math.round(s.value_numeric * LB_TO_KG);
+      s.value_unit = "kg";
+    } else if (["kg", "kgs", "kilogram", "kilograms"].includes(u)) {
+      s.value_unit = "kg";
+    }
+  }
+  return s;
 }
 
 // Returns { ok: true } or { ok: false, reason }.
 function validateSpec(s) {
   if (!s.verbatim_quote || String(s.verbatim_quote).trim().length < 3) {
     return { ok: false, reason: "no verbatim_quote (hard gate)" };
+  }
+  // page is a NOT NULL audit column — a missing/invalid page would abort the
+  // whole store transaction at INSERT, so quarantine it here instead.
+  if (!(typeof s.page === "number" && Number.isFinite(s.page) && s.page >= 1)) {
+    return { ok: false, reason: "missing/invalid page (NOT NULL audit column)" };
   }
   if (!SPEC_TYPES.includes(s.spec_type)) {
     return { ok: false, reason: `spec_type "${s.spec_type}" not in controlled vocab` };
@@ -162,6 +263,12 @@ function validateSpec(s) {
 
   if (!hasNum && !hasText) {
     return { ok: false, reason: "neither value_numeric nor value_text present" };
+  }
+
+  // `other` must carry a descriptive label in value_text (mirrors the
+  // spec_other_requires_label DB CHECK and the tool-schema conditional).
+  if (s.spec_type === "other" && !hasText) {
+    return { ok: false, reason: "`other` spec missing required descriptive label (value_text)" };
   }
 
   if (NUMERIC_TYPES.has(s.spec_type) && hasNum) {
@@ -209,6 +316,39 @@ function validateSpec(s) {
         if (v < 1 || v > 300000) { ok = false; why = `interval ${v}${u} out of range`; }
         break;
       }
+      case "fuel_capacity": {
+        if (!CAP_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a capacity unit`; break; }
+        if (/l|liter|litre/.test(u)) { if (v < 10 || v > 230) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
+        else if (/gal/.test(u)) { if (v < 3 || v > 60) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
+        else if (v < 10 || v > 250) { ok = false; why = `fuel capacity ${v}${u} out of range`; } // qt
+        break;
+      }
+      case "axle_fluid_capacity":
+      case "transfer_case_fluid_capacity": {
+        if (!FLUID_SMALL_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a fluid-capacity unit`; break; }
+        // small driveline volumes (~fraction of a quart up to a few quarts), wide across units
+        if (/oz|ounce/.test(u)) { if (v < 4 || v > 400) { ok = false; why = `fluid ${v}${u} out of range`; } }
+        else if (/ml|milli/.test(u)) { if (v < 100 || v > 12000) { ok = false; why = `fluid ${v}${u} out of range`; } }
+        else if (/pt|pint/.test(u)) { if (v < 0.4 || v > 12) { ok = false; why = `fluid ${v}${u} out of range`; } }
+        else { if (v < 0.2 || v > 12) { ok = false; why = `fluid ${v}${u} out of range`; } } // qt/l/gal
+        break;
+      }
+      case "gvwr": {
+        // canonicalized to kg by normalizeSpec before we get here
+        if (u !== "kg") { ok = false; why = `gvwr unit "${u}" not canonical kg (normalize failed)`; break; }
+        if (v < 1000 || v > 20000) { ok = false; why = `gvwr ${v}kg out of range`; }
+        break;
+      }
+      case "gawr": {
+        if (u !== "kg") { ok = false; why = `gawr unit "${u}" not canonical kg (normalize failed)`; break; }
+        if (v < 500 || v > 12000) { ok = false; why = `gawr ${v}kg out of range`; }
+        break;
+      }
+      case "idle_speed": {
+        if (!RPM_UNITS.includes(u)) { ok = false; why = `unit "${u}" not an rpm unit`; break; }
+        if (v < 300 || v > 3000) { ok = false; why = `idle speed ${v}${u} out of range`; }
+        break;
+      }
     }
     if (!ok) return { ok: false, reason: why };
   }
@@ -219,6 +359,9 @@ function validateSpec(s) {
 function validateComponentFact(f) {
   if (!f.verbatim_quote || String(f.verbatim_quote).trim().length < 3) {
     return { ok: false, reason: "no verbatim_quote (hard gate)" };
+  }
+  if (!(typeof f.page === "number" && Number.isFinite(f.page) && f.page >= 1)) {
+    return { ok: false, reason: "missing/invalid page (NOT NULL audit column)" };
   }
   if (!f.component || !f.fact_type || !f.value_text) {
     return { ok: false, reason: "missing component / fact_type / value_text" };
@@ -268,15 +411,67 @@ async function extractChunk(client, pdfB64, pageNote) {
   return { out: toolBlock ? toolBlock.input : null, costData, stopReason: final.stop_reason };
 }
 
-// Build a base64 PDF containing pages [start, end) (0-indexed) of srcDoc.
-async function chunkToB64(srcDoc, start, end) {
+// Build a base64 PDF containing exactly the given 0-indexed pages of srcDoc
+// (in the order supplied). Works for both contiguous ranges and the sparse
+// page sets the trimmer produces.
+async function chunkToB64(srcDoc, idx) {
   const chunk = await PDFDocument.create();
-  const idx = [];
-  for (let i = start; i < end; i++) idx.push(i);
   const copied = await chunk.copyPages(srcDoc, idx);
   for (const p of copied) chunk.addPage(p);
   const bytes = await chunk.save();
   return Buffer.from(bytes).toString("base64");
+}
+
+// ---- Trim: locate the spec-bearing pages (local, zero API cost) -----------
+// Extracts every page's text with pdfjs-dist, scores it against SPEC_SIGNALS,
+// expands each hot page by ±BAND_MARGIN_PAGES, and merges into bands. Returns
+// { pages: sorted 0-indexed page list (or null), bands, scoredHot, reason }.
+async function selectSpecPages(pdfBytes, pageCount) {
+  const data = new Uint8Array(pdfBytes);
+  const doc = await getDocument({ data, useSystemFonts: true }).promise;
+  const hot = [];
+  try {
+    for (let i = 0; i < doc.numPages; i++) {
+      const page = await doc.getPage(i + 1);
+      const tc = await page.getTextContent();
+      const text = tc.items.map((t) => t.str).join(" ").toLowerCase();
+      let score = 0;
+      for (const [needle, w] of SPEC_SIGNALS) {
+        if (text.includes(needle)) score += w;
+      }
+      if (score >= PAGE_SCORE_THRESHOLD) hot.push(i); // 0-indexed
+    }
+  } finally {
+    await doc.destroy();
+  }
+
+  if (hot.length === 0) {
+    return { pages: null, bands: [], scoredHot: 0, reason: "no hot pages found (image-only PDF?)" };
+  }
+
+  // Expand each hot page by the margin, clamp to the document, dedupe via a set.
+  const marked = new Set();
+  for (const p of hot) {
+    for (let d = -BAND_MARGIN_PAGES; d <= BAND_MARGIN_PAGES; d++) {
+      const q = p + d;
+      if (q >= 0 && q < pageCount) marked.add(q);
+    }
+  }
+  const pages = Array.from(marked).sort((a, b) => a - b);
+
+  // Collapse into contiguous [start, end] bands for human-readable logging.
+  const bands = [];
+  let bandStart = pages[0];
+  let prev = pages[0];
+  for (let k = 1; k < pages.length; k++) {
+    if (pages[k] === prev + 1) { prev = pages[k]; continue; }
+    bands.push([bandStart, prev]);
+    bandStart = pages[k];
+    prev = pages[k];
+  }
+  bands.push([bandStart, prev]);
+
+  return { pages, bands, scoredHot: hot.length, reason: null };
 }
 
 // ---- Main -----------------------------------------------------------------
@@ -318,21 +513,47 @@ async function main() {
     console.warn(`[extract] token-count pre-flight failed (continuing): ${err.message}`);
   }
 
-  // --- Decide chunking ---------------------------------------------------
+  // --- Select pages (trim-before-extract) --------------------------------
   const srcDoc = await PDFDocument.load(pdfBytes);
   const pageCount = srcDoc.getPageCount();
-  const wholeFits = preflightTokens != null && preflightTokens <= CONTEXT_LIMIT * 0.95;
-  const chunks = [];
-  if (wholeFits) {
-    chunks.push([0, pageCount]);
+
+  let selectedPages; // sorted array of 0-indexed pages to feed Claude
+  let selectionNote;
+  if (FORCE_FULL) {
+    selectedPages = Array.from({ length: pageCount }, (_, i) => i);
+    selectionNote = `--full / EXTRACT_FULL set — feeding all ${pageCount} pages`;
   } else {
-    for (let s = 0; s < pageCount; s += MAX_PAGES_PER_CHUNK) {
-      chunks.push([s, Math.min(s + MAX_PAGES_PER_CHUNK, pageCount)]);
+    const sel = await selectSpecPages(pdfBytes, pageCount);
+    if (sel.pages && sel.pages.length >= MIN_SELECTED_PAGES) {
+      selectedPages = sel.pages;
+      const bandStr = sel.bands.map(([a, b]) => `${a + 1}-${b + 1}`).join(", ");
+      selectionNote =
+        `trim: ${sel.scoredHot} hot pages -> ${sel.pages.length}/${pageCount} selected ` +
+        `(±${BAND_MARGIN_PAGES}-page margin); bands: ${bandStr}`;
+    } else {
+      // FAIL-SAFE FLOOR — the trim looks untrustworthy (no hot pages, or fewer
+      // than the sanity floor). Fall back to the back half rather than risk a
+      // silent spec drop: the first-slice test proved every spec lives there.
+      const half = Math.floor(pageCount / 2);
+      selectedPages = Array.from({ length: pageCount - half }, (_, i) => half + i);
+      const why = sel.pages
+        ? `only ${sel.pages.length} selected (< floor ${MIN_SELECTED_PAGES})`
+        : sel.reason;
+      selectionNote = `FAIL-SAFE FALLBACK to back half (pages ${half + 1}-${pageCount}) — ${why}`;
+      console.warn(`[extract] WARNING: ${selectionNote}`);
     }
   }
+  console.log(`[extract] page selection — ${selectionNote}`);
+
+  // --- Chunk the selected pages into <=MAX_PAGES_PER_CHUNK groups ---------
+  // Each chunk is an array of 0-indexed pages (may span band gaps — fine, the
+  // per-item page number Claude reports is what we store as provenance).
+  const chunks = [];
+  for (let i = 0; i < selectedPages.length; i += MAX_PAGES_PER_CHUNK) {
+    chunks.push(selectedPages.slice(i, i + MAX_PAGES_PER_CHUNK));
+  }
   console.log(
-    `[extract] ${pageCount} pages -> ${chunks.length} chunk(s)` +
-      (wholeFits ? " (fits whole)" : ` of <=${MAX_PAGES_PER_CHUNK} pages (exceeds 1M context — splitting)`),
+    `[extract] ${selectedPages.length} selected pages -> ${chunks.length} chunk(s) of <=${MAX_PAGES_PER_CHUNK} pages`,
   );
 
   // --- Extract each chunk, merge ----------------------------------------
@@ -346,10 +567,14 @@ async function main() {
   let anyTruncated = false;
 
   for (let ci = 0; ci < chunks.length; ci++) {
-    const [start, end] = chunks[ci];
-    const note = `This is pages ${start + 1}-${end} of a ${pageCount}-page 2011 GMC Sierra owner's manual.`;
-    console.log(`[extract] chunk ${ci + 1}/${chunks.length} (pages ${start + 1}-${end}) -> ${MODEL} ...`);
-    const b64 = wholeFits ? pdfBytes.toString("base64") : await chunkToB64(srcDoc, start, end);
+    const idx = chunks[ci];
+    const first = idx[0] + 1;
+    const last = idx[idx.length - 1] + 1;
+    const note =
+      `This is a ${idx.length}-page selection (spanning roughly manual pages ` +
+      `${first}-${last}) from a ${pageCount}-page 2011 GMC Sierra owner's manual.`;
+    console.log(`[extract] chunk ${ci + 1}/${chunks.length} (${idx.length} pages, ~${first}-${last}) -> ${MODEL} ...`);
+    const b64 = await chunkToB64(srcDoc, idx);
     const { out, costData, stopReason } = await extractChunk(client, b64, note);
     if (stopReason === "max_tokens") {
       anyTruncated = true;
@@ -391,6 +616,7 @@ async function main() {
   const passedSpecs = [];
   const quarantinedSpecs = [];
   for (const s of specs) {
+    normalizeSpec(s); // canonicalize weights to kg before validating/storing
     const v = validateSpec(s);
     (v.ok ? passedSpecs : quarantinedSpecs).push({ ...s, _reason: v.reason });
   }
@@ -422,8 +648,8 @@ async function main() {
       const variantId = await resolveVariant(db, s.engine);
       await db.query(
         `insert into spec
-           (vehicle_variant_id, spec_type, value_numeric, value_unit, value_text, qualifier, confidence, source_id)
-         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+           (vehicle_variant_id, spec_type, value_numeric, value_unit, value_text, qualifier, confidence, source_id, page, verbatim_quote)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [
           variantId,
           s.spec_type,
@@ -433,6 +659,8 @@ async function main() {
           s.qualifier ?? null,
           typeof s.confidence === "number" ? s.confidence : null,
           sourceId,
+          Math.round(Number(s.page)),
+          String(s.verbatim_quote),
         ],
       );
     }
@@ -440,9 +668,9 @@ async function main() {
       const variantId = await resolveVariant(db, f.engine);
       await db.query(
         `insert into component_fact
-           (vehicle_variant_id, component, fact_type, value_text, source_id)
-         values ($1,$2,$3,$4,$5)`,
-        [variantId, f.component, f.fact_type, f.value_text, sourceId],
+           (vehicle_variant_id, component, fact_type, value_text, source_id, page, verbatim_quote)
+         values ($1,$2,$3,$4,$5,$6,$7)`,
+        [variantId, f.component, f.fact_type, f.value_text, sourceId, Math.round(Number(f.page)), String(f.verbatim_quote)],
       );
     }
     await db.query("commit");
@@ -458,7 +686,7 @@ async function main() {
   // --- Read back ---------------------------------------------------------
   const back = await pool.query(
     `select s.id, s.spec_type, s.value_numeric, s.value_unit, s.value_text, s.qualifier,
-            vv.engine_descriptor, src.title
+            s.page, s.verbatim_quote, vv.engine_descriptor, src.title
        from spec s
        join vehicle_variant vv on vv.id = s.vehicle_variant_id
        join source src on src.id = s.source_id
@@ -482,6 +710,7 @@ async function main() {
     console.log(`Whole-document token size: ${preflightTokens.toLocaleString()} tokens` +
       (preflightTokens > CONTEXT_LIMIT ? `  *** EXCEEDS Opus 4.6's 1M context window — cannot be sent whole ***` : ""));
   }
+  console.log(`Pages fed to Claude: ${selectedPages.length}/${pageCount}  (${selectionNote})`);
   console.log(`Chunks processed: ${chunks.length} (<=${MAX_PAGES_PER_CHUNK} pages each)` +
     (anyTruncated ? "  [WARNING: a chunk hit max_tokens — output may be truncated]" : ""));
 
@@ -501,7 +730,10 @@ async function main() {
       : (r.value_text ?? "");
     const eng = r.engine_descriptor ? ` [${r.engine_descriptor}]` : "";
     const q = r.qualifier ? ` (${r.qualifier})` : "";
-    console.log(`  ${r.spec_type.padEnd(28)} ${val}${q}${eng}`);
+    // Show the audit trail (page + a snippet of the verbatim quote) so the
+    // re-run visibly confirms the NOT NULL columns populate on every row.
+    const quote = String(r.verbatim_quote ?? "").replace(/\s+/g, " ").slice(0, 50);
+    console.log(`  ${r.spec_type.padEnd(28)} ${val}${q}${eng}  · p.${r.page} "${quote}${quote.length >= 50 ? "…" : ""}"`);
   }
   console.log(`\n  component_facts stored: ${backFacts.rows[0].n}`);
 
