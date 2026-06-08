@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { cacheFile } from "./cacheDir.js";
-import * as vehicleFinder from "./specProviders/vehicleFinder.js";
-import * as openLabor from "./specProviders/openLabor.js";
+import * as supabaseSpecs from "./specProviders/supabaseSpecs.js";
 
 // ----------------------------------------------------------------------------
 // Vehicle spec retrieval — second layer of the hybrid retrieval system (the
@@ -97,23 +96,6 @@ function persist() {
   }
 }
 
-function normalizeVehicle(v) {
-  if (!v || typeof v !== "object") return "";
-  // `series` is part of the key so a truck whose class disambiguates the spec
-  // (Sierra 1500 vs 2500) doesn't collide, and so any pre-fix entry cached
-  // under the coarse "Sierra" (no series) is never served to the VIN path,
-  // which now carries series. Adding this segment intentionally orphans old
-  // entries — each vehicle re-fetches once, then caches forever as before.
-  return [v.year, v.make, v.model, v.series, v.trim, v.engineType]
-    .map((x) => String(x ?? "").toLowerCase().trim())
-    .join("|");
-}
-
-function cacheKey(vehicle, specType, params) {
-  const p = params ? JSON.stringify(params) : "";
-  return `${normalizeVehicle(vehicle)}::${specType}::${p}`;
-}
-
 // ----------- Pattern detection ---------------------------------------------
 
 // Each entry: regex → spec type. First match wins. Order matters — more
@@ -189,7 +171,10 @@ export function isSpecShapedQuestion(text) {
 
 // ----------- Provider orchestration ----------------------------------------
 
-const PROVIDERS = [vehicleFinder, openLabor];
+// The Supabase spec DB is now the sole spec data source (Vehicle Finder removed
+// — proven a dead end; Open Labor stays disabled/unrouted). The provider shape
+// is kept so a future Tier-2 retrieval-grounded provider can slot in here.
+const PROVIDERS = [supabaseSpecs];
 
 // Shared fetcher passed into providers so they don't each implement timeouts.
 async function fetchWithTimeout(url, options = {}, timeoutMs = 7000) {
@@ -203,199 +188,149 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 7000) {
 }
 
 // Returns { data, source, fromCache } | null
+//
+// AIRTIGHT FAIL-SOFT GUARANTEE: this function NEVER throws. It is awaited from
+// the Diagnose/Assess proactive-injection paths OUTSIDE their endpoint's inner
+// try/catch, so an escaping rejection here would 500 the request. A DB outage,
+// a query error, or any unexpected fault must degrade to a clean miss (null) →
+// the honest guard-railed Claude fallback. The whole body is wrapped to enforce
+// that. DB-down and DB-miss are identical to the caller (differ only in logging).
+//
+// DB results are NOT written to vehicleSpecCache.json — the DB IS the persistent
+// store; double-caching would re-introduce staleness (a re-extraction wouldn't
+// surface) for no benefit (DB reads are cheap, no external API cost/latency).
+// The hit/miss/error counters are kept for /metrics and the startup rollup.
 export async function lookupSpec(vehicle, specType, params = null) {
-  if (!vehicle || !vehicle.year || !vehicle.make || !vehicle.model) {
-    return null;
-  }
-  const key = cacheKey(vehicle, specType, params);
+  try {
+    if (!vehicle || !vehicle.year || !vehicle.make || !vehicle.model) {
+      return null;
+    }
 
-  const cached = cache.entries[key];
-  if (cached) {
-    cache.hits++;
-    persist();
-    console.log(
-      `[vehicleSpecs] HIT ${specType} for ${vehicle.year} ${vehicle.make} ${vehicle.model} (source=${cached.source})`,
-    );
-    return { data: cached.data, source: cached.source, fromCache: true };
-  }
-
-  for (const provider of PROVIDERS) {
-    if (!provider.configured()) continue;
-    cache.providerCalls++;
-    try {
-      const result = await provider.lookup(
-        vehicle,
-        specType,
-        params,
-        fetchWithTimeout,
-      );
-      if (result && result.data) {
-        cache.entries[key] = {
-          data: result.data,
-          source: provider.id,
-          vehicle: {
-            year: vehicle.year,
-            make: vehicle.make,
-            model: vehicle.model,
-            series: vehicle.series,
-            trim: vehicle.trim,
-            engineType: vehicle.engineType,
-          },
+    for (const provider of PROVIDERS) {
+      if (!provider.configured()) continue;
+      cache.providerCalls++;
+      try {
+        const result = await provider.lookup(
+          vehicle,
           specType,
           params,
-          fetchedAt: new Date().toISOString(),
-        };
-        persist();
-        console.log(
-          `[vehicleSpecs] STORE ${specType} from ${provider.id} for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+          fetchWithTimeout,
         );
-        return { data: result.data, source: provider.id, fromCache: false };
+        if (result && result.data) {
+          cache.hits++;
+          persist();
+          console.log(
+            `[vehicleSpecs] HIT ${specType} for ${vehicle.year} ${vehicle.make} ${vehicle.model} (source=${provider.id})`,
+          );
+          return { data: result.data, source: provider.id, fromCache: false };
+        }
+      } catch (err) {
+        cache.providerErrors++;
+        console.warn(
+          `[vehicleSpecs] provider ${provider.id} failed for ${specType}:`,
+          err.message,
+        );
       }
+    }
+
+    cache.misses++;
+    persist();
+    console.log(
+      `[vehicleSpecs] MISS ${specType} for ${vehicle.year} ${vehicle.make} ${vehicle.model} — falling through to Claude`,
+    );
+    // Demand-ranked extraction queue. Fully fail-soft: recordSpecMiss never
+    // throws, and the extra guard here keeps the no-throw guarantee airtight.
+    try {
+      await supabaseSpecs.recordSpecMiss(vehicle, specType);
     } catch (err) {
-      cache.providerErrors++;
-      console.warn(
-        `[vehicleSpecs] provider ${provider.id} failed for ${specType}:`,
-        err.message,
-      );
+      console.warn(`[vehicleSpecs] miss-log unexpected error (continuing): ${err.message}`);
     }
+    return null;
+  } catch (err) {
+    console.warn(
+      `[vehicleSpecs] lookupSpec unexpected error for ${specType} (failing soft to miss):`,
+      err.message,
+    );
+    return null;
   }
-
-  cache.misses++;
-  persist();
-  console.log(
-    `[vehicleSpecs] MISS ${specType} for ${vehicle.year} ${vehicle.make} ${vehicle.model} — falling through to Claude`,
-  );
-  return null;
 }
 
-// ----------- Formatters ----------------------------------------------------
+// ----------- Formatters (DB-native) -----------------------------------------
+//
+// The provider returns DB-shaped data:
+//   { specs: [{dbType, valueNumeric, valueUnit, valueText, qualifier, engine}],
+//     componentFacts: [{component, factType, value}],
+//     sourceTitle, trustTier, multiEngine }
+// These render that shape directly — no coercion into a fixed per-type schema,
+// so the multi-row richness (per-engine, per-class) survives and any DB
+// spec_type renders uniformly.
 
-function fmtOil(d, v) {
-  const head = `**${v.year} ${v.make} ${v.model}${v.engineType ? " · " + v.engineType : ""} — Oil**`;
-  const lines = [head, ""];
-  if (d.viscosity) lines.push(`• Viscosity: ${d.viscosity}`);
-  if (d.oilType) lines.push(`• Oil type: ${d.oilType}`);
-  if (d.capacityWithFilterQt != null) {
-    lines.push(`• Capacity with filter: ${d.capacityWithFilterQt} qt`);
-  }
-  if (d.capacityWithoutFilterQt != null) {
-    lines.push(`• Capacity without filter: ${d.capacityWithoutFilterQt} qt`);
-  }
-  if (d.oemSpec) lines.push(`• OEM spec: ${d.oemSpec}`);
-
-  if (Array.isArray(d.filters) && d.filters.length > 0) {
-    lines.push("", "Filter part numbers:");
-    for (const f of d.filters) {
-      const label = [f.brand, f.partNumber].filter(Boolean).join(" ");
-      const oem = f.isOem ? " (OEM)" : "";
-      const desc = f.description ? ` — ${f.description}` : "";
-      lines.push(`• ${label}${oem}${desc}`);
-    }
-  }
-
-  const torqueBits = [];
-  if (d.drainBoltTorqueFtLb != null) torqueBits.push(`${d.drainBoltTorqueFtLb} ft-lb`);
-  if (d.drainBoltTorqueNm != null) torqueBits.push(`${d.drainBoltTorqueNm} Nm`);
-  if (torqueBits.length > 0) {
-    let line = `• Drain bolt torque: ${torqueBits.join(" / ")}`;
-    if (d.drainBoltNotes) line += ` — ${d.drainBoltNotes}`;
-    lines.push("", line);
-  } else if (d.drainBoltNotes) {
-    lines.push("", `• Drain bolt: ${d.drainBoltNotes}`);
-  }
-  if (d.drainBoltSocketSizeMm) lines.push(`• Drain bolt socket: ${d.drainBoltSocketSizeMm} mm`);
-  if (d.drainBoltThreadSize) lines.push(`• Drain bolt thread: ${d.drainBoltThreadSize}`);
-  return lines.join("\n");
-}
-
-function fmtTorque(d, v) {
-  const head = `**${v.year} ${v.make} ${v.model} — Torque Specs**`;
-  const lines = [head, ""];
-  const rows = Array.isArray(d.specs) ? d.specs : [];
-  for (const row of rows) {
-    const lbf = row.ftLbs != null ? `${row.ftLbs} ft-lb` : null;
-    const nm = row.nm != null ? `${row.nm} Nm` : null;
-    const val = [lbf, nm].filter(Boolean).join(" / ");
-    lines.push(`• ${row.fastener}: ${val}${row.notes ? ` — ${row.notes}` : ""}`);
-  }
-  return lines.join("\n");
-}
-
-function fmtMaintenance(d, v) {
-  const head = `**${v.year} ${v.make} ${v.model} — Maintenance Schedule**`;
-  const lines = [head, ""];
-  const items = Array.isArray(d.items) ? d.items : [];
-  // Group consecutive tasks that share an interval so the schedule reads
-  // like an OEM service chart ("Every 5,000 mi / 6 mo:" then bullets).
-  let lastInterval = null;
-  for (const i of items) {
-    const miles = i.mileageInterval != null
-      ? `${i.mileageInterval.toLocaleString()} mi`
-      : null;
-    const months = i.monthsInterval != null ? `${i.monthsInterval} mo` : null;
-    const interval = [miles, months].filter(Boolean).join(" / ") || "?";
-    if (interval !== lastInterval) {
-      if (lastInterval !== null) lines.push("");
-      lines.push(`**Every ${interval}:**`);
-      lastInterval = interval;
-    }
-    let line = `• ${i.task}`;
-    if (i.parts && i.parts.length > 0) {
-      const partsText = i.parts.map((p) => {
-        const label = [p.brand, p.partNumber].filter(Boolean).join(" ");
-        const qty = p.qty ? ` ×${p.qty}` : "";
-        return `${label}${qty}`;
-      }).join(", ");
-      line += ` — ${partsText}`;
-    }
-    lines.push(line);
-  }
-  return lines.join("\n");
-}
-
-function fmtGeneric(d, v, label) {
-  const head = `**${v.year} ${v.make} ${v.model} — ${label}**`;
-  const lines = [head, ""];
-  if (typeof d === "string") {
-    lines.push(d);
-  } else {
-    for (const [k, val] of Object.entries(d)) {
-      if (val == null || val === "") continue;
-      lines.push(`• ${k}: ${val}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-const FORMATTERS = {
-  [SPEC_TYPES.OIL]: fmtOil,
-  [SPEC_TYPES.TORQUE]: fmtTorque,
-  [SPEC_TYPES.MAINTENANCE_INTERVAL]: fmtMaintenance,
-  [SPEC_TYPES.COOLANT]: (d, v) => fmtGeneric(d, v, "Coolant"),
-  [SPEC_TYPES.TRANSMISSION_FLUID]: (d, v) => fmtGeneric(d, v, "Transmission Fluid"),
-  [SPEC_TYPES.BRAKE_FLUID]: (d, v) => fmtGeneric(d, v, "Brake Fluid"),
-  [SPEC_TYPES.POWER_STEERING_FLUID]: (d, v) => fmtGeneric(d, v, "Power Steering Fluid"),
-  [SPEC_TYPES.BATTERY]: (d, v) => fmtGeneric(d, v, "Battery"),
+// DB spec_type -> human label. Includes the widened Batch A types so a future
+// intent-widening pass renders them with no formatter change.
+const DB_TYPE_LABELS = {
+  oil_capacity: "Oil capacity", oil_viscosity: "Oil viscosity", oil_type: "Oil type",
+  coolant_capacity: "Coolant capacity", coolant_type: "Coolant",
+  transmission_fluid_type: "Transmission fluid", transmission_fluid_capacity: "Transmission fluid capacity",
+  brake_fluid_type: "Brake fluid", power_steering_fluid_type: "Power steering fluid",
+  torque: "Torque", battery_group: "Battery group", maintenance_interval: "Maintenance",
+  fuel_capacity: "Fuel capacity", axle_fluid_type: "Axle fluid", axle_fluid_capacity: "Axle fluid capacity",
+  transfer_case_fluid_type: "Transfer case fluid", transfer_case_fluid_capacity: "Transfer case fluid capacity",
+  gvwr: "GVWR", gawr: "GAWR", idle_speed: "Idle speed",
+  refrigerant_type: "Refrigerant", refrigerant_capacity: "Refrigerant capacity",
+  spark_plug_gap: "Spark plug gap", tire_pressure: "Tire pressure", other: "Spec",
 };
 
-export function formatSpecAnswer(specType, result, vehicle) {
-  const fmt = FORMATTERS[specType];
-  const text = fmt ? fmt(result.data, vehicle) : fmtGeneric(result.data, vehicle, specType);
-  return `${text}\n\n_Source: ${result.source}${result.fromCache ? " (cached)" : ""}_`;
+function fmtSpecValue(s) {
+  return s.valueNumeric != null
+    ? `${s.valueNumeric}${s.valueUnit ? " " + s.valueUnit : ""}`
+    : (s.valueText ?? "");
 }
 
-// Same data, but rendered as a system-prompt context block for Diagnose
-// mode — Claude reads it as "verified specs, prefer these over your own
-// recollection".
+// One bullet line for a spec row. `showEngine` labels the engine when the result
+// spans multiple engines, so the tech can pick their own.
+function specLine(s, showEngine) {
+  const label = DB_TYPE_LABELS[s.dbType] || s.dbType;
+  let line = `• ${label}: ${fmtSpecValue(s)}`;
+  if (s.qualifier) line += ` (${s.qualifier})`;
+  if (showEngine && s.engine) line += ` — ${s.engine}`;
+  return line;
+}
+
+function componentFactLine(f) {
+  const ft = f.factType && f.factType !== "type"
+    ? " " + String(f.factType).replace(/_/g, " ")
+    : "";
+  return `• ${f.component}${ft}: ${f.value}`;
+}
+
+// Ask Vulcan direct answer. Seamless on a hit — NO verified/unverified badge,
+// just a clean spec card with a source footer.
+export function formatSpecAnswer(specType, result, vehicle) {
+  const d = result.data;
+  const engLabel = !d.multiEngine && vehicle.engineType ? ` · ${vehicle.engineType}` : "";
+  const lines = [`**${vehicle.year} ${vehicle.make} ${vehicle.model}${engLabel}**`, ""];
+  for (const s of d.specs) lines.push(specLine(s, d.multiEngine));
+  if (d.componentFacts && d.componentFacts.length) {
+    lines.push("");
+    for (const f of d.componentFacts) lines.push(componentFactLine(f));
+  }
+  lines.push("", `_Source: ${d.sourceTitle}_`);
+  return lines.join("\n");
+}
+
+// Same data as a system-prompt context block for Diagnose / Assess — Claude
+// reads it as "verified specs, prefer these over your own recollection".
 export function formatSpecContextBlock(entries) {
   if (!entries.length) return "";
   const lines = [
-    "Verified vehicle specs retrieved from authoritative provider(s). Use these values exactly — do not substitute your own recollection:",
+    "Verified vehicle specs retrieved from the Vulcan spec database (doc-extracted, provenance-tracked). Use these values exactly — do not substitute your own recollection:",
     "",
   ];
   for (const e of entries) {
-    lines.push(`[${e.specType}] (source: ${e.source})`);
-    lines.push(JSON.stringify(e.data, null, 2));
+    const d = e.data;
+    lines.push(`[${e.specType}] (source: ${d.sourceTitle})`);
+    for (const s of d.specs) lines.push(specLine(s, true));
+    if (d.componentFacts) for (const f of d.componentFacts) lines.push(componentFactLine(f));
     lines.push("");
   }
   return lines.join("\n");
