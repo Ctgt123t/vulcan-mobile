@@ -39,6 +39,11 @@ import {
   pidStats,
 } from "./pidDatabase.js";
 import { logApiCost, getCostSummary, costStats } from "./costLogger.js";
+import {
+  ASK_TOOLS,
+  ASK_TOOL_HANDLERS,
+  runAskToolLoop,
+} from "./askToolLoop.js";
 import { initDb } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -52,10 +57,11 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 const client = new Anthropic();
 
-// Tiered model strategy. Diagnose is the heavyweight reasoning path —
-// structured tool use, multi-turn convergence, safety implications — so it
-// gets Opus. Ask Vulcan is conversational Q&A; Sonnet handles it well and
-// the per-token cost is much lower.
+// Model strategy. Diagnose is the heavyweight reasoning path — structured tool
+// use, multi-turn convergence, safety implications — so it gets Opus. Ask Vulcan
+// ALSO runs Opus: it was switched off Sonnet because Sonnet fabricated free-form
+// mechanical facts (e.g. wrong oil-filter location/type) that no spec rule
+// governs. Sonnet still runs only the background DTC-fallback path (dtcFallback.js).
 const DIAGNOSE_MODEL = "claude-opus-4-6";
 const ASK_MODEL = "claude-opus-4-6";
 
@@ -658,17 +664,49 @@ app.post("/api/ask", async (req, res) => {
     );
   }
 
-  // 3: Vehicle spec lookup (oil capacity, torque, maintenance schedule, etc.)
+  // 3: Vehicle spec routing (oil capacity, torque, maintenance schedule, etc.)
   //
-  // Detect spec intent FIRST, independent of whether a structured vehicle is
-  // present. The anti-hallucination guardrail must cover the open-ended Ask
-  // Vulcan case too: a spec question with no year/make/model in context can't
-  // be verified against a provider, and previously went straight to Claude
-  // with NO guardrail — producing confidently-wrong figures. Now any spec
-  // question that can't be answered from a verified provider gets the caution
-  // preamble so Claude admits uncertainty and points to how to confirm.
+  // Spec intent now routes via TOOL USE (spec_lookup) inside the Claude call
+  // below — Claude understands phrasings the adjacency regex can't ("oil change
+  // specs", "what oil does it take"). detectSpecIntent is still run here as a
+  // zero-Claude latency fast-path for obvious hits (see the hybrid-seam comment
+  // below); it is no longer the correctness gate.
   const specIntent = detectSpecIntent(lastUserText);
-  let specWentToClaude = false;
+  // Inbound-request visibility: capture the structured vehicle (exact values +
+  // JS types) and the intent result on EVERY ask, before any branching/early
+  // return, so spec routing is diagnosable from logs instead of inferred. This
+  // exact gap caused two misdiagnoses (the "oil change specs" investigation):
+  // detectSpecIntent missing a phrasing, and a vehicle present-but-unstructured.
+  {
+    const v = vehicle && typeof vehicle === "object" ? vehicle : null;
+    const vDbg = v
+      ? `year=${JSON.stringify(v.year)}:${typeof v.year} ` +
+        `make=${JSON.stringify(v.make)}:${typeof v.make} ` +
+        `model=${JSON.stringify(v.model)}:${typeof v.model} ` +
+        `series=${JSON.stringify(v.series)} engineType=${JSON.stringify(v.engineType)}`
+      : `vehicle=${JSON.stringify(vehicle)}`;
+    console.log(
+      `[ask] inbound vehicle: ${vDbg} | specIntent=${specIntent ? specIntent.specType : "none"}`,
+    );
+  }
+  // Hybrid seam — the regex (detectSpecIntent) is now a LATENCY SHORTCUT, not the
+  // correctness gate:
+  //   - regex fires AND a structured vehicle is present → probe the DB directly;
+  //     a HIT returns a formatted card with NO Claude call (the unchanged fast
+  //     path).
+  //   - everything else (no intent, regex-hit + DB-miss, or no vehicle) flows to
+  //     the tool-enabled Claude call below, where Claude judges intent and may
+  //     call spec_lookup against the IDENTICAL lookupSpec. Both doors → one
+  //     source of truth, no divergence.
+  //
+  // TRANSITION (hedge consolidation, proof-gated): the tool-miss result text now
+  // carries the "verify against OEM" hedge and APP_CONTEXT carries the spec rule,
+  // so the tool path hedges on its own. SPEC_CAUTION_PREAMBLE is kept here as
+  // belt-and-suspenders on the regex-fire paths ONLY until the three-path hedge
+  // proof (tool miss, regex fast-path miss, no-vehicle ask) confirms every path
+  // hedges via APP_CONTEXT + tool text alone — then this preamble and its
+  // unshifts are deleted. Never delete-then-hope: an UNHEDGED spec miss is the
+  // confident-wrongness sin this guards.
   if (specIntent) {
     const hasVehicle =
       vehicle &&
@@ -678,32 +716,29 @@ app.post("/api/ask", async (req, res) => {
       vehicle.model;
 
     if (hasVehicle) {
-      // Vehicle present — try the provider chain. Hit → verified answer,
-      // no Claude call (unchanged). Miss → guardrail + fall through.
       const specResult = await lookupSpec(vehicle, specIntent.specType);
       if (specResult) {
         const text = formatSpecAnswer(specIntent.specType, specResult, vehicle);
         console.log(
-          `[retrieval] spec direct-answer: ${specIntent.specType} from ${specResult.source}${specResult.fromCache ? " (cached)" : ""} (no Claude call)`,
+          `[retrieval] spec fast-path HIT: ${specIntent.specType} from ${specResult.source}${specResult.fromCache ? " (cached)" : ""} (no Claude call)`,
         );
         return res.json({ text, cost: null });
       }
+      // Regex-hit + DB-miss: fall through to the tool path. Claude's spec_lookup
+      // re-queries the same type (one extra cheap, fail-soft DB read) — a
+      // deliberate accept over threading memoization state through the request.
       systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
-      specWentToClaude = true;
       console.log(
-        `[retrieval] spec MISS for ${specIntent.specType} — Claude with anti-hallucination preamble`,
+        `[retrieval] spec fast-path MISS for ${specIntent.specType} — tool path (preamble retained during transition)`,
       );
     } else {
-      // No structured vehicle to look up against — can't verify any figure,
-      // so apply the guardrail so Claude says it lacks a confirmed value and
-      // tells the user how to verify, rather than guessing. Previously this
-      // path was unguarded AND counted nowhere — record it so the true
-      // Claude-spec-answer rate is visible at /metrics.
+      // No structured vehicle to look up against. Keep the no-vehicle count
+      // visible at /metrics, and keep the preamble (transition); the tool path
+      // + APP_CONTEXT also hedge this case.
       systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
-      specWentToClaude = true;
       recordNoVehicleSpecFallthrough();
       console.log(
-        `[retrieval] spec MISS (no vehicle context) for ${specIntent.specType} — Claude with anti-hallucination preamble`,
+        `[retrieval] spec MISS (no vehicle context) for ${specIntent.specType} — tool path (preamble retained during transition)`,
       );
     }
   }
@@ -719,6 +754,11 @@ app.post("/api/ask", async (req, res) => {
   // treats the question as a spec and skips the cache. This single gate sets
   // cacheKey, which controls BOTH the read below and the write later, so a
   // spec question is neither served from nor written to the cache.
+  // isSpecShapedQuestion subsumes detectSpecIntent (it returns true for anything
+  // detectSpecIntent matches, then widens), so a spec-intent question is already
+  // excluded from the cache here — no separate spec flag needed. The tool-invoked
+  // write guard below is the second half: it catches a question that slipped this
+  // detector yet caused Claude to call a tool (live data must not be cached).
   const cacheEligible =
     messages.length === 1 &&
     vehicle &&
@@ -726,7 +766,6 @@ app.post("/api/ask", async (req, res) => {
     vehicle.year &&
     vehicle.make &&
     vehicle.model &&
-    !specWentToClaude &&
     !isSpecShapedQuestion(lastUserText) &&
     isCacheableQuestion(lastUserText);
 
@@ -742,35 +781,46 @@ app.post("/api/ask", async (req, res) => {
   console.log(
     `[ask] model=${ASK_MODEL} messages=${messages.length} ` +
       `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
-      `hasVehicle=${vehicle ? "yes" : "no"}`,
+      `hasVehicle=${vehicle ? "yes" : "no"} specIntent=${specIntent ? specIntent.specType : "none"}`,
   );
 
   try {
-    const response = await callAnthropicWithRetry(() =>
-      client.messages.create({
-        model: ASK_MODEL,
-        max_tokens: 2048,
-        system: systemBlocks,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      }),
-    );
-
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-
-    const costData = logApiCost(response.usage, ASK_MODEL, {
-      sessionId: typeof sessionId === "string" ? sessionId : null,
-      callType: "ask-vulcan",
+    const loopSessionId = typeof sessionId === "string" ? sessionId : null;
+    // Agentic tool loop: spec_lookup is registered, so Claude calls it on spec
+    // questions the regex missed and reasons over the verified rows in the same
+    // turn. The loop sums cost across every call and reports whether a tool fired.
+    const { text, cost, toolInvoked, iterations } = await runAskToolLoop({
+      createMessage: (params) =>
+        callAnthropicWithRetry(() => client.messages.create(params)),
+      logCost: (usage) =>
+        logApiCost(usage, ASK_MODEL, {
+          sessionId: loopSessionId,
+          callType: "ask-vulcan",
+        }),
+      model: ASK_MODEL,
+      systemBlocks,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      tools: ASK_TOOLS,
+      handlers: ASK_TOOL_HANDLERS,
+      ctx: { vehicle, toolInvoked: false },
     });
 
-    if (cacheKey && text.length > 0) {
+    // Cache write: only NON-tool responses. A tool-firing answer serves live
+    // spec data that must never be frozen for 30 days (same reason
+    // isSpecShapedQuestion is excluded from cacheEligible); this is the
+    // second half of the cache guard, catching a tool firing on a question
+    // that slipped the spec-shaped detector.
+    if (toolInvoked) {
+      console.log(
+        `[ask] tool fired (iterations=${iterations}) — response NOT cached (live data)`,
+      );
+    }
+    if (cacheKey && !toolInvoked && text.length > 0) {
       setCached(cacheKey, vehicle, lastUserText, text);
     }
 
-    return res.json({ text, cost: costData ?? null });
+    // Summed across all loop calls; null only if no cost was computed at all.
+    return res.json({ text, cost: cost.total > 0 ? cost : null });
   } catch (err) {
     return respondWithError(res, err, "ask");
   }

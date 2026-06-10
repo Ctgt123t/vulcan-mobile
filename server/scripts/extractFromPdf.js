@@ -96,6 +96,30 @@ const DEFAULT_PDF = path.join(
 const argPdf = process.argv.slice(2).find((a) => !a.startsWith("--"));
 const PDF_PATH = argPdf ? path.resolve(argPdf) : DEFAULT_PDF;
 
+// ---- Vehicle identity + source metadata (parameterized) -------------------
+// The vehicle a manual is for, and its provenance, are per-run inputs — NOT the
+// extraction logic. Pass via --key=value flags; defaults reproduce the original
+// 2011 Sierra PoC run so `npm run extract:pdf` (no args) is unchanged. The
+// identity here is what every spec/component_fact gets filed under, so a wrong
+// value would mis-file a whole vehicle — the verifyIdentity() guard below
+// cross-checks it against the PDF's own title page before any rows are written.
+function argVal(name, fallback) {
+  const pref = `--${name}=`;
+  const hit = process.argv.find((a) => a.startsWith(pref));
+  return hit ? hit.slice(pref.length) : fallback;
+}
+const VEHICLE = {
+  year: Number(argVal("year", 2011)),
+  make: argVal("make", "GMC"),
+  model: argVal("model", "Sierra"),
+};
+const VEHICLE_LABEL = `${VEHICLE.year} ${VEHICLE.make} ${VEHICLE.model}`;
+const SOURCE_META = {
+  title: argVal("title", `${VEHICLE_LABEL} Owner Manual`),
+  publisher: argVal("publisher", "General Motors"),
+  url: argVal("url", "server/extraction_test/2011-sierra-owner-manual.pdf"),
+};
+
 // Controlled vocab — must match the spec_type CHECK constraint, now widened by
 // 0002_widen_specs_and_audit_columns.sql. Keep these in lock-step with the SQL.
 const SPEC_TYPES = [
@@ -114,7 +138,7 @@ const SPEC_TYPES = [
   "other",
 ];
 
-const SYSTEM_PROMPT = `You are a precise automotive data-extraction engine. You are given the official owner's manual PDF for a 2011 GMC Sierra.
+const SYSTEM_PROMPT = `You are a precise automotive data-extraction engine. You are given the official owner's manual PDF for a ${VEHICLE_LABEL}.
 
 Extract factory specifications and component facts that are EXPLICITLY STATED in this document.
 
@@ -379,7 +403,7 @@ async function resolveVariant(client, engine) {
      on conflict on constraint vehicle_variant_unique_config
        do update set make = excluded.make
      returning id`,
-    [2011, "GMC", "Sierra", String(engine ?? "").trim()],
+    [VEHICLE.year, VEHICLE.make, VEHICLE.model, String(engine ?? "").trim()],
   );
   return r.rows[0].id;
 }
@@ -420,6 +444,40 @@ async function chunkToB64(srcDoc, idx) {
   for (const p of copied) chunk.addPage(p);
   const bytes = await chunk.save();
   return Buffer.from(bytes).toString("base64");
+}
+
+// ---- Identity guard (local, zero API cost) --------------------------------
+// Cross-checks the PDF's front-matter text against the declared vehicle so a
+// wrong --make/--model/--year (or wrong PDF) can't silently mis-file specs.
+// The model name is the strong discriminator (F-150 vs CR-V vs Sierra); we
+// require it to appear plus at least one corroborating signal (make or year).
+// Tolerant matching: case-insensitive, and the model is compared with all
+// non-alphanumerics stripped (so "F-150"/"F‑150"/"F 150" and "CR-V"/"CRV" match).
+async function verifyIdentity(pdfBytes, vehicle) {
+  const data = new Uint8Array(pdfBytes);
+  const doc = await getDocument({ data, useSystemFonts: true }).promise;
+  const pagesToScan = Math.min(15, doc.numPages);
+  let text = "";
+  try {
+    for (let i = 1; i <= pagesToScan; i++) {
+      const tc = await (await doc.getPage(i)).getTextContent();
+      text += " " + tc.items.map((t) => t.str).join(" ");
+    }
+  } finally {
+    await doc.destroy();
+  }
+  const lower = text.toLowerCase();
+  const squashed = lower.replace(/[^a-z0-9]/g, "");
+  const modelKey = String(vehicle.model ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const found = {
+    model: modelKey.length > 0 && squashed.includes(modelKey),
+    make: lower.includes(String(vehicle.make ?? "").toLowerCase()),
+    year: lower.includes(String(vehicle.year ?? "")),
+  };
+  // Model is mandatory; require >=1 corroborating signal so a coincidental
+  // model substring alone can't pass.
+  const ok = found.model && (found.make || found.year);
+  return { ok, found, pagesScanned: pagesToScan };
 }
 
 // ---- Trim: locate the spec-bearing pages (local, zero API cost) -----------
@@ -484,19 +542,50 @@ async function main() {
 
   const bytes = fs.statSync(PDF_PATH).size;
   console.log(`[extract] PDF: ${path.basename(PDF_PATH)} (${(bytes / 1024 / 1024).toFixed(2)} MB)`);
-  if (bytes > 30 * 1024 * 1024) {
-    console.error("[extract] PDF exceeds ~30MB — base64 may overflow the 32MB request limit; use the Files API.");
+  // Hard cap only for the pathological case. Chunked extraction sends small
+  // page-ranges, so a large manual is fine — only the whole-PDF token pre-flight
+  // below is size-constrained, and it is skipped (not fatal) when too large.
+  if (bytes > 100 * 1024 * 1024) {
+    console.error("[extract] PDF exceeds 100MB — too large to process here; use the Files API.");
     process.exit(1);
   }
 
   const pdfBytes = fs.readFileSync(PDF_PATH);
   const client = new Anthropic();
 
+  // Identity guard — confirm the PDF actually IS the declared vehicle BEFORE any
+  // extraction spend or DB write. A wrong --make/--model/--year (or the wrong PDF
+  // path) would otherwise file one vehicle's specs under another's identity — the
+  // same corruption class as the old hardcoding, from operator error.
+  const idCheck = await verifyIdentity(pdfBytes, VEHICLE);
+  console.log(
+    `[extract] identity check vs "${VEHICLE_LABEL}" (scanned ${idCheck.pagesScanned} pp): ` +
+      `model=${idCheck.found.model} make=${idCheck.found.make} year=${idCheck.found.year}`,
+  );
+  if (!idCheck.ok) {
+    console.error(
+      `[extract] ABORT: the PDF's front matter does not match the declared vehicle "${VEHICLE_LABEL}" ` +
+        `(model=${idCheck.found.model}, make=${idCheck.found.make}, year=${idCheck.found.year}). ` +
+        `Refusing to file these specs under a possibly-wrong identity — check --make/--model/--year and the PDF path.`,
+    );
+    process.exit(1);
+  }
+
   // --- Pre-flight: token count of the WHOLE document (headline finding) --
+  // This sends the whole PDF, so skip it when the base64 would overflow the
+  // ~32MB request limit (raw > ~22MB). It is purely informational; extraction
+  // itself only sends trimmed page-chunks, which stay well under the limit.
   let preflightTokens = null;
-  try {
-    const tc = await client.messages.countTokens({
-      model: MODEL,
+  const PREFLIGHT_MAX_BYTES = 22 * 1024 * 1024;
+  if (bytes > PREFLIGHT_MAX_BYTES) {
+    console.log(
+      `[extract] whole-document token pre-flight skipped (PDF ${(bytes / 1024 / 1024).toFixed(1)}MB exceeds the ` +
+        `${PREFLIGHT_MAX_BYTES / 1024 / 1024}MB whole-send cap; trimmed chunks are counted/sent individually)`,
+    );
+  } else {
+    try {
+      const tc = await client.messages.countTokens({
+        model: MODEL,
       system: SYSTEM_PROMPT,
       tools: [TOOL],
       messages: [{
@@ -507,10 +596,11 @@ async function main() {
         ],
       }],
     });
-    preflightTokens = tc.input_tokens;
-    console.log(`[extract] whole-document token size: ${preflightTokens.toLocaleString()} input tokens`);
-  } catch (err) {
-    console.warn(`[extract] token-count pre-flight failed (continuing): ${err.message}`);
+      preflightTokens = tc.input_tokens;
+      console.log(`[extract] whole-document token size: ${preflightTokens.toLocaleString()} input tokens`);
+    } catch (err) {
+      console.warn(`[extract] token-count pre-flight failed (continuing): ${err.message}`);
+    }
   }
 
   // --- Select pages (trim-before-extract) --------------------------------
@@ -572,7 +662,7 @@ async function main() {
     const last = idx[idx.length - 1] + 1;
     const note =
       `This is a ${idx.length}-page selection (spanning roughly manual pages ` +
-      `${first}-${last}) from a ${pageCount}-page 2011 GMC Sierra owner's manual.`;
+      `${first}-${last}) from a ${pageCount}-page ${VEHICLE_LABEL} owner's manual.`;
     console.log(`[extract] chunk ${ci + 1}/${chunks.length} (${idx.length} pages, ~${first}-${last}) -> ${MODEL} ...`);
     const b64 = await chunkToB64(srcDoc, idx);
     const { out, costData, stopReason } = await extractChunk(client, b64, note);
@@ -649,12 +739,13 @@ async function main() {
     await db.query("begin");
     const src = await db.query(
       `insert into source (source_type, title, url_or_ref, publisher, retrieved_at, license, trust_tier)
-       values ('oem_owner_manual', $1, $2, 'General Motors', now(), $3, 1)
+       values ('oem_owner_manual', $1, $2, $3, now(), $4, 1)
        returning id`,
       [
-        "2011 GMC Sierra Owner Manual",
-        "server/extraction_test/2011-sierra-owner-manual.pdf",
-        "Proprietary (GM) — used for internal extraction PoC",
+        SOURCE_META.title,
+        SOURCE_META.url,
+        SOURCE_META.publisher,
+        "Manufacturer-published owner's manual (tier1_open)",
       ],
     );
     sourceId = src.rows[0].id;

@@ -11,7 +11,9 @@
     "dev": "node --watch index.js",
     "migrate": "node migrate.js",
     "db:smoke": "node scripts/dbSmokeTest.js",
-    "extract:pdf": "node scripts/extractFromPdf.js"
+    "extract:pdf": "node scripts/extractFromPdf.js",
+    "test:ask-loop": "node scripts/askToolLoopTest.js",
+    "test:ask-loop:integration": "node scripts/askToolLoopIntegrationTest.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
