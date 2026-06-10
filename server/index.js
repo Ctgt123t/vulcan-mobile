@@ -789,7 +789,7 @@ app.post("/api/ask", async (req, res) => {
     // Agentic tool loop: spec_lookup is registered, so Claude calls it on spec
     // questions the regex missed and reasons over the verified rows in the same
     // turn. The loop sums cost across every call and reports whether a tool fired.
-    const { text, cost, toolInvoked, iterations } = await runAskToolLoop({
+    const { text, cost: costSummary, toolInvoked, iterations } = await runAskToolLoop({
       createMessage: (params) =>
         callAnthropicWithRetry(() => client.messages.create(params)),
       logCost: (usage) =>
@@ -820,7 +820,12 @@ app.post("/api/ask", async (req, res) => {
     }
 
     // Summed across all loop calls; null only if no cost was computed at all.
-    return res.json({ text, cost: cost.total > 0 ? cost : null });
+    // (costSummary has the ApiCostData shape { model, tokens, cost }, so the
+    // grand total is costSummary.cost.total — not costSummary.total.)
+    return res.json({
+      text,
+      cost: costSummary.cost.total > 0 ? costSummary : null,
+    });
   } catch (err) {
     return respondWithError(res, err, "ask");
   }

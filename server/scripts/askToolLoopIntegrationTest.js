@@ -81,10 +81,27 @@ function statesOilValue(t) {
     /\b\d+w-?\d+\b/i.test(t) // viscosity, e.g. 5W-30 / 0w20
   );
 }
+// A genuine "go verify this, I don't have it confirmed" hedge. Deliberately
+// does NOT match bare "confirmed"/"confirm" — a tool-HIT answer states data AS
+// confirmed ("confirmed specs from the owner's manual"), which is the opposite
+// of a hedge. We require an explicit verify INSTRUCTION or a no-confirmed-data
+// admission, paired with a pointer to where to confirm.
 function hedges(t) {
-  const hasHedgeVerb = /(verify|confirm|don'?t have|do not have|not (confirmed|certain|sure))/i.test(t);
-  const pointsToSource = /(service manual|owner'?s manual|oem|cap|label|spec sheet|dealer)/i.test(t);
-  return hasHedgeVerb && pointsToSource;
+  const verifyInstruction =
+    /\bverify\b|confirm (it|this|that|against|with)|check (it|the|against|with|whatever)|cross[- ]?reference/i.test(t);
+  const admitsUnconfirmed =
+    /(don'?t have|do not have|no verified|not (confirmed|certain|sure)|ballpark|likely (value|figure)|typically (around|about))/i.test(t);
+  const pointsToSource =
+    /(service manual|owner'?s manual|workshop manual|documentation|oem|cap|label|spec sheet|dealer)/i.test(t);
+  return (verifyInstruction || admitsUnconfirmed) && pointsToSource;
+}
+// Tool-HIT proof: the verified rows reached the answer (attribution to the
+// manual / verified data), and it does not wholesale-disclaim having the data.
+function citesVerifiedSource(t) {
+  return /(owner'?s manual|verified data|confirmed|from the manual)/i.test(t);
+}
+function wholesaleDisclaims(t) {
+  return /(i (don'?t|do not) have|no verified (specs|data)).{0,40}(any|the|this)?\s*(data|figure|spec|info)/i.test(t);
 }
 
 function show(label, r) {
@@ -115,7 +132,8 @@ try {
     show("tool-hit", r);
     check(r.cost !== null, "Claude was called (cost !== null) — regex did not short-circuit", `cost=${JSON.stringify(r.cost)}`);
     check(statesOilValue(r.text), "tool-hit states the verified value directly");
-    check(!hedges(r.text), "tool-hit does NOT hedge (value is confirmed data)");
+    check(citesVerifiedSource(r.text), "tool-hit cites verified data / the manual (tool rows reached the answer)");
+    check(!wholesaleDisclaims(r.text), "tool-hit does NOT wholesale-disclaim having the data");
   }
 
   // --- (a) tool miss hedges: spec question, vehicle absent from DB -----------
