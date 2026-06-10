@@ -336,19 +336,14 @@ export function formatSpecContextBlock(entries) {
   return lines.join("\n");
 }
 
-// ----------- Anti-hallucination preamble -----------------------------------
-
-// Prepended to the system context when a spec question goes to Claude with no
-// verified value to anchor on. Reinforces the label-not-suppress factory-spec
-// rule in APP_CONTEXT (server/index.js) for the specific no-verified-data
-// case: lead with the commonly-known figure as a likely value plus a verify
-// note, rather than refusing — but never assert it as a confirmed factory spec.
-export const SPEC_CAUTION_PREAMBLE = `Our authoritative data sources could not return a verified value for this specification, so you do not have it as confirmed data. Do not refuse to answer: if you know the commonly-accepted figure, lead with it as a likely value and tell the technician to confirm it against the OEM service manual or the cap/label — e.g. "typically around X — verify against the manual." Just don't present it as a precise, authoritative factory number stated as gospel; it is an informed starting point they must confirm. If you don't have a reliable ballpark, say so plainly and point them to the OEM source. A wrong capacity, torque, viscosity, pressure, or interval asserted as fact causes real damage — the verify note is what prevents that.`;
+// ----------- No-vehicle spec telemetry --------------------------------------
 
 // Record a spec-intent question that reached Claude without a structured
-// vehicle (so no provider lookup was possible). Lightweight telemetry: the
-// caller already prepends SPEC_CAUTION_PREAMBLE — this just keeps the count
-// visible at /metrics so the no-vehicle path isn't a measurement blind spot.
+// vehicle (so no provider lookup was possible). Lightweight telemetry that
+// keeps the count visible at /metrics so the no-vehicle path isn't a
+// measurement blind spot. (The old SPEC_CAUTION_PREAMBLE that this used to
+// pair with is retired — the hedge now lives in the spec_lookup tool-miss
+// result text + the APP_CONTEXT factory-spec rule.)
 export function recordNoVehicleSpecFallthrough() {
   cache.noVehicleFallthroughs++;
   persist();

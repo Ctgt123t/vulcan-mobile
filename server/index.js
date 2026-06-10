@@ -23,7 +23,6 @@ import {
   setCached,
 } from "./cache.js";
 import {
-  SPEC_CAUTION_PREAMBLE,
   detectAllSpecIntents,
   detectSpecIntent,
   formatSpecAnswer,
@@ -699,14 +698,12 @@ app.post("/api/ask", async (req, res) => {
   //     call spec_lookup against the IDENTICAL lookupSpec. Both doors → one
   //     source of truth, no divergence.
   //
-  // TRANSITION (hedge consolidation, proof-gated): the tool-miss result text now
-  // carries the "verify against OEM" hedge and APP_CONTEXT carries the spec rule,
-  // so the tool path hedges on its own. SPEC_CAUTION_PREAMBLE is kept here as
-  // belt-and-suspenders on the regex-fire paths ONLY until the three-path hedge
-  // proof (tool miss, regex fast-path miss, no-vehicle ask) confirms every path
-  // hedges via APP_CONTEXT + tool text alone — then this preamble and its
-  // unshifts are deleted. Never delete-then-hope: an UNHEDGED spec miss is the
-  // confident-wrongness sin this guards.
+  // HEDGE CONSOLIDATION (complete): the hedge now lives in TWO places only — the
+  // spec_lookup tool-miss result text ("no verified record… give a likely value
+  // to confirm against the OEM source") and the APP_CONTEXT factory-spec rule.
+  // The old injected SPEC_CAUTION_PREAMBLE is retired: all three paths it covered
+  // (tool miss, regex fast-path miss, no-vehicle ask) were proven to hedge via
+  // APP_CONTEXT + tool text alone (deployed Layer B proof) before it was removed.
   if (specIntent) {
     const hasVehicle =
       vehicle &&
@@ -727,18 +724,17 @@ app.post("/api/ask", async (req, res) => {
       // Regex-hit + DB-miss: fall through to the tool path. Claude's spec_lookup
       // re-queries the same type (one extra cheap, fail-soft DB read) — a
       // deliberate accept over threading memoization state through the request.
-      systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
+      // The tool-miss result text + APP_CONTEXT carry the hedge.
       console.log(
-        `[retrieval] spec fast-path MISS for ${specIntent.specType} — tool path (preamble retained during transition)`,
+        `[retrieval] spec fast-path MISS for ${specIntent.specType} — tool path`,
       );
     } else {
       // No structured vehicle to look up against. Keep the no-vehicle count
-      // visible at /metrics, and keep the preamble (transition); the tool path
-      // + APP_CONTEXT also hedge this case.
-      systemBlocks.unshift({ type: "text", text: SPEC_CAUTION_PREAMBLE });
+      // visible at /metrics; the tool path (no-vehicle miss text) + APP_CONTEXT
+      // hedge this case.
       recordNoVehicleSpecFallthrough();
       console.log(
-        `[retrieval] spec MISS (no vehicle context) for ${specIntent.specType} — tool path (preamble retained during transition)`,
+        `[retrieval] spec MISS (no vehicle context) for ${specIntent.specType} — tool path`,
       );
     }
   }
