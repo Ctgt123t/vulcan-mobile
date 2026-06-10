@@ -50,14 +50,14 @@ Local-state + LLM-reasoning hybrid. Core principles (settled):
 
 **Staged build plan (test each on a real car before the next):**
 - **Stage 1 — single-shot brain:** ✅ BUILT & VALIDATED. Snapshot → structured assessment via /api/assess, Opus, tool use. Validated on a real P0442 EVAP case.
-- **Stage 2 — iterative loop + MODE RESTRUCTURE:** 🔜 QUEUED (the other current keystone alongside the data layer). Claude requests specific data under specific conditions; phone auto-captures; diagnosis evolves. Decided: **UI restructure FIRST** (merge Diagnose + Smart Diagnose; OBD2 becomes a simple instrument with an "escalate to diagnosis" door; build the embeddable "capture-card" UI primitive even as a placeholder). Must include **diagnostic session save/resume from the start** (pause a job, switch cars, resume by VIN — manual list + auto "this VIN matches a saved diagnosis, resume?"). Cost safeguards on the capture loop (sustained-condition, cooldowns, per-session budget, auto-pause). Decompose into sub-stages before coding; build in batches, validate in sequence on a real car.
+- **Stage 2 — iterative loop + MODE RESTRUCTURE:** 🔜 ACTIVE NEXT FOCUS (the data layer is now paused in a known-good state; Stage 2 is what's being picked up next). Claude requests specific data under specific conditions; phone auto-captures; diagnosis evolves. Decided: **UI restructure FIRST** (merge Diagnose + Smart Diagnose; OBD2 becomes a simple instrument with an "escalate to diagnosis" door; build the embeddable "capture-card" UI primitive even as a placeholder). Must include **diagnostic session save/resume from the start** (pause a job, switch cars, resume by VIN — manual list + auto "this VIN matches a saved diagnosis, resume?"). Cost safeguards on the capture loop (sustained-condition, cooldowns, per-session budget, auto-pause). Decompose into sub-stages before coding; build in batches, validate in sequence on a real car.
 - **Stage 3** — adaptive-stance UI switching + guided-inspection checklist (big tap buttons); stance flips mid-diagnosis.
 - **Stage 4** — confirmed-fix priors injected as starting context (ties to confirmed-fix DB flywheel).
 - **Stage 5** — hands-free voice/TTS (device-native TTS).
 
 ---
 
-## THE UNIFIED DATA LAYER (current active focus — Phase 4)
+## THE UNIFIED DATA LAYER (Phase 4 — PAUSED in a known-good state; Stage 2 is the active focus)
 **This is the keystone that makes the AI trustworthy.** Core principle, learned from the Ask Vulcan failures: *verified data is the factual foundation; AI is the reasoning layer on top. The model must never be the source of truth for a fact it would recall from memory.* (See VULCAN_DATA_LAYER_STRATEGY.md for full detail.)
 
 **Why it exists:** Vehicle Finder API was proven a dead end this session (covers only 3 spec types, sparse, returns wrong records silently). The fix is a proprietary database Vulcan owns. Five data types: DTC defs (✅ done, 18,805 codes), VIN decode (✅ mostly, NHTSA), PID defs (✅ done, OBDb), **service specs (the gap)**, **component/config facts (new gap)**.
@@ -75,7 +75,7 @@ Local-state + LLM-reasoning hybrid. Core principles (settled):
 4. Persist page + verbatim_quote on rows — ✅ DONE. Both NOT NULL; `page` remapped to absolute PDF page; a per-run JSON snapshot is dumped so a regression baseline survives independently of the DB.
 5. Expand schema for richer manual data — **fuses, bulbs, towing capacities, warning lights, tire/TPMS, battery, octane** (a deliberate scope expansion; owner's manuals are richer than "specs + component facts") — ⏸ DEFERRED.
 
-**NEXT TASK — Tier 1 first feed:** extract from a small set of manufacturer manuals + government data to validate the end-to-end pipeline at small scale on real, safe sources.
+**Tier 1 first feed (DEFERRED to near-launch, demand-ranked off the miss-log):** extract from a small set of manufacturer manuals + government data to validate the end-to-end pipeline at small scale on real, safe sources. The engine is ready; this is a content/operations effort, not the immediate next task — the data layer is paused here and **Stage 2 of the diagnostic engine is the active next focus**. (All deferred data-layer items + their windows are catalogued in VULCAN_DATA_LAYER_STRATEGY.md §11.)
 
 Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start here). Tier 2 = retrieval-grounded generation via Claude web search + Citations API + domain allowlist (the scale accelerator; verification de-risked this session — citations are API-guaranteed). Tier 3 = crowdsource from techs in the field (the long-game moat; builds on the confirmed-fix DB). Never scrape proprietary DBs (Identifix/AllData/Mitchell1/Innova).
 
@@ -104,13 +104,13 @@ Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start h
 | 1. Get off Expo Go | ✅ COMPLETE |
 | 2. OBD2 Foundation | ✅ COMPLETE |
 | 3a. Diagnostic engine Stage 1 | ✅ COMPLETE |
-| 3b. Stage 2 (iterative loop + mode restructure) | 🔜 QUEUED |
+| 3b. Stage 2 (iterative loop + mode restructure) | 🔜 NEXT — ACTIVE FOCUS |
 | 3c. Stage 3 (adaptive-stance UI, guided checklists) | NOT STARTED |
 | 3d. Stages 4–5 (confirmed-fix priors; voice) | NOT STARTED |
-| 4. Pre-launch infrastructure | 🔄 IN PROGRESS (data layer: foundation + extraction pipeline productionized — Batch A ✅; Tier 1 feed next) |
+| 4. Pre-launch infrastructure | 🔄 IN PROGRESS (data layer: foundation + extraction pipeline productionized — Batch A ✅ + Option C spec path + tool-use routing live; PAUSED for Stage 2 — Tier 1 feed deferred to near-launch; deferred items in strategy §11) |
 | 5. Testing & launch | NOT STARTED |
 
-**Two big rocks right now:** (1) the data-layer extraction pipeline — productionized (Batch A ✅); now feeding it (Tier 1) [active], (2) Stage 2 diagnostic engine [queued]. Complementary — Stage 2 reasons over the facts the data layer provides.
+**Where things stand right now:** (1) the data layer — extraction pipeline productionized (Batch A ✅), Option C spec path + tool-use routing live — is **PAUSED in a known-good state** (Tier 1 feed + remaining items deferred, catalogued in strategy §11); (2) **Stage 2 diagnostic engine is the active next focus**. Complementary — Stage 2 reasons over the facts the data layer provides, which is exactly why pausing the data layer here doesn't block it.
 
 ### Phase 4 — Pre-launch infrastructure
 - **Unified data layer** (in progress — replaces Vehicle Finder). Supabase foundation ✅.
