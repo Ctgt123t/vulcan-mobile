@@ -306,7 +306,7 @@ class DiagnosticLogger {
             const h = e.assessment?.hypotheses?.[0];
             const costStr = e.apiCost ? ` — $${e.apiCost.cost.total.toFixed(4)}` : "";
             lines.push(
-              `  [${t}] Smart Diagnose: ${h ? `${h.name} (${h.confidence})` : "no hypotheses"}${costStr}`,
+              `  [${t}] Assessment: ${h ? `${h.name} (${h.confidence})` : "no hypotheses"}${costStr}`,
             );
             if (e.apiCost) {
               lines.push(

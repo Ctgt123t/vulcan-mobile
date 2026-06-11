@@ -17,3 +17,10 @@
 // ----------------------------------------------------------------------------
 
 export const DEBUG_OBD2 = process.env.EXPO_PUBLIC_DEBUG_OBD2 === "1";
+
+// Placeholder / in-progress UI (e.g. the Stage 2 capture-card primitive with
+// mocked states). Unlike DEBUG_OBD2 this flag is INTENTIONALLY set in .env
+// while Stage 2 UI is being reviewed, so `eas update` (which inlines
+// EXPO_PUBLIC_* vars from .env at export time) ships the placeholders to the
+// shop preview build. Remove from .env once the real capture flow lands.
+export const DEBUG_UI = process.env.EXPO_PUBLIC_DEBUG_UI === "1";

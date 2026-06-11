@@ -22,19 +22,28 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 - iOS startup crash resolved (reanimated v4 / worklets misconfig)
 - Debug logging gated behind `EXPO_PUBLIC_DEBUG_OBD2`
 - **DTC parsing verified accurate on 2011 GMC Sierra 4.8L** — multi-ECU CAN responses correctly parsed (0 phantom codes), P0442 surfaces correctly under Permanent Codes, O2 sensors read ~0.45V (not 115V). See DTC Parsing Architecture section.
-- **Diagnostic engine Stage 1 (single-shot assessment):** OBD2 screen → Smart Diagnose → structured differential with stance, hypotheses + evidence, single next step. New route `/smart-diagnose`, new endpoint `/api/assess`, ring buffer in `Obd2Manager`. See architecture section below.
+- **Diagnostic engine Stage 1 (single-shot assessment):** structured differential with stance, hypotheses + evidence, single next step via `/api/assess`, ring buffer in `Obd2Manager`. Originally shipped as a standalone `/smart-diagnose` route; the **Stage 2A restructure merged it into `/diagnose`** (see the Stage 2A bullet below and the Diagnostic Engine Architecture section). The endpoint, snapshot builder, and schema are unchanged.
 - **Cost tracking across all modes:** `/api/ask` and `/api/diagnose` return cost in their responses. The mobile app logs `ask_vulcan` and `diagnose_turn` entries to the on-device diagnostic log with full token/cost breakdown. `updateSessionVehicle()` added to `DiagnosticLogger` for vehicle re-attribution after VIN decode.
 - **Vehicle attribution fix:** `updateSessionVehicle()` sweeps every entry in the current session (not just `session_start`) when the Mode 09 VIN resolves post-connect. Gate is raw VIN only — no `vehicle.year` required — so NHTSA decode failures still get attributed by VIN. Sessions are per-connect so the full-session sweep is unambiguous. Pre-2008 / no-Mode-09 vehicles can't self-attribute; see Known Gaps.
-- **Intake form keyboard fix (Android):** Smart Diagnose and Diagnose intake forms now track keyboard height and apply extra `paddingBottom` so the mileage/complaint fields stay visible above the keyboard on Android.
+- **Intake form keyboard fix (Android):** the Diagnose intake (which since Stage 2A includes the former Smart Diagnose intake) tracks keyboard height and applies extra `paddingBottom` so the mileage/complaint fields stay visible above the keyboard on Android.
 - **Ask Vulcan accuracy hardening:** Ask Vulcan now runs **Opus 4.6** (was Sonnet — Sonnet fabricated free-form mechanical facts). A factory-spec provenance rule and an internal-consistency rule live in the shared `APP_CONTEXT`, so all three Claude modes inherit them; for conversational modes the spec rule is **label-not-suppress** (lead with the likely value + a verify note) while Smart Diagnose's `ASSESS_SYSTEM_PROMPT` keeps its stricter no-ballpark variant. The Ask Vulcan response cache now **excludes spec-shaped questions**, is **version+model-keyed**, and **self-prunes** stale entries on load. See Tech Stack (AI) and Backend (response caching).
 - **Ask Vulcan spec intent via tool use (PR-1):** `/api/ask` routes spec questions through a `spec_lookup` tool inside an agentic execute-then-continue loop (`server/askToolLoop.js`), so Claude understands phrasings the old `detectSpecIntent` regex missed ("oil change specs", "what oil does it take") and reasons over verified DB rows in the same turn. The regex is demoted to a zero-Claude latency fast-path. `SPEC_CAUTION_PREAMBLE` is retired — the hedge now lives in the tool-miss result text + APP_CONTEXT. Verified end-to-end against the deployed server (regex-missed phrasings state verified F-150 values; misses + no-vehicle hedge; fast-path unchanged; cost sums across loop calls). Diagnose/Assess untouched. This also establishes the tool-loop pattern Stage 2 needs. See Backend (vehicle spec retrieval).
 - **Supabase/Postgres data layer — live spec path (PAUSED at a known-good state for Stage 2):** backend connects to Supabase via `pg` over the transaction pooler (`server/db.js`, reads `SUPABASE_DB_URL`); schema via numbered SQL migrations (`npm run migrate`) — `source` / `vehicle_variant` / `spec` / `component_fact` / `spec_miss`, provenance FK on every fact. **The extraction engine IS built (Batch A productionized + validated on Sierra/Ford/Honda, ~$2.2/manual) and the spec read-path is wired into the app under Option C.** Deliberately deferred (none blocks Stage 2): the real extraction feed at scale (near-launch), NHTSA-canonical normalization + structured input (pre-launch), before-feed fixes (page-remap, Honda), and Batch B/C. See Backend → Database layer and `VULCAN_DATA_LAYER_STRATEGY.md` (§11 deferred-work ledger). The existing JSON caches remain untouched (their migration is the separate, still-deferred piece).
+
+- **Stage 2A mode restructure (2026-06) — ONE merged diagnostic mode:** Diagnose and Smart Diagnose are now a single mode at `/diagnose`; `app/smart-diagnose.tsx` is deleted. Key decisions and mechanics:
+  - **Single CTA ("Start Diagnosis"), auto-assessment.** Intake validation is one rule everywhere: mileage + complaint required. Whether a structured assessment runs is the app's decision, not the user's: if the adapter is connected AND (live signals > 0 OR DTCs > 0) — the old Smart Diagnose no-data block rule, repurposed as the firing gate — `/api/assess` fires automatically on start, **in parallel** with the first `/api/diagnose` call. The two calls are independent; an assessment failure shows a compact error card and the conversation proceeds. Connected-but-empty sessions never burn the Opus assessment call.
+  - **Thread model (`app/diagnose.tsx`):** the conversation FlatList renders `ThreadRow` items — chat messages interleaved with `AssessmentEntry` cards. Each assessment is anchored by `afterMessageIndex` with a stable key from the moment its loading card renders, so a card resolving after later turns never shifts layout. A "Re-run assessment" link under the latest card (connected + gate passing only) appends a new anchored card.
+  - **OBD2 escalation (`lib/obd2Handoff.ts`):** the OBD2 screen's three old buttons ("Diagnose with Vulcan" + "Smart Diagnose" ×2) are now ONE "Escalate to Diagnosis" door → `setObd2DiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, permanentDtcs, freezeFrame})` → `router.push("/diagnose")` (push, not replace — OBD2 scan state survives backing out). The in-memory store has split semantics: `getObd2DiagnoseHandoff()` is a non-consuming read feeding the auto-assess gate/badges/snapshot; `consumeObd2DiagnoseEscalation()` is consume-once and feeds the complaint prefill (stored + permanent code lines — deliberately NOT pending codes, to keep text parity with the old handoff and avoid new AI-visible information). Deliberately not persisted (stale-after-restart data must not arm the assessment path). `clearObd2DiagnoseHandoffCodes()` mirrors a code clear into the store (zeroes dtcs/pendingDtcs/freezeFrame, **preserves permanentDtcs** — they survive a Mode 04 clear by definition) so an assessment can never reason over cleared codes. The AsyncStorage `lib/handoff.ts` channel now serves Ask ↔ Diagnose only.
+  - **Connection-aware reset:** `resetSession()` in `/diagnose` preserves the vehicle/VIN while an adapter is connected (clearing would desync the global context from the physically-connected vehicle); disconnected, it clears everything as before.
+  - **Assessment UI extracted to `components/assessment/`** (`AssessmentResult`, `ConditionSelector`, `DataBadge`) — reused by the merged screen, ready for Stage 2's evidence-update cards. `Obd2Manager.getSelectedPids()` getter added so the home-tile entry path can build snapshots from the live polling selection.
+  - **Capture-card placeholder (`components/assessment/CaptureCard.tsx`):** presentational-only Stage 2 primitive (waiting / capturing / complete, progress bar, signal chips, optional cancel). Rendered with mocked tap-to-cycle states at the bottom of every assessment result behind the `DEBUG_UI` flag (see Debug Logging) so it's reviewable on the shop preview build. Stage 2's capture executor will drive it with real state; no component changes needed.
+  - **Inspection Report: KEEP (decided 2026-06-10).** Zero cost in the new nav; revisit at UI-redesign time.
 
 **Open action items (near-term):**
 
 - **iOS native cleanup:** exclude `react-native-bluetooth-classic` pod from iOS build via Expo config plugin (latent crash risk; requires full iOS rebuild; do before TestFlight)
 - **Offline resilience:** graceful handling when connectivity drops during connect/VIN-decode (currently fails silently into a degraded PID list); plus offline data buffering for road tests
-- **Diagnostic engine Stage 2:** iterative evidence loop — Claude requests specific data under specific conditions, phone captures automatically via monitoring loop, sends back for an evidence-update call
+- **Diagnostic engine Stage 2:** iterative evidence loop — Claude requests specific data under specific conditions, phone captures automatically via monitoring loop, sends back for an evidence-update call. **The UI home is ready (Stage 2A):** the merged `/diagnose` thread renders assessment cards in anchored slots, and the capture-card primitive exists with mocked states; what remains is the capture executor + the evidence-update backend (build on `server/askToolLoop.js`)
 
 **Next major feature:**
 
@@ -43,9 +52,9 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 **Pre-launch work not yet started:**
 
 - **Infrastructure:** migrate JSON-file storage to the Supabase/Postgres data layer (connection + schema + productionized extraction engine + live spec read-path all in place — see Backend → Database layer; remaining: the real extraction feed at scale, then move the existing cache data off the JSON files) (bundle in self-hosted NHTSA vPIC VIN decoder + NHTSA recall/TSB caching); fallback AI provider (Claude → GPT-4o for 529s); real auth (Supabase); billing (RevenueCat + Stripe); Sentry; Mixpanel; API cost monitoring + usage limits; build proprietary spec database; move confirmed-fix database to cloud
-- **Product:** UI redesign for premium feel; decide whether to remove Inspection Report; speech-to-text; compatible-adapters screen
+- **Product:** UI redesign for premium feel; Inspection Report keep-vs-remove revisit at UI-redesign time (KEEP decided 2026-06-10 during the Stage 2A restructure — zero cost in the current nav, it's the app's only customer-facing PDF deliverable); speech-to-text; compatible-adapters screen
 - **Legal/business:** form LLC + EIN; trademark Vulcan (Class 9 & 42, VulcanDX backup); switch Apple/Google accounts to Organization; CPA/attorney consult
-- **Launch:** TestFlight + Google Play internal testing; finalize tiered pricing ($40-50/mo target); App Store listing prep
+- **Launch:** TestFlight + Google Play internal testing; finalize tiered pricing ($40-50/mo target); App Store listing prep; **strip BOTH debug flags (`EXPO_PUBLIC_DEBUG_OBD2`, `EXPO_PUBLIC_DEBUG_UI`) from `.env` before any customer-facing build or OTA update** — local OTA exports inline `.env`, so this is a hard release gate, not tribal knowledge (see Development Workflow → OTA env inlining)
 
 **Phase tracker:**
 
@@ -54,7 +63,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 | 1. Get off Expo Go | COMPLETE |
 | 2. OBD2 Foundation | COMPLETE |
 | 3a. Diagnostic engine — Stage 1 (single-shot assessment) | COMPLETE |
-| 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | NEXT |
+| 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | IN PROGRESS — Stage 2A UI restructure COMPLETE (merged diagnostic mode, OBD2 escalation handoff, capture-card placeholder); evidence loop (capture executor + backend) NOT STARTED |
 | 3c. Diagnostic engine — Stage 3 (adaptive stance UI, guided checklists) | NOT STARTED |
 | 4. Pre-launch infrastructure | IN PROGRESS — Supabase data layer: foundation + productionized extraction engine (validated Sierra/Ford/Honda) + live Option C spec path + tool-use routing all landed; PAUSED for Stage 2. Pending: real extraction feed at scale, NHTSA normalization + pickers (pre-launch), JSON→Postgres migration |
 | 5. Testing & launch | NOT STARTED |
@@ -84,9 +93,9 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 ## App Structure — Four Main Modes
 
 1. **Ask Vulcan** — open-ended automotive conversation, no VIN required
-2. **Diagnose** — structured diagnostic flow with VIN, ends with confirmed diagnosis
-3. **Inspection Report** — multi-point vehicle inspection with PDF export
-4. **OBD2 Scan** — Bluetooth connection to vehicle, DTC reading, live data
+2. **Diagnose** — THE diagnostic mode (Stage 2A merged the former standalone Smart Diagnose into it). Intake (VIN/manual + mileage + complaint) → conversational flow ending in a confirmed diagnosis. When the OBD2 adapter is connected with scan data, a structured `/api/assess` assessment fires automatically on start and renders as a card in the conversation thread (see Diagnostic Engine Architecture)
+3. **Inspection Report** — multi-point vehicle inspection with PDF export (KEEP decided 2026-06-10; revisit at UI redesign). Self-contained: own local vehicle state (not on `VehicleContext`), own VIN decode, no Claude/OBD2 dependencies
+4. **OBD2 Scan** — Bluetooth connection to vehicle, DTC reading, live data. A simple instrument with ONE door into diagnosis: "Escalate to Diagnosis" sets the `lib/obd2Handoff.ts` store and pushes `/diagnose`
 
 ## Key Architecture Details
 
@@ -147,10 +156,25 @@ The unified vehicle-data layer's storage. **Live, not foundation-only anymore:**
 Mobile uses bundle-time-inlined debug flags in `lib/debug.ts`. High-frequency
 logs (per-poll-tick, transport TX/RX, BLE scan ingestion, per-handshake
 commands) are wrapped in `if (DEBUG_OBD2)` and stay silent unless
-`EXPO_PUBLIC_DEBUG_OBD2=1` is set in `.env`. Preview / production builds
-never set the flag so production binaries never produce verbose logs.
+`EXPO_PUBLIC_DEBUG_OBD2=1` is set in `.env`.
 Rare/informational events (connection PASS/FAIL, marked-unsupported,
 disconnect, errors, the duplicate-signalKey assertion warning) always log.
+
+**How the flags actually reach builds (corrected 2026-06):** EAS *builds*
+take env from `eas.json`'s `env` block, which never sets debug flags — so
+full binaries are clean. But `eas update` runs `expo export` **locally**,
+which inlines `EXPO_PUBLIC_*` from `.env` — so OTA bundles carry whatever
+`.env` had at export time. `EXPO_PUBLIC_DEBUG_OBD2=1` is currently in
+`.env` **intentionally** (shop-test phase wants verbose OBD2 logging on the
+preview build). Stripping BOTH debug flags from `.env` before any
+customer-facing build/update is a tracked pre-launch gate (see Pre-launch →
+Launch).
+
+Second flag: `DEBUG_UI` (`EXPO_PUBLIC_DEBUG_UI=1`, also intentionally in
+`.env`) gates placeholder / in-progress UI — currently the Stage 2
+capture-card primitive with mocked tap-to-cycle states at the bottom of
+every assessment result. Remove from `.env` once the real Stage 2 capture
+flow drives the card.
 
 ## Development Workflow
 
@@ -158,6 +182,7 @@ disconnect, errors, the duplicate-signalKey assertion warning) always log.
 - Development builds connect to local Expo dev server via `npx expo start --dev-client`
 - Preview builds are standalone, built with `eas build --profile preview --platform ios/android`
 - OTA updates for JS-only changes: `eas update --channel preview --message "description"`. **The shop/testing build runs on the `preview` channel** — JS-only fixes are shipped there so the standalone preview build on the test devices picks them up. (The `development` channel pairs with the dev-client build connected to the local Metro server; use it only when iterating against `npx expo start --dev-client`.)
+- **OTA env inlining (load-bearing):** `eas update` runs `expo export` locally and inlines `EXPO_PUBLIC_*` vars **from `.env`** into the bundle; `eas.json`'s `env` block applies to EAS Build servers ONLY (full binaries). Consequence: whatever debug flags are in `.env` at export time ship in the OTA. Currently intentional (`EXPO_PUBLIC_DEBUG_OBD2=1` + `EXPO_PUBLIC_DEBUG_UI=1` for the shop-test phase); stripping both is a pre-launch release gate.
 - Native module changes require full EAS rebuild
 - Push to GitHub for Railway backend deploys
 - The **Railway CLI is authenticated** for this project (linked to service `vulcan-backend`). Use it to verify deploys went live and inspect logs without the dashboard: `railway status`, `railway logs --service vulcan-backend` (add `--build` for build logs, `--deployment` for runtime/startup logs). This is how to confirm a redeploy is live and read startup lines like `[startup] cache rollup`, `[cache] loaded … pruned …`, and `[db] connected to Supabase`. (`railway ssh` needs an SSH key, which is not configured — prefer log inspection.)
@@ -355,42 +380,49 @@ The diagnostic engine is a local-state + LLM-reasoning hybrid. Core principles (
 |---|---|
 | `lib/assessmentTypes.ts` | All types: `OperatingCondition`, `DiagnosticSnapshot`, `DiagnosticAssessment`, `Hypothesis`, `NextStep`, etc. |
 | `lib/diagnosticSnapshot.ts` | Snapshot builder — averages ring buffer entries per signal, records absent signals, packages freeze frame. Objective facts only. |
-| `lib/obd2.ts` (Obd2Manager) | Rolling 10-second ring buffer maintained after each poll tick. `captureSnapshot(durationMs)` and `getRingBufferAge()` for assessment. Cleared on disconnect. |
-| `server/index.js` `/api/assess` | Assessment endpoint: enriches DTCs from snapshot.dtcs, injects specs from complaint, formats snapshot block, calls Opus with `emit_diagnostic_assessment` tool. |
-| `app/smart-diagnose.tsx` | Route `/smart-diagnose`. Intake (complaint + condition selector + mileage) → assessing → structured result display. Exports `setSmartDiagnoseHandoff()`. |
-| `app/obd2.tsx` | "Smart Diagnose" button in LIVE DATA section. Calls `setSmartDiagnoseHandoff()` then navigates. |
+| `lib/obd2.ts` (Obd2Manager) | Rolling 10-second ring buffer maintained after each poll tick. `captureSnapshot(durationMs)`, `getRingBufferAge()`, and `getSelectedPids()` (added in Stage 2A for the home-tile entry path). Cleared on disconnect. |
+| `server/index.js` `/api/assess` | Assessment endpoint: enriches DTCs from snapshot.dtcs, injects specs from complaint, formats snapshot block, calls Opus with `emit_diagnostic_assessment` tool. UNCHANGED by Stage 2A. |
+| `app/diagnose.tsx` | THE diagnostic mode. Phase machine `intake → chat`; the chat FlatList renders `ThreadRow` items (messages + `AssessmentEntry` assessment cards anchored by `afterMessageIndex` with stable keys — position held from the loading state). Auto-assess gate, parallel `/api/assess` + `/api/diagnose` firing, re-run link, connection-aware `resetSession()`. Logs `assessment` and `diagnose_turn` entries. |
+| `lib/obd2Handoff.ts` | In-memory OBD2→diagnose handoff. `setObd2DiagnoseHandoff()` (escalate door), `getObd2DiagnoseHandoff()` (non-consuming; gate/badges/snapshot), `consumeObd2DiagnoseEscalation()` (consume-once; complaint prefill), `clearObd2DiagnoseHandoffCodes()` (code-clear mirror, preserves permanentDtcs). Deliberately not persisted. |
+| `components/assessment/AssessmentResult.tsx` | Structured result display (stance banner, leading hypothesis, next step + requested-data box, differential, ceiling note, unverified specs). Optional `onReset`. Hosts the `DEBUG_UI`-gated capture-card dev preview. |
+| `components/assessment/ConditionSelector.tsx`, `DataBadge.tsx` | Intake pieces: operating-condition chip grid; data-available pills. |
+| `components/assessment/CaptureCard.tsx` | Stage 2 capture primitive — presentational only (`state: waiting/capturing/complete`, `conditionLabel`, `signalIds`, `durationSeconds?`, `progress?`, `onCancel?`). Stage 2's executor drives it; no logic inside. |
+| `app/obd2.tsx` | "Escalate to Diagnosis" buttons (DTC section when codes exist; LIVE DATA section with/without PIDs) → one handler sets the handoff store, `router.push("/diagnose")`. `onClearDtcs` mirrors clears into the store. |
 
-### Data flow (Stage 1)
+### Data flow (Stage 1 inside the merged mode)
 
 ```
-Tech taps "Smart Diagnose" on OBD2 screen
+EITHER  Tech taps "Escalate to Diagnosis" on the OBD2 screen
+          → setObd2DiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, permanentDtcs, freezeFrame})
+          → router.push("/diagnose")
+          → on mount, consumeObd2DiagnoseEscalation() prefills the complaint with
+            stored + permanent code lines (consume-once)
+OR      Tech opens Diagnose from the home tile
+          → handoff store read non-destructively; descriptors fall back to obd2.getSelectedPids()
   ↓
-obd2.tsx calls setSmartDiagnoseHandoff({selectedDescriptors, dtcs, pendingDtcs, permanentDtcs, freezeFrame})
+Intake: vehicle/VIN + mileage + complaint (required). Connected-only sections:
+LIVE OBD2 DATA badges + OPERATING CONDITION chips
   ↓
-Navigate to /smart-diagnose
+"Start Diagnosis" (single CTA)
   ↓
-Tech selects operating condition, optionally adds complaint
-  ↓
-Tech taps "Run Assessment"
-  ↓
-obd2.captureSnapshot(5000) → last 5s of ring buffer entries
-  ↓
-buildDiagnosticSnapshot(ringBuffer, descriptors, condition, dtcs, ...) → DiagnosticSnapshot
-  ↓
-POST /api/assess {vehicle, vin, mileage, complaint, snapshot, recalls, tsbs}
-  ↓
-Server: enrich DTCs, inject specs, format snapshot block, build system context
-  ↓
-Claude Opus: emit_diagnostic_assessment tool call
-  ↓
-Return { assessment: DiagnosticAssessment }
-  ↓
-UI: stance banner → leading hypothesis → next step → full differential → ceiling note → unverified specs
+IF isConnected && (signals > 0 || DTCs > 0):  ← auto-assess gate
+  runAssessment() fires IN PARALLEL with the first /api/diagnose call
+  (independent calls — assessment failure shows an error card, conversation proceeds)
+  ↓ assessment path                                ↓ conversation path (unchanged)
+obd2.captureSnapshot(5000)                         POST /api/diagnose with [complaint]
+  → buildDiagnosticSnapshot(ring, descriptors,       → question/diagnosis turns render
+    condition, dtcs, pending, permanent, freeze)       below the assessment card
+  → POST /api/assess {vehicle, vin, mileage,
+    complaint, snapshot, recalls, tsbs}
+  → Server: enrich DTCs, inject specs, snapshot block
+  → Claude Opus: emit_diagnostic_assessment tool call
+  → AssessmentResult card swaps into its anchored slot
+    (first thread item after the complaint bubble)
 ```
 
 ### Stage 2 hook
 
-The `NextStep` type includes `requested_data?: RequestedDataItem[]` (present when `type === "DATA_CAPTURE"`). Stage 1 surfaces this to the tech as text. Stage 2 will auto-execute it: phone detects the operating condition, captures the window, sends an evidence-update call. The data model is ready; the execution loop is not yet built. **Server-side groundwork already exists:** `server/askToolLoop.js` (PR-1) is the execute-then-continue tool-loop pattern — Claude requests data → server provides → Claude continues — which is the same machinery Stage 2's evidence loop needs. Build Stage 2 on that pattern rather than inventing a parallel one. See Backend → vehicle spec retrieval.
+The `NextStep` type includes `requested_data?: RequestedDataItem[]` (present when `type === "DATA_CAPTURE"`). Stage 1 surfaces this to the tech as text in the next-step card. Stage 2 will auto-execute it: phone detects the operating condition, captures the window, sends an evidence-update call. **The UI side is staged:** the merged `/diagnose` thread renders assessment cards in anchored slots (an evidence-update card is just another `AssessmentEntry`), and `components/assessment/CaptureCard.tsx` is the watch/capture status primitive, currently behind `DEBUG_UI` with mocked states. What remains: the capture executor (condition detection + window capture + cost safeguards) and the evidence-update backend. **Server-side groundwork already exists:** `server/askToolLoop.js` (PR-1) is the execute-then-continue tool-loop pattern — Claude requests data → server provides → Claude continues — which is the same machinery Stage 2's evidence loop needs. Build Stage 2 on that pattern rather than inventing a parallel one. See Backend → vehicle spec retrieval.
 
 ### Safety discipline (non-negotiable)
 

@@ -38,7 +38,7 @@ export default function HomeScreen() {
           <ActionTile
             icon="🔍"
             title="Diagnose"
-            subtitle="Guided vehicle diagnosis"
+            subtitle="Guided diagnosis — uses live OBD2 data when connected"
             onPress={() => router.push("/diagnose")}
           />
           <ActionTile

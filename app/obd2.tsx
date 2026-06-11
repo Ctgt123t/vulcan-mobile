@@ -20,8 +20,10 @@ import Navbar from "../components/Navbar";
 import { useObd2 } from "../contexts/Obd2Context";
 import { useVehicle } from "../contexts/VehicleContext";
 import { fetchDtcDefinition } from "../lib/api";
-import { setHandoff } from "../lib/handoff";
-import { setSmartDiagnoseHandoff } from "./smart-diagnose";
+import {
+  clearObd2DiagnoseHandoffCodes,
+  setObd2DiagnoseHandoff,
+} from "../lib/obd2Handoff";
 import {
   type DiscoveredDevice,
   type FreezeFrame,
@@ -194,8 +196,8 @@ export default function Obd2Screen() {
     });
   }, [vin, vehicle.year, vehicle.make, vehicle.model, isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic PID snapshot — 30s while connected, plus triggered by DTC scan
-  // and Smart Diagnose. Uses live vehicle/vin refs to avoid stale closures.
+  // Periodic PID snapshot — 30s while connected, plus triggered by DTC scan.
+  // Uses live vehicle/vin refs to avoid stale closures.
   useEffect(() => {
     if (!isConnected) return;
     const id = setInterval(() => {
@@ -563,6 +565,9 @@ export default function Obd2Screen() {
             setFreezeFrame(null);
             setDefinitions({});
             setClearError(null);
+            // Mirror the clear into the diagnose handoff store so a later
+            // assessment can't reason over codes that no longer exist.
+            clearObd2DiagnoseHandoffCodes();
           },
         },
       ],
@@ -579,33 +584,19 @@ export default function Obd2Screen() {
     }
   }
 
-  async function onDiagnoseWithVulcan() {
-    const allCodes = [...dtcs, ...permanentDtcs];
-    if (allCodes.length === 0) {
-      Alert.alert(
-        "No codes to send",
-        "Run a code scan first, then we can hand the results to Vulcan.",
-      );
-      return;
-    }
-    await setHandoff({
-      type: "to_diagnose",
-      symptom: "",
-      dtcs,
-      permanentDtcs,
-    });
-    router.replace("/diagnose");
-  }
-
-  function onSmartDiagnose() {
-    setSmartDiagnoseHandoff({
+  // The single door into the merged diagnostic mode. Re-sets the handoff
+  // store on every escalation so the diagnostic screen always reasons over
+  // the current scan context, then pushes (not replaces) so the OBD2
+  // screen's scan state survives backing out of the diagnosis.
+  function onEscalateToDiagnosis() {
+    setObd2DiagnoseHandoff({
       selectedDescriptors,
       dtcs,
       pendingDtcs,
       permanentDtcs,
       freezeFrame,
     });
-    router.push("/smart-diagnose");
+    router.push("/diagnose");
   }
 
   const visibleObd = devices.filter((d) => d.likelyObd);
@@ -878,12 +869,12 @@ export default function Obd2Screen() {
               {(dtcs.length > 0 || permanentDtcs.length > 0) && (
                 <TouchableOpacity
                   style={styles.diagnoseBtn}
-                  onPress={onDiagnoseWithVulcan}
+                  onPress={onEscalateToDiagnosis}
                   activeOpacity={0.85}
                 >
                   <Ionicons name="flash" size={18} color="#FFFFFF" />
                   <Text style={styles.diagnoseBtnText}>
-                    Diagnose with Vulcan
+                    Escalate to Diagnosis
                   </Text>
                 </TouchableOpacity>
               )}
@@ -979,27 +970,27 @@ export default function Obd2Screen() {
                 </View>
               ) : null}
 
-              {/* Smart Diagnose — structured AI assessment using live data + DTCs */}
+              {/* Escalate — hands live data + DTCs to the diagnostic mode */}
               <TouchableOpacity
-                style={styles.smartDiagnoseBtn}
-                onPress={onSmartDiagnose}
+                style={styles.diagnoseBtn}
+                onPress={onEscalateToDiagnosis}
                 activeOpacity={0.85}
               >
-                <Ionicons name="analytics" size={18} color="#FFFFFF" />
-                <Text style={styles.smartDiagnoseBtnText}>Smart Diagnose</Text>
+                <Ionicons name="flash" size={18} color="#FFFFFF" />
+                <Text style={styles.diagnoseBtnText}>Escalate to Diagnosis</Text>
               </TouchableOpacity>
             </>
           )}
 
-          {/* Smart Diagnose when connected but no PIDs selected yet */}
+          {/* Escalate when connected but no PIDs selected yet */}
           {isConnected && selectedDescriptors.length === 0 && (
             <TouchableOpacity
-              style={[styles.smartDiagnoseBtn, { marginTop: 4 }]}
-              onPress={onSmartDiagnose}
+              style={[styles.diagnoseBtn, { marginTop: 4 }]}
+              onPress={onEscalateToDiagnosis}
               activeOpacity={0.85}
             >
-              <Ionicons name="analytics" size={18} color="#FFFFFF" />
-              <Text style={styles.smartDiagnoseBtnText}>Smart Diagnose</Text>
+              <Ionicons name="flash" size={18} color="#FFFFFF" />
+              <Text style={styles.diagnoseBtnText}>Escalate to Diagnosis</Text>
             </TouchableOpacity>
           )}
         </Section>
@@ -1914,7 +1905,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginBottom: 2,
   },
-  // Diagnose handoff button
+  // Escalate to Diagnosis button
   diagnoseBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1926,23 +1917,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   diagnoseBtnText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 15,
-    letterSpacing: 0.3,
-  },
-  // Smart Diagnose button — structured AI assessment from live OBD2 data
-  smartDiagnoseBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    minHeight: HIT_TARGET,
-    backgroundColor: "#1A3A5C",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-  },
-  smartDiagnoseBtnText: {
     color: "#FFFFFF",
     fontWeight: "700",
     fontSize: 15,

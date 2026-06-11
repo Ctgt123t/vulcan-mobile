@@ -21,16 +21,32 @@ import Results from "../components/Results";
 import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
+import AssessmentResult from "../components/assessment/AssessmentResult";
+import ConditionSelector from "../components/assessment/ConditionSelector";
+import DataBadge from "../components/assessment/DataBadge";
+import { useObd2 } from "../contexts/Obd2Context";
 import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
+  AssessError,
   DiagnoseError,
   VinDecodeError,
+  assess,
   decodeVin,
   diagnose,
   isLikelyVin,
 } from "../lib/api";
+import {
+  type DiagnosticAssessment,
+  type OperatingCondition,
+} from "../lib/assessmentTypes";
+import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
+import { obd2 } from "../lib/obd2";
+import {
+  consumeObd2DiagnoseEscalation,
+  getObd2DiagnoseHandoff,
+} from "../lib/obd2Handoff";
 import {
   type DiagnosticRecord,
   type RecordOutcome,
@@ -46,6 +62,23 @@ import type {
 } from "../lib/types";
 
 type Phase = "intake" | "chat";
+
+// A structured assessment occupying a slot in the conversation thread.
+// `afterMessageIndex` anchors the card to a fixed position (rendered after
+// that message) so the layout doesn't jump when the assessment resolves
+// after later conversational turns have already rendered.
+interface AssessmentEntry {
+  id: number;
+  afterMessageIndex: number;
+  slot:
+    | { status: "running" }
+    | { status: "done"; assessment: DiagnosticAssessment }
+    | { status: "error"; message: string };
+}
+
+type ThreadRow =
+  | { key: string; kind: "message"; message: ChatMessage }
+  | { key: string; kind: "assessment"; entry: AssessmentEntry };
 
 export default function Screen() {
   const router = useRouter();
@@ -76,6 +109,15 @@ export default function Screen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Structured-assessment state (merged Smart Diagnose path). When the
+  // adapter is connected and scan data exists, an assessment runs
+  // automatically on Start Diagnosis — in parallel with the conversational
+  // call — and renders as a card in the thread.
+  const { isConnected } = useObd2();
+  const [condition, setCondition] = useState<OperatingCondition>("WARM_IDLE");
+  const [assessments, setAssessments] = useState<AssessmentEntry[]>([]);
+  const assessmentIdRef = useRef(0);
+
   const [scannerOpen, setScannerOpen] = useState(false);
   const [decoding, setDecoding] = useState(false);
   const [decodeError, setDecodeError] = useState<string | null>(null);
@@ -86,7 +128,7 @@ export default function Screen() {
   const [confirmedDone, setConfirmedDone] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
 
-  const listRef = useRef<FlatList<ChatMessage> | null>(null);
+  const listRef = useRef<FlatList<ThreadRow> | null>(null);
   const insets = useSafeAreaInsets();
   // Height of the chrome above the KAV — measured for the iOS KAV offset.
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -118,6 +160,27 @@ export default function Screen() {
       hideSub.remove();
     };
   }, [phase]);
+
+  // Consume a pending OBD2 escalation (if present) on mount and pre-fill
+  // the complaint with the scanned codes — same lines the old OBD2
+  // "Diagnose with Vulcan" handoff produced. Consume-once, so a later
+  // home-tile visit doesn't re-prefill from an old escalation. The handoff
+  // STORE stays readable (it feeds the auto-assessment gate); only the
+  // escalation flag is consumed.
+  useEffect(() => {
+    const esc = consumeObd2DiagnoseEscalation();
+    if (!esc) return;
+    const dtcLine =
+      esc.dtcs.length > 0
+        ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
+        : "";
+    const permLine =
+      esc.permanentDtcs.length > 0
+        ? `Permanent codes (survived last clear): ${esc.permanentDtcs.join(", ")}.`
+        : "";
+    const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
+    if (combined) setSymptom(combined);
+  }, []);
 
   // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill
   // the intake. We don't auto-submit — the technician confirms the vehicle
@@ -199,6 +262,90 @@ export default function Screen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vin]);
 
+  // Auto-assessment gate. Descriptors come from the OBD2 escalation handoff
+  // when present, falling back to the manager's live polling selection (the
+  // home-tile entry path). DTCs/freeze frame only travel via the handoff —
+  // they live in the OBD2 screen's component state, not the manager.
+  const obd2Handoff = getObd2DiagnoseHandoff();
+  const assessDescriptors =
+    obd2Handoff.selectedDescriptors.length > 0
+      ? obd2Handoff.selectedDescriptors
+      : obd2.getSelectedPids();
+  const assessDtcCount =
+    obd2Handoff.dtcs.length +
+    obd2Handoff.pendingDtcs.length +
+    obd2Handoff.permanentDtcs.length;
+  // Same rule that gated Smart Diagnose's run button: never fire an
+  // assessment with nothing to assess (connected but zero signals + zero
+  // DTCs adds no information and burns an Opus call).
+  const canAutoAssess =
+    isConnected && (assessDescriptors.length > 0 || assessDtcCount > 0);
+
+  async function runAssessment(afterMessageIndex: number, complaintText: string) {
+    const id = ++assessmentIdRef.current;
+    setAssessments((prev) => [
+      ...prev,
+      { id, afterMessageIndex, slot: { status: "running" } },
+    ]);
+
+    const handoff = getObd2DiagnoseHandoff();
+    const descriptors =
+      handoff.selectedDescriptors.length > 0
+        ? handoff.selectedDescriptors
+        : obd2.getSelectedPids();
+    const ringBuffer = obd2.captureSnapshot(5000);
+    const snapshot = buildDiagnosticSnapshot(
+      ringBuffer,
+      descriptors,
+      condition,
+      handoff.dtcs,
+      handoff.pendingDtcs,
+      handoff.permanentDtcs,
+      handoff.freezeFrame,
+    );
+
+    try {
+      const result = await assess(
+        vehicle,
+        vin.trim() || null,
+        vehicle.mileage,
+        complaintText,
+        snapshot,
+        recalls,
+        tsbs,
+        diagnosticLogger.getCurrentSessionId(),
+      );
+      diagnosticLogger.log({
+        type: "assessment",
+        vehicle: vehicle.year
+          ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
+          : undefined,
+        assessment: result.assessment,
+        operatingCondition: condition,
+        apiCost: result.cost,
+      });
+      setAssessments((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? { ...a, slot: { status: "done", assessment: result.assessment } }
+            : a,
+        ),
+      );
+    } catch (err) {
+      const msg =
+        err instanceof AssessError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Assessment failed.";
+      setAssessments((prev) =>
+        prev.map((a) =>
+          a.id === id ? { ...a, slot: { status: "error", message: msg } } : a,
+        ),
+      );
+    }
+  }
+
   const latestTurn = useMemo<AssistantTurn | null>(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "assistant") {
@@ -222,6 +369,35 @@ export default function Screen() {
     const ids = new Set(latestTurn.diagnosis.relevant_tsb_numbers ?? []);
     return tsbs.filter((t) => ids.has(t.number));
   }, [latestTurn, tsbs]);
+
+  // Interleave assessment cards into the message thread at their anchored
+  // positions. Keys are stable (message index / assessment id) so a slot's
+  // card updates in place when its assessment resolves.
+  const threadRows = useMemo<ThreadRow[]>(() => {
+    const rows: ThreadRow[] = [];
+    messages.forEach((m, i) => {
+      rows.push({ key: `m${i}`, kind: "message", message: m });
+      for (const a of assessments) {
+        if (a.afterMessageIndex === i) {
+          rows.push({ key: `a${a.id}`, kind: "assessment", entry: a });
+        }
+      }
+    });
+    // Defensive: an anchor past the end of the thread still renders.
+    for (const a of assessments) {
+      if (a.afterMessageIndex >= messages.length) {
+        rows.push({ key: `a${a.id}`, kind: "assessment", entry: a });
+      }
+    }
+    return rows;
+  }, [messages, assessments]);
+
+  const lastAssessmentId =
+    assessments.length > 0 ? assessments[assessments.length - 1].id : null;
+
+  function onRerunAssessment() {
+    runAssessment(Math.max(messages.length - 1, 0), symptom.trim());
+  }
 
   function updateVehicle<K extends keyof VehicleInfo>(
     field: K,
@@ -282,6 +458,12 @@ export default function Screen() {
     const first: ChatMessage = { role: "user", content: symptom.trim() };
     setMessages([first]);
     setPhase("chat");
+    if (canAutoAssess) {
+      // Deliberately not awaited — the assessment and the first
+      // conversational call run in parallel. Independent calls: if the
+      // assessment fails, the conversation proceeds untouched.
+      runAssessment(0, symptom.trim());
+    }
     await callApi([first]);
   }
 
@@ -382,16 +564,22 @@ export default function Screen() {
   function resetSession() {
     setPhase("intake");
     setMessages([]);
+    setAssessments([]);
     setAnswer("");
     setSymptom("");
     setError(null);
-    setVin("");
-    setDecoded(false);
-    setDecodeError(null);
-    setManualOpen(false);
-    clearVehicle().catch(() => {});
     setConfirmedDone(false);
-    lastDecodedRef.current = "";
+    // Only clear the vehicle when no adapter is connected. With a live
+    // connection the vehicle came from the OBD2 auto-VIN flow — wiping it
+    // would desync the global context from the physically-connected vehicle.
+    if (!isConnected) {
+      setVin("");
+      setDecoded(false);
+      setDecodeError(null);
+      setManualOpen(false);
+      clearVehicle().catch(() => {});
+      lastDecodedRef.current = "";
+    }
   }
 
   if (phase === "intake") {
@@ -541,6 +729,40 @@ export default function Screen() {
                 </View>
               )}
 
+              {isConnected && (
+                <View style={styles.singleField}>
+                  <Text style={styles.label}>LIVE OBD2 DATA</Text>
+                  <View style={styles.dataStatusRow}>
+                    <DataBadge
+                      label={`${assessDescriptors.length} live signal${assessDescriptors.length === 1 ? "" : "s"}`}
+                      active={assessDescriptors.length > 0}
+                      icon="pulse"
+                    />
+                    <DataBadge
+                      label={`${assessDtcCount} DTC${assessDtcCount === 1 ? "" : "s"}`}
+                      active={assessDtcCount > 0}
+                      icon="alert-circle"
+                    />
+                  </View>
+                  <Text style={styles.autoAssessNote}>
+                    {canAutoAssess
+                      ? "A structured assessment of this data will run automatically when you start the diagnosis."
+                      : "No live signals or codes yet — select PIDs or run a code scan on the OBD2 screen to include an automatic assessment."}
+                  </Text>
+                </View>
+              )}
+
+              {canAutoAssess && (
+                <View style={styles.singleField}>
+                  <Text style={styles.label}>OPERATING CONDITION</Text>
+                  <Text style={styles.conditionHelp}>
+                    What is the vehicle doing RIGHT NOW? The data snapshot is
+                    captured the moment you start.
+                  </Text>
+                  <ConditionSelector value={condition} onChange={setCondition} />
+                </View>
+              )}
+
               <View style={styles.singleField}>
                 <Text style={styles.label}>PRESENTING COMPLAINT</Text>
                 <TextInput
@@ -564,7 +786,7 @@ export default function Screen() {
                 activeOpacity={0.85}
               >
                 <Text style={styles.submitText}>
-                  {loading ? "Starting…" : "Begin diagnosis"}
+                  {loading ? "Starting…" : "Start Diagnosis"}
                 </Text>
               </TouchableOpacity>
 
@@ -609,9 +831,25 @@ export default function Screen() {
           ref={listRef}
           style={styles.thread}
           contentContainerStyle={styles.threadContent}
-          data={messages}
-          keyExtractor={(_, i) => String(i)}
-          renderItem={({ item }) => <MessageRow message={item} />}
+          data={threadRows}
+          keyExtractor={(item) => item.key}
+          renderItem={({ item }) =>
+            item.kind === "message" ? (
+              <MessageRow message={item.message} />
+            ) : (
+              <AssessmentThreadCard
+                entry={item.entry}
+                onRerun={
+                  isConnected &&
+                  canAutoAssess &&
+                  item.entry.id === lastAssessmentId &&
+                  item.entry.slot.status !== "running"
+                    ? onRerunAssessment
+                    : undefined
+                }
+              />
+            )
+          }
           ListFooterComponent={
             <>
               {loading && (
@@ -788,6 +1026,55 @@ function MessageRow({ message }: { message: ChatMessage }) {
     <View style={styles.assistantTurn}>
       <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
       <Results data={turn.diagnosis} />
+    </View>
+  );
+}
+
+// A structured assessment rendered as a thread item. The running state
+// occupies the slot from the moment the assessment fires, so the card
+// resolving later never shifts the layout of turns rendered below it.
+function AssessmentThreadCard({
+  entry,
+  onRerun,
+}: {
+  entry: AssessmentEntry;
+  onRerun?: () => void;
+}) {
+  return (
+    <View style={styles.assessmentWrap}>
+      <Text style={styles.assistantLabel}>STRUCTURED ASSESSMENT</Text>
+      {entry.slot.status === "running" && (
+        <View style={[styles.bubble, styles.bubbleAssistant]}>
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.loadingText}>
+              Analyzing live vehicle data… this may take 15–30 seconds.
+            </Text>
+          </View>
+        </View>
+      )}
+      {entry.slot.status === "done" && (
+        <AssessmentResult assessment={entry.slot.assessment} />
+      )}
+      {entry.slot.status === "error" && (
+        <View style={[styles.errorBox, styles.assessmentErrorBox]}>
+          <Text style={styles.errorText}>
+            Assessment failed: {entry.slot.message} The conversation below
+            continues without it.
+          </Text>
+        </View>
+      )}
+      {onRerun && (
+        <TouchableOpacity
+          style={styles.rerunLink}
+          onPress={onRerun}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityLabel="Re-run assessment"
+        >
+          <Text style={styles.rerunLinkText}>Re-run assessment ↻</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -987,6 +1274,45 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 6,
     marginBottom: 14,
+  },
+  // Intake — live-data section (connected only)
+  dataStatusRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  autoAssessNote: {
+    fontSize: 12,
+    color: colors.muted,
+    lineHeight: 17,
+    marginTop: 8,
+  },
+  conditionHelp: {
+    fontSize: 12,
+    color: colors.muted,
+    lineHeight: 17,
+    marginBottom: 8,
+  },
+  // Assessment thread card
+  assessmentWrap: {
+    width: "100%",
+    gap: 10,
+    marginBottom: 14,
+  },
+  assessmentErrorBox: {
+    marginTop: 0,
+  },
+  rerunLink: {
+    alignSelf: "flex-start",
+    minHeight: HIT_TARGET - 12,
+    paddingHorizontal: 2,
+    paddingVertical: 6,
+    justifyContent: "center",
+  },
+  rerunLinkText: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
   },
   assistantLabel: {
     fontSize: 10,

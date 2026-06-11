@@ -118,7 +118,7 @@ export default function DiagnosticLogsScreen() {
             <Ionicons name="document-outline" size={40} color={colors.muted} />
             <Text style={styles.emptyTitle}>No sessions recorded yet</Text>
             <Text style={styles.emptyBody}>
-              Connect to a vehicle and run a DTC scan or Smart Diagnose — events are captured automatically.
+              Connect to a vehicle and run a DTC scan or start a diagnosis — events are captured automatically.
             </Text>
           </View>
         ) : (
@@ -316,8 +316,8 @@ function summarizeEntry(entry: DiagnosticLogEntry): string {
     case "assessment": {
       const h = entry.assessment?.hypotheses?.[0];
       return h
-        ? `Smart Diagnose: ${h.name} (${h.confidence})`
-        : "Smart Diagnose: no hypotheses";
+        ? `Assessment: ${h.name} (${h.confidence})`
+        : "Assessment: no hypotheses";
     }
     case "ask_vulcan": {
       const costStr = entry.apiCost ? ` — $${entry.apiCost.cost.total.toFixed(4)}` : "";

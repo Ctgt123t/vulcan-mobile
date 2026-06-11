@@ -1833,6 +1833,13 @@ class Obd2Manager {
     this.failureCounts.clear();
   }
 
+  // The currently-polled descriptors, for callers outside the OBD2 screen
+  // (the diagnostic mode's snapshot builder) that need the live selection
+  // without going through the screen's component state.
+  getSelectedPids(): PidDescriptor[] {
+    return [...this.selectedPids];
+  }
+
   // Per-signal consecutive-miss counter (keyed by signalKey since plain
   // ids collide). A signal is added to unsupportedPids only after
   // MAX_CONSECUTIVE_MISSES misses in a row — so a one-off multi-PID
