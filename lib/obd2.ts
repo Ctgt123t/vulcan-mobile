@@ -847,13 +847,24 @@ class ClassicTransport implements Obd2Transport {
         });
 
         this.disconnectSub = RNBluetoothClassic.onDeviceDisconnected(
-          (event: { address?: string }) => {
+          (event: { address?: string; device?: { address?: string } }) => {
             // Disconnect event is rare and useful for tracing — keep it
             // visible without the debug flag.
             console.log(
               `[obd2 classic] DISCONNECT event: ${JSON.stringify(event)}`,
             );
-            if (event.address === deviceId) onDisconnected();
+            // The native DEVICE_DISCONNECTED payload nests the device:
+            // { eventType, timestamp, device: { address, ... } } — there is
+            // no top-level address. Reading event.address (the old check)
+            // never matched, so disconnects never propagated and the UI
+            // stayed "connected". Keep the flat read as a fallback for
+            // future library shapes; match case-insensitively since the
+            // event fires for ANY ACL disconnect (e.g. earbuds), not just
+            // our adapter.
+            const address = event.device?.address ?? event.address;
+            if (address?.toUpperCase() === deviceId.toUpperCase()) {
+              onDisconnected();
+            }
           },
         );
 
