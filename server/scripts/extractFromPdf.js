@@ -227,7 +227,7 @@ const CAP_UNITS = ["qt", "qts", "quart", "quarts", "l", "liter", "liters", "litr
 // ounces, and millilitres — a superset of CAP_UNITS.
 const FLUID_SMALL_UNITS = [...CAP_UNITS, "pt", "pint", "pints", "oz", "ounce", "ounces", "ml", "milliliter", "milliliters"];
 const PRESS_UNITS = ["psi", "kpa", "bar"];
-const TORQUE_UNITS = ["ft-lb", "ft-lbs", "ftlb", "lb-ft", "lbft", "ft·lb", "nm", "n·m", "n-m"];
+const TORQUE_UNITS = ["ft-lb", "ft-lbs", "ftlb", "lb-ft", "lbft", "ft·lb", "nm", "n·m", "n-m", "lbf-ft", "ft-lbf"];
 const GAP_UNITS = ["in", "inch", "inches", "\"", "mm"];
 const INTERVAL_UNITS = ["mi", "mile", "miles", "km", "kilometer", "kilometers", "mo", "month", "months", "yr", "year", "years"];
 const WEIGHT_UNITS = ["kg", "kgs", "kilogram", "kilograms", "lb", "lbs", "pound", "pounds"];
@@ -251,6 +251,21 @@ const LB_TO_KG = 0.45359237;
 
 function norm(u) {
   return String(u ?? "").trim().toLowerCase();
+}
+
+// Unit-spelling normalizer for validation MATCHING only — the stored
+// value_unit keeps the manual's exact spelling (display fidelity). Handles
+// the cross-manufacturer spelling variation of deferred item #9: GM prints
+// "qt", Subaru "US qt" / "Imp qt" / "lbf·ft", Ford "lb.ft". Strips a
+// US/Imperial prefix and canonicalizes ·/./space separators to "-" so the
+// unit whitelists match on the unit itself, not the typography. Found live:
+// the 2023 Impreza run quarantined ALL ten capacity/torque specs (correct
+// values, perfect quotes) purely on "US qt"/"US gal"/"lbf·ft" spellings.
+function normUnitForMatch(u) {
+  let s = norm(u);
+  s = s.replace(/^u\.?s\.?\s+/, "").replace(/^imp(erial)?\.?\s+/, "");
+  s = s.replace(/[·.\s]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return s;
 }
 
 // Mutates and returns the spec with weights canonicalized to kg. No-op for
@@ -296,7 +311,7 @@ function validateSpec(s) {
   }
 
   if (NUMERIC_TYPES.has(s.spec_type) && hasNum) {
-    const u = norm(s.value_unit);
+    const u = normUnitForMatch(s.value_unit);
     if (!u) return { ok: false, reason: "numeric spec missing value_unit" };
 
     const v = s.value_numeric;
@@ -562,11 +577,30 @@ async function main() {
     `[extract] identity check vs "${VEHICLE_LABEL}" (scanned ${idCheck.pagesScanned} pp): ` +
       `model=${idCheck.found.model} make=${idCheck.found.make} year=${idCheck.found.year}`,
   );
-  if (!idCheck.ok) {
+  // Some manufacturers' manuals carry NO model/year in extractable text at
+  // all (found on the 2023 Subaru Impreza STIS PDF: the model name exists
+  // only in the catalog/filename — the foreword says "your SUBARU vehicle"
+  // and the file has no text cover, so neither text scan nor a vision pass
+  // can confirm it). For those, identity rests on PROVENANCE (the
+  // manufacturer's own portal serving the file under the declared vehicle).
+  // --identity-override="<justification>" lets the operator assert that
+  // provenance-based identity explicitly: the failed check + justification
+  // are logged loudly and persisted in the run snapshot for audit. Without
+  // the flag, the abort below stands unchanged.
+  const identityOverride = argVal("identity-override", "");
+  if (!idCheck.ok && identityOverride) {
+    console.warn(
+      `[extract] IDENTITY OVERRIDE accepted for "${VEHICLE_LABEL}" — text check failed ` +
+        `(model=${idCheck.found.model}, make=${idCheck.found.make}, year=${idCheck.found.year}) ` +
+        `but the operator asserts provenance-based identity: ${identityOverride}`,
+    );
+  } else if (!idCheck.ok) {
     console.error(
       `[extract] ABORT: the PDF's front matter does not match the declared vehicle "${VEHICLE_LABEL}" ` +
         `(model=${idCheck.found.model}, make=${idCheck.found.make}, year=${idCheck.found.year}). ` +
-        `Refusing to file these specs under a possibly-wrong identity — check --make/--model/--year and the PDF path.`,
+        `Refusing to file these specs under a possibly-wrong identity — check --make/--model/--year and the PDF path. ` +
+        `If the document's identity is provenance-based (manufacturer portal serves it under this vehicle but the ` +
+        `text never names it), re-run with --identity-override="<justification>".`,
     );
     process.exit(1);
   }
@@ -878,6 +912,8 @@ async function main() {
     written_at: new Date().toISOString(),
     pdf: path.basename(PDF_PATH),
     pdf_pages: pageCount,
+    identity_check: idCheck.found,
+    identity_override: identityOverride || null,
     whole_document_tokens: preflightTokens,
     mode: FORCE_FULL ? "full" : "trim",
     selection: selectionNote,
