@@ -145,7 +145,28 @@ export function detectAllSpecIntents(text) {
 // bug). So here, when in doubt, treat it as a spec and DO NOT cache: a false
 // positive costs one uncached answer (cheap); a false negative freezes a
 // stale, unguarded spec (the bug). This is now load-bearing, not cosmetic.
+// Component-identity-shaped questions (filter type/location, part numbers).
+// Shared by two consumers with the SAME inverted risk profile as the
+// spec-shaped set below:
+//   - isSpecShapedQuestion folds these in, so component questions are
+//     cache-excluded (a hallucinated component fact must not be frozen for
+//     30 days — pre-widening, "where is the fuel filter" was cacheable).
+//   - isComponentShapedQuestion gates the componentFact demand log in
+//     /api/ask (spec_miss rows with spec_type "componentFact"), since
+//     component questions never reach lookupSpec and would otherwise be
+//     invisible to the extraction queue.
+const COMPONENT_SHAPED_PATTERNS = [
+  /\bfilter\b/i,
+  /\bpart\s*(number|#)s?\b/i,
+];
+
+export function isComponentShapedQuestion(text) {
+  if (typeof text !== "string" || text.length === 0) return false;
+  return COMPONENT_SHAPED_PATTERNS.some((re) => re.test(text));
+}
+
 const SPEC_SHAPED_PATTERNS = [
+  ...COMPONENT_SHAPED_PATTERNS,
   /\bspec(s|ification|ifications)?\b/i,
   /\bcapacit/i, // capacity / capacities
   /\btorque\b/i,
@@ -252,6 +273,23 @@ export async function lookupSpec(vehicle, specType, params = null) {
       err.message,
     );
     return null;
+  }
+}
+
+// Demand logging for component-identity questions ("what filter / part
+// number"). These never route through lookupSpec (no component entry in the
+// spec_lookup enum — deliberate, the component tool path is deferred), so
+// without this the extraction queue is blind to component demand. Writes a
+// spec_miss row with the sentinel type "componentFact" via the same
+// fail-soft queue writer the spec path uses. NEVER throws, NEVER awaited on
+// the response path.
+export function recordComponentFactMiss(vehicle) {
+  try {
+    // Fire-and-forget: recordSpecMiss is internally fail-soft (never
+    // rejects), the .catch is belt-and-suspenders.
+    supabaseSpecs.recordSpecMiss(vehicle, "componentFact").catch(() => {});
+  } catch {
+    // keep the no-throw guarantee airtight
   }
 }
 

@@ -27,8 +27,10 @@ import {
   detectSpecIntent,
   formatSpecAnswer,
   formatSpecContextBlock,
+  isComponentShapedQuestion,
   isSpecShapedQuestion,
   lookupSpec,
+  recordComponentFactMiss,
   recordNoVehicleSpecFallthrough,
   vehicleSpecsStats,
 } from "./vehicleSpecs.js";
@@ -125,7 +127,7 @@ You have access to live sensor data and verified specs when an OBD2 adapter is c
 
 Speak and reason as an integrated diagnostic tool that already has access to the vehicle's data, not as an external advisor asking the technician to gather information you already have.
 
-Factory specifications — applies in every mode. Use your mechanical knowledge freely and confidently: diagnostic reasoning, where components are located, how systems work, and procedures are yours to give — that is your value. For numeric factory specs (fluid capacity, torque, viscosity or fluid type, pressure, sensor voltage or range, idle/target RPM, plug or clearance gap, service interval, fill spec) the rule is label, not silence. If you have a commonly-known value from general knowledge, give it — but lead with it as a likely figure to confirm, never as gospel: e.g. "typically 0W-20, about 4.4 quarts with filter — confirm against the cap or service manual." A working tech wants the likely answer plus the reminder to verify, not a refusal. What you must NOT do is state an unverified number as a precise, authoritative factory figure with no qualifier — a confident exact torque or capacity that turns out wrong can make a technician condemn a good part or torque something to failure. The line is framing: a likely value with a verify note is good; a bare exact figure asserted as confirmed is not. If a spec is obscure or you are genuinely unsure of even a ballpark, say so and point to the OEM source rather than inventing one. When an exact value HAS been injected into this conversation as verified data, state it directly as confirmed — no hedge needed. If a mode's own instructions set a stricter spec rule (for example, a structured diagnostic assessment that must route any unverified spec to a dedicated field instead of stating it), that stricter rule governs that mode.
+Factory specifications and component identity — applies in every mode. Use your mechanical knowledge freely and confidently: diagnostic reasoning, how systems work, procedures, and general component knowledge are yours to give — that is your value. For numeric factory specs (fluid capacity, torque, viscosity or fluid type, pressure, sensor voltage or range, idle/target RPM, plug or clearance gap, service interval, fill spec) AND for vehicle-specific component identity facts recalled from memory — which filter type (cartridge vs spin-on) a given year/make/model uses, OEM or cross-reference part numbers, and where a component is physically located on that specific vehicle — the rule is label, not silence. If you have a commonly-known value from general knowledge, give it — but lead with it as a likely answer to confirm, never as gospel: e.g. "typically 0W-20, about 4.4 quarts with filter — confirm against the cap or service manual," or "typically a spin-on filter on that engine family, commonly listed as 15208AA170 — confirm against the parts catalog before ordering." A working tech wants the likely answer plus the reminder to verify, not a refusal. What you must NOT do is state an unverified number, part number, filter type, or vehicle-specific component location as a precise, authoritative factory fact with no qualifier — a confident exact torque or capacity that turns out wrong can make a technician condemn a good part or torque something to failure, and a confidently wrong part number or filter type sends them to the parts counter for the wrong part. The line is framing: a likely value with a verify note is good; a bare exact figure asserted as confirmed is not. If a spec or component fact is obscure or you are genuinely unsure of even a ballpark, say so and point to the OEM source rather than inventing one. When an exact value HAS been injected into this conversation as verified data, state it directly as confirmed — no hedge needed. If a mode's own instructions set a stricter spec rule (for example, a structured diagnostic assessment that must route any unverified spec to a dedicated field instead of stating it), that stricter rule governs that mode.
 
 Internal consistency — applies when you state specific mechanical facts tied to data you cite. If you reference a concrete data point (a part number, a spec, a DTC, or verified data injected into this conversation), your description must square with it. A spin-on filter's part number and a "cartridge-type" description in the same answer can't both be right — if you catch that kind of conflict, reconcile it before answering, or say plainly you're not certain on that specific detail and point the tech to verify. This is a narrow self-consistency check, NOT blanket second-guessing: keep answering ordinary questions with the same confidence as before, and don't hedge on things you know well. The goal is to catch a claim that fights its own cited evidence — not to add doubt to a confident, correct answer.`;
 
@@ -782,6 +784,9 @@ app.post("/api/ask", async (req, res) => {
 
   try {
     const loopSessionId = typeof sessionId === "string" ? sessionId : null;
+    // Hoisted so the componentFact demand log below can read the
+    // componentFactsServed flag the spec_lookup handler may set.
+    const loopCtx = { vehicle, toolInvoked: false };
     // Agentic tool loop: spec_lookup is registered, so Claude calls it on spec
     // questions the regex missed and reasons over the verified rows in the same
     // turn. The loop sums cost across every call and reports whether a tool fired.
@@ -798,8 +803,29 @@ app.post("/api/ask", async (req, res) => {
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       tools: ASK_TOOLS,
       handlers: ASK_TOOL_HANDLERS,
-      ctx: { vehicle, toolInvoked: false },
+      ctx: loopCtx,
     });
+
+    // Component-identity demand log. Component questions never route through
+    // lookupSpec (no component entry in the spec_lookup enum), so without
+    // this the spec_miss extraction queue is blind to component demand. Log
+    // a "componentFact" miss when a component-shaped question got no
+    // DB-backed component facts in its answer. Fire-and-forget, fail-soft —
+    // must never delay or affect the response.
+    if (
+      isComponentShapedQuestion(lastUserText) &&
+      vehicle &&
+      typeof vehicle === "object" &&
+      vehicle.year &&
+      vehicle.make &&
+      vehicle.model &&
+      !loopCtx.componentFactsServed
+    ) {
+      console.log(
+        `[ask] componentFact demand logged for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+      );
+      recordComponentFactMiss(vehicle);
+    }
 
     // Cache write: only NON-tool responses. A tool-firing answer serves live
     // spec data that must never be frozen for 30 days (same reason

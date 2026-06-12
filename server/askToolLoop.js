@@ -117,6 +117,13 @@ export async function handleSpecLookup(input, ctx) {
     if (r && r.data) hits.push({ specType, data: r.data });
   }
 
+  // Surface to the endpoint whether any DB component facts (the oil-filter
+  // fold riders) actually reached this answer — the componentFact demand log
+  // in /api/ask skips logging a miss when they did.
+  if (hits.some((h) => h.data.componentFacts && h.data.componentFacts.length > 0)) {
+    ctx.componentFactsServed = true;
+  }
+
   const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
 
   if (hits.length === 0) {

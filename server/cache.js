@@ -33,7 +33,12 @@ const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // History:
 //   v1  (implicit) — unversioned legacy keys "<vehicle>::<question>"
 //   v2  — versioned + model-stamped; spec-shaped questions no longer cached
-export const CACHE_VERSION = "v2";
+//   v3  — APP_CONTEXT widened to hedge component identity facts (filter
+//         type, part numbers, vehicle-specific locations). Bumped because
+//         some cacheable questions carry component identity facts without
+//         matching the (also-widened) exclusion patterns — e.g. "what
+//         battery does it take" — so pre-change answers must not survive.
+export const CACHE_VERSION = "v3";
 
 let state = {
   hits: 0,
