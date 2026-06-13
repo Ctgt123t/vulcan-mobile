@@ -46,6 +46,11 @@ import {
   runAskToolLoop,
 } from "./askToolLoop.js";
 import { initDb } from "./db.js";
+import {
+  ASSESS_BODY,
+  EVIDENCE_UPDATE_BODY,
+  buildSystemPrompt,
+} from "./assessPrompt.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -1266,122 +1271,39 @@ function softValidateAssessmentPlan(assessment) {
   return assessment;
 }
 
-const ASSESS_SYSTEM_PROMPT = `${APP_CONTEXT}
+// Stage-1 and evidence-update system prompts are composed from the shared spine
+// in assessPrompt.js. ASSESS_SYSTEM_PROMPT is byte-for-byte identical to the
+// pre-2C-3 literal (proven by server/scripts/verifyAssessPrompt.js).
+const ASSESS_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, ASSESS_BODY);
+const EVIDENCE_UPDATE_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, EVIDENCE_UPDATE_BODY);
 
-DIAGNOSTIC ASSESSMENT — SINGLE-SHOT STRUCTURED ANALYSIS
-
-You are performing a one-shot differential diagnosis based on real OBD2 data captured directly from the vehicle by the Vulcan app. You are NOT conducting a conversation — you are producing a structured differential, exactly as a master technician would review a complete data set before calling a diagnosis.
-
-=== WHAT YOU HAVE ===
-
-The following have been verified by the Vulcan backend and injected into this context. Treat them as ground truth:
-- Vehicle identity, engine configuration, and mileage
-- Technician-declared operating condition at the time of capture
-- A 5-second averaged live OBD2 snapshot with per-signal min/max ranges across the window
-- Stored and pending DTC codes with their verified manufacturer-specific definitions
-- Freeze frame data (if available) — the operating condition when the DTCs stored (HISTORICAL)
-- Active NHTSA recall campaigns for this vehicle
-- NHTSA Technical Service Bulletins on file for this vehicle
-- Verified factory specs (if available for this vehicle and complaint)
-- The technician's presenting complaint (may be blank)
-
-=== REASONING INSTRUCTIONS ===
-
-1. FORM A DIFFERENTIAL. Rank up to 5 hypotheses by how well the actual provided data supports each one. Cut any hypothesis that lacks specific citable support from the data. Don't pad the list with generic possibilities the data cannot speak to.
-
-2. CITE SPECIFIC EVIDENCE. For each hypothesis: supporting_evidence must reference specific values from the provided data. "STFT1 averaged +18% at warm idle with LTFT1 also positive at +12%, consistent with unmetered air rather than a sensor drift" is evidence. "P0171 indicates a lean condition" is a code definition, not evidence from this vehicle's data.
-
-3. CITE CONTRADICTING EVIDENCE. For each hypothesis: contradicting_evidence must name specific observations that argue against it. Contradicting evidence is as important as supporting evidence — it shows honest reasoning rather than confirmation bias.
-
-4. STATE YOUR STANCE.
-   - AUTOPILOT: The fault likely lives in the sensor data — fuel trims, misfire counts, sensor rationality, electrical readings, ECU-detectable malfunctions. You drive the investigation with data-directed next steps.
-   - GUIDED: The fault likely requires the technician's physical senses — mechanical noise, wear patterns, visual damage, leak location. You direct the technician's hands.
-   Give one plain-English sentence for why this stance fits this specific case.
-
-5. ONE NEXT STEP. The single cheapest action that most changes the hypothesis ranking. Not a checklist — exactly one.
-   - DATA_CAPTURE: Specific OBD2 signals under specific, NUMERICALLY-EXPRESSED conditions the phone can watch for automatically. For each requested_data item, fill capture_plan as specified in the MONITORING PLAN section below. (Also fill the human-readable signal_id / operating_condition / duration_seconds fields — they are the plain-language summary of the same plan.)
-   - PHYSICAL_INSPECTION: A specific, actionable check. Name the exact component and the exact test.
-   - QUESTION: The single highest-diagnostic-value piece of information you're missing that would most change the ranking.
-
-6. CONFIDENCE LADDER — use it honestly:
-   - POSSIBLE: Plausible given the data, but direct support is limited. One test could rule it out.
-   - LIKELY: Multiple consistent data points converge on it. Would be surprised if wrong, but not certain.
-   - STRONGLY_SUPPORTED: Strong convergent evidence from several independent indicators. Difficult to explain otherwise.
-   No hypothesis in a single-shot assessment may be marked higher than STRONGLY_SUPPORTED.
-
-7. DATA CEILING. If the generic OBD2 data genuinely cannot distinguish between the leading hypotheses, say so plainly in data_ceiling_note. Honesty about the data's limits is more valuable than a forced conclusion. Leave it empty if the data is sufficient to differentiate.
-
-=== MONITORING PLAN (for a DATA_CAPTURE next step) ===
-
-When the next step is DATA_CAPTURE, the phone will watch the live data stream LOCALLY (zero cost) and capture the evidence window automatically when your conditions are met. For this to work, every condition must be expressed as numbers the phone can check. For each requested_data item, fill capture_plan with:
-
-- context_gate: the SITUATION that must hold for the capture to arm — the "when". A list of {signal_id, range} entries that must ALL hold simultaneously (e.g. RPM 600-900 AND coolant >= 80 degC AND speed = 0). Use an empty array only if the target should be captured under any condition.
-- measured_target: the SINGLE signal + threshold band that IS the evidence — the "what" (e.g. SHRTFT11 >= +10%).
-- sustained_seconds: how long the gate AND target must hold continuously before it counts (filters noise; controls cost).
-- capture_window_seconds: how many seconds of data to package once it fires.
-
-RULES FOR THE NUMBERS:
-- Express EVERY range in the SAME unit the snapshot reports that signal in — raw OBDb units. The snapshot gives coolant in degC (not degF), pressures in kPa (not psi), speed in km/h (not mph), fuel trims in %. State that unit in each range.unit. A range in the wrong unit makes the phone watch for the wrong thing.
-- Reference signals by the exact signal_id shown in the snapshot. Prefer signals present in the snapshot's live readings. The phone validates each signal against the vehicle's supported PIDs and will report any it cannot watch — so do not invent signal ids.
-- A bound may be null for an unbounded side: ">= +10%" is {min:10, max:null}; "<= 5 kPa" is {min:null, max:5}; "600-900 rpm" is {min:600, max:900}.
-- If a condition genuinely cannot be expressed as numbers on an OBD2 signal, it is NOT a DATA_CAPTURE — make it a PHYSICAL_INSPECTION instead.
-
-=== CRITICAL SAFETY DISCIPLINE — NON-NEGOTIABLE ===
-
-You may freely apply diagnostic logic, pattern recognition, and mechanistic reasoning from your training. That is your core value as a master technician.
-
-You must NOT state any specific numeric factory specification — exact torque values, exact pressures, fluid capacities, precise expected sensor voltages, target idle RPM ranges, expected MAF values — unless that exact value was explicitly provided in the verified data blocks injected into this context.
-
-If you need such a value and it was not provided: add it to unverified_specs_needed with the parameter name and why you need it. Recommend the technician confirm against the OEM service manual.
-
-A confidently-stated wrong factory number can cause a technician to condemn a good part or miss the real fault. This is the worst failure mode. When uncertain about a specific numeric value: flag it as unverified, don't state it.
-
-A CAPTURE RANGE IS NOT A FACTORY SPEC. The numeric ranges you put in a capture_plan (a context_gate band like "RPM 600-900", or a measured_target threshold like "STFT >= +10%") are your CHOSEN OBSERVATION WINDOW — an instruction to the phone about WHEN to look and WHAT counts as the evidence event. They are NOT claims about the vehicle's correct or factory-expected value, and the safety rule above does NOT forbid them. Setting these ranges from your diagnostic judgment is expected and encouraged — do not refuse or hedge a range because the number "feels like a spec".
-
-Keep the two cleanly separate:
-- A range = an imperative: "capture data WHEN/IF the signal is in this band." Allowed freely. Never phrase it as the correct/expected/factory value (don't write "the spec is..." or "it should read..." around a capture range).
-- A factory value you'd need to JUDGE the captured reading (e.g. the true factory-acceptable STFT range, or the expected idle MAF) is a claim of fact — it still goes in unverified_specs_needed, never asserted, and never smuggled into a range as if it were the spec.
-
-Example of doing both correctly for a suspected lean condition: set measured_target SHRTFT11 {min:10, max:null, unit:"%"} as your capture trigger AND add an unverified_specs_needed entry {parameter:"Factory-acceptable short-term fuel trim range at warm idle for this vehicle", purpose:"to judge whether the captured trim is actually out of spec"}. The trigger says when to look; the spec request says what the correct value is — different questions, different fields.
-
-=== FREEZE FRAME vs. LIVE DATA ===
-
-Freeze frame data reflects the operating condition when the DTC was stored — HISTORICAL, possibly days or weeks ago.
-Live data reflects the vehicle's state at the moment the technician triggered this assessment.
-
-When reasoning across both:
-- A fault condition present in freeze frame but absent in live data: suggests intermittent — was active when code stored, not currently active.
-- A condition consistent across both contexts: suggests a persistent, currently-active fault.
-Always state explicitly when you are reasoning about the relationship between the two temporal contexts.
-
-=== OUTPUT ===
-
-Call emit_diagnostic_assessment exactly once with your complete structured assessment. Do not produce any plain-text response.`;
-
-app.post("/api/assess", async (req, res) => {
-  const { vehicle, vin, mileage, complaint, snapshot, recalls, tsbs, sessionId } =
-    req.body ?? {};
-
-  if (!vehicle || typeof vehicle !== "object") {
-    return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
-  }
-  if (!snapshot || typeof snapshot !== "object") {
-    return res.status(400).json({ error: "Missing or invalid 'snapshot'." });
-  }
-
-  const recallsArr = Array.isArray(recalls) ? recalls : [];
-  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
-  const complaintText = typeof complaint === "string" ? complaint.trim() : "";
-  const mileageText =
-    typeof mileage === "string" && mileage.trim().length > 0
-      ? mileage.trim()
-      : vehicle.mileage ?? "Not provided";
-
+// Shared assessment runner (Stage 2C-3 refactor). Both /api/assess (Stage 1)
+// and /api/evidence-update use this: it assembles the verified-data system
+// blocks (recall/TSB, DTC enrichment, spec injection, then any endpoint-specific
+// extraContextBlocks, then the snapshot/observed data block LAST), runs the
+// forced emit_diagnostic_assessment call, logs cost under the given callType,
+// soft-validates the monitoring plan, and returns a discriminated result.
+//
+// Stage-1 behavior is preserved exactly: /api/assess passes extraContextBlocks=[]
+// so the block order/text and the user message are byte-identical to pre-2C-3.
+async function runStructuredAssessment({
+  systemPrompt,
+  vehicle,
+  snapshot,
+  recallsArr,
+  tsbsArr,
+  complaintText,
+  extraContextBlocks = [],
+  userMessage,
+  callType,
+  logLabel,
+  sessionId,
+}) {
   // Build system context blocks in the same layered pattern as /api/diagnose.
   const systemBlocks = [
     {
       type: "text",
-      text: ASSESS_SYSTEM_PROMPT,
+      text: systemPrompt,
       cache_control: { type: "ephemeral" },
     },
   ];
@@ -1415,6 +1337,7 @@ app.post("/api/assess", async (req, res) => {
   }
 
   // Spec injection: detect from the complaint text, same as /api/diagnose.
+  // lookupSpec is fail-soft (never throws) — a DB blip degrades to a clean miss.
   const specsToFetch = complaintText.length > 0 ? detectAllSpecIntents(complaintText) : [];
   const verifiedSpecs = [];
   if (specsToFetch.length > 0) {
@@ -1433,11 +1356,76 @@ app.post("/api/assess", async (req, res) => {
     }
   }
 
-  // Formatted snapshot block (the live OBD2 data Claude will reason on).
+  // Endpoint-specific context (e.g. prior assessment + captured evidence for the
+  // evidence-update flow) goes BEFORE the data block. Empty for Stage 1.
+  for (const b of extraContextBlocks) systemBlocks.push(b);
+
+  // Formatted snapshot/observed block (the OBD2 data Claude reasons on) — LAST.
   systemBlocks.push({
     type: "text",
     text: formatSnapshotBlock(snapshot),
   });
+
+  const mismatchCount = enrichedDtcEntries.filter((e) => e.configMismatch).length;
+  console.log(
+    `[${logLabel}] model=${DIAGNOSE_MODEL} ` +
+      `dtcs=${allDtcCodes.length} enriched=${enrichedDtcEntries.length} mismatches=${mismatchCount} ` +
+      `signals=${(snapshot.signals ?? []).length} absent=${(snapshot.absentSignalNames ?? []).length} ` +
+      `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
+      `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length} ` +
+      `extraBlocks=${extraContextBlocks.length}`,
+  );
+
+  const response = await callAnthropicWithRetry(() =>
+    client.messages.create({
+      model: DIAGNOSE_MODEL,
+      max_tokens: 4096,
+      system: systemBlocks,
+      tools: [ASSESS_TOOL],
+      tool_choice: { type: "tool", name: "emit_diagnostic_assessment" },
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  );
+
+  const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
+    sessionId: typeof sessionId === "string" ? sessionId : null,
+    callType,
+  });
+
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse || toolUse.name !== "emit_diagnostic_assessment") {
+    return {
+      ok: false,
+      status: 502,
+      error: "Model did not return a structured assessment. Try again.",
+      cost: costData ?? null,
+    };
+  }
+
+  // Soft-validate the 2C-1 monitoring plan: drop any missing/malformed
+  // capture_plan (fail-soft → Stage-1 prose fallback), never throw.
+  const assessment = softValidateAssessmentPlan(toolUse.input);
+  return { ok: true, assessment, cost: costData ?? null };
+}
+
+app.post("/api/assess", async (req, res) => {
+  const { vehicle, vin, mileage, complaint, snapshot, recalls, tsbs, sessionId } =
+    req.body ?? {};
+
+  if (!vehicle || typeof vehicle !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
+  }
+  if (!snapshot || typeof snapshot !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'snapshot'." });
+  }
+
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
+  const complaintText = typeof complaint === "string" ? complaint.trim() : "";
+  const mileageText =
+    typeof mileage === "string" && mileage.trim().length > 0
+      ? mileage.trim()
+      : vehicle.mileage ?? "Not provided";
 
   // Build the single user message: vehicle context + complaint + assessment request.
   const vehicleHead = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
@@ -1458,47 +1446,235 @@ app.post("/api/assess", async (req, res) => {
   }
   userLines.push("", "Please perform a structured diagnostic assessment of this vehicle based on all the verified data above.");
 
-  const mismatchCount = enrichedDtcEntries.filter((e) => e.configMismatch).length;
-  console.log(
-    `[assess] model=${DIAGNOSE_MODEL} ` +
-      `dtcs=${allDtcCodes.length} enriched=${enrichedDtcEntries.length} mismatches=${mismatchCount} ` +
-      `signals=${(snapshot.signals ?? []).length} absent=${(snapshot.absentSignalNames ?? []).length} ` +
-      `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
-      `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length}`,
-  );
-
   try {
-    const response = await callAnthropicWithRetry(() =>
-      client.messages.create({
-        model: DIAGNOSE_MODEL,
-        max_tokens: 4096,
-        system: systemBlocks,
-        tools: [ASSESS_TOOL],
-        tool_choice: { type: "tool", name: "emit_diagnostic_assessment" },
-        messages: [{ role: "user", content: userLines.join("\n") }],
-      }),
-    );
-
-    const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
-      sessionId: typeof sessionId === "string" ? sessionId : null,
+    const result = await runStructuredAssessment({
+      systemPrompt: ASSESS_SYSTEM_PROMPT,
+      vehicle,
+      snapshot,
+      recallsArr,
+      tsbsArr,
+      complaintText,
+      extraContextBlocks: [],
+      userMessage: userLines.join("\n"),
       callType: "assessment",
+      logLabel: "assess",
+      sessionId,
     });
-
-    const toolUse = response.content.find((b) => b.type === "tool_use");
-    if (!toolUse || toolUse.name !== "emit_diagnostic_assessment") {
-      return res.status(502).json({
-        error: "Model did not return a structured assessment. Try again.",
-      });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
     }
-
-    // Soft-validate the 2C-1 monitoring plan: drop any missing/malformed
-    // capture_plan (fail-soft → Stage-1 prose fallback), never throw.
-    const assessment = softValidateAssessmentPlan(toolUse.input);
-
-    // Return cost alongside the assessment so the app can log it per-session.
-    return res.json({ assessment, cost: costData ?? null });
+    return res.json({ assessment: result.assessment, cost: result.cost });
   } catch (err) {
     return respondWithError(res, err, "assess");
+  }
+});
+
+// ============================================================================
+// /api/evidence-update — Stage 2C-3 evidence-update (the iterative loop's call)
+//
+// Takes the PRIOR assessment + the phone's summarized captured-evidence window
+// (the 2C-2 EvidenceCaptureEntry: observed snapshot + trigger + unavailable
+// signals) and returns an EVOLVED assessment (the SAME emit_diagnostic_assessment
+// schema), reasoning over the new evidence in light of the hypothesis the prior
+// next-step was testing. Single-shot forced-tool (NOT a tool loop) — the
+// evidence is already captured + summarized, so there is nothing to request
+// mid-turn. The phone writes the evolved assessment into caseState and preserves
+// the prior in history (server stays stateless). See assessPrompt.js.
+// ============================================================================
+
+function formatPriorAssessmentBlock(prior) {
+  const a = prior && typeof prior === "object" ? prior : {};
+  const lines = [
+    "=== PRIOR ASSESSMENT (your last conclusion + the test you ordered) ===",
+    "",
+    "This is the assessment YOU produced last time, and the data capture you ordered to test it. Interpret the new evidence below in light of this.",
+    "",
+  ];
+  if (a.stance) lines.push(`Prior stance: ${a.stance}${a.stance_reason ? ` — ${a.stance_reason}` : ""}`, "");
+  const hyps = Array.isArray(a.hypotheses) ? a.hypotheses : [];
+  if (hyps.length > 0) {
+    lines.push("Prior hypotheses (ranked):");
+    hyps.forEach((h, i) => {
+      if (!h || typeof h !== "object") return;
+      lines.push(`  ${i + 1}. ${h.name ?? "(unnamed)"} [${h.confidence ?? "?"}]`);
+      const sup = Array.isArray(h.supporting_evidence) ? h.supporting_evidence : [];
+      const con = Array.isArray(h.contradicting_evidence) ? h.contradicting_evidence : [];
+      for (const s of sup) lines.push(`       + ${s}`);
+      for (const c of con) lines.push(`       - ${c}`);
+    });
+    lines.push("");
+  }
+  const ns = a.next_step && typeof a.next_step === "object" ? a.next_step : null;
+  if (ns) {
+    lines.push(
+      "The test you ordered (your prior next step):",
+      `  Type: ${ns.type ?? "?"}`,
+      `  Action: ${ns.action ?? "(none)"}`,
+    );
+    if (ns.rationale) lines.push(`  Rationale: ${ns.rationale}`);
+    lines.push("");
+  }
+  if (typeof a.data_ceiling_note === "string" && a.data_ceiling_note.trim().length > 0) {
+    lines.push(`Prior data-ceiling note: ${a.data_ceiling_note}`, "");
+  }
+  const specs = Array.isArray(a.unverified_specs_needed) ? a.unverified_specs_needed : [];
+  if (specs.length > 0) {
+    lines.push("Factory values you previously flagged as needed (still unverified unless injected above):");
+    for (const s of specs) {
+      if (s && typeof s === "object") lines.push(`  - ${s.parameter ?? "(unnamed)"}${s.purpose ? ` — ${s.purpose}` : ""}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+function formatEvidenceBlock(evidence) {
+  const e = evidence && typeof evidence === "object" ? evidence : {};
+  const lines = [
+    "=== CAPTURED EVIDENCE (the result of the test you ordered) ===",
+    "",
+    "The phone watched the live data stream locally and captured this window when your condition was met. The averaged signal readings are in the LIVE DATA SNAPSHOT block below; this block is the trigger context — WHY and WHEN it fired.",
+    "",
+    `Capture outcome: ${e.outcome ?? "unknown"}`,
+  ];
+
+  // Which requested item fired + the plan that was asked for.
+  const requested = Array.isArray(e.requested) ? e.requested : [];
+  const trig = e.trigger && typeof e.trigger === "object" ? e.trigger : null;
+  if (requested.length > 0) {
+    const item = requested[0];
+    if (item && typeof item === "object") {
+      lines.push(
+        "",
+        "The capture you requested:",
+        `  Signal: ${item.signal_id ?? "?"}`,
+        `  Condition: ${item.operating_condition ?? "(unspecified)"}`,
+      );
+    }
+  }
+
+  if (trig) {
+    lines.push("", "Trigger context at the moment the capture fired:");
+    if (trig.targetSignalId != null) {
+      lines.push(
+        `  Measured target ${trig.targetSignalId} = ${trig.targetValueAtFire ?? "n/a"} at fire time`,
+      );
+    }
+    const gates = Array.isArray(trig.gateValuesAtFire) ? trig.gateValuesAtFire : [];
+    for (const g of gates) {
+      if (!g || typeof g !== "object") continue;
+      const r = g.range && typeof g.range === "object" ? g.range : {};
+      const band =
+        r.min != null && r.max != null
+          ? `${r.min}-${r.max}${r.unit ?? ""}`
+          : r.min != null
+            ? `>= ${r.min}${r.unit ?? ""}`
+            : r.max != null
+              ? `<= ${r.max}${r.unit ?? ""}`
+              : "(any)";
+      lines.push(`  Gate ${g.signal_id ?? "?"} = ${g.value ?? "n/a"} (window: ${band})`);
+    }
+    if (typeof trig.sustainedHeldMs === "number") {
+      lines.push(`  The condition held for ${(trig.sustainedHeldMs / 1000).toFixed(1)} seconds before the window was captured.`);
+    }
+  }
+
+  // Signals the phone could not watch on this vehicle (honest gaps).
+  const unavailable = Array.isArray(e.unavailableSignals) ? e.unavailableSignals : [];
+  if (unavailable.length > 0) {
+    lines.push(
+      "",
+      "Signals you asked to watch that the vehicle could NOT provide (treat as gaps — do not assume they read normal):",
+    );
+    for (const u of unavailable) {
+      if (u && typeof u === "object") lines.push(`  - ${u.signal_id ?? "?"} (${u.reason ?? "unavailable"})`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+app.post("/api/evidence-update", async (req, res) => {
+  const {
+    vehicle,
+    vin,
+    mileage,
+    complaint,
+    priorAssessment,
+    evidence,
+    recalls,
+    tsbs,
+    sessionId,
+    caseId,
+  } = req.body ?? {};
+
+  if (!vehicle || typeof vehicle !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
+  }
+  if (!priorAssessment || typeof priorAssessment !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'priorAssessment'." });
+  }
+  if (!evidence || typeof evidence !== "object" || !evidence.observed || typeof evidence.observed !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'evidence' (needs an 'observed' snapshot)." });
+  }
+
+  const snapshot = evidence.observed; // the summarized captured window (a DiagnosticSnapshot)
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
+  const complaintText = typeof complaint === "string" ? complaint.trim() : "";
+  const mileageText =
+    typeof mileage === "string" && mileage.trim().length > 0
+      ? mileage.trim()
+      : vehicle.mileage ?? "Not provided";
+
+  const extraContextBlocks = [
+    { type: "text", text: formatPriorAssessmentBlock(priorAssessment) },
+    { type: "text", text: formatEvidenceBlock(evidence) },
+  ];
+
+  const vehicleHead = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
+    .filter((s) => s && String(s).trim().length > 0)
+    .join(" ");
+  const userLines = [`Vehicle: ${vehicleHead}`];
+  if (vehicle.engineType && vehicle.engineType.trim().length > 0) {
+    userLines.push(`Engine: ${vehicle.engineType}`);
+  }
+  userLines.push(`Mileage: ${mileageText}`);
+  if (vin && typeof vin === "string" && vin.trim().length > 0) {
+    userLines.push(`VIN: ${vin.trim()}`);
+  }
+  if (complaintText.length > 0) {
+    userLines.push("", `Original presenting complaint: ${complaintText}`);
+  } else {
+    userLines.push("", "Original presenting complaint: (none provided)");
+  }
+  userLines.push(
+    "",
+    "You previously assessed this vehicle and ordered a data capture (see PRIOR ASSESSMENT and CAPTURED EVIDENCE above). Re-assess holistically: interpret the new evidence in light of the hypothesis your prior next-step was testing, then emit a complete fresh assessment. It replaces your prior assessment as the current picture; the app preserves the prior in the case history.",
+  );
+
+  if (caseId) console.log(`[evidence-update] caseId=${caseId}`);
+
+  try {
+    const result = await runStructuredAssessment({
+      systemPrompt: EVIDENCE_UPDATE_SYSTEM_PROMPT,
+      vehicle,
+      snapshot,
+      recallsArr,
+      tsbsArr,
+      complaintText,
+      extraContextBlocks,
+      userMessage: userLines.join("\n"),
+      callType: "evidence-update",
+      logLabel: "evidence-update",
+      sessionId,
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ assessment: result.assessment, cost: result.cost });
+  } catch (err) {
+    return respondWithError(res, err, "evidence-update");
   }
 });
 

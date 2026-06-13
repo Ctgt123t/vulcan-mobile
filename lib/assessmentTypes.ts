@@ -196,3 +196,23 @@ export interface DiagnosticAssessment {
   data_ceiling_note: string; // empty string = no ceiling noted
   unverified_specs_needed: UnverifiedSpec[];
 }
+
+// ---- Stage 2C-3: evidence-update endpoint contract ----
+//
+// The /api/evidence-update response. The server returns a fresh EVOLVED
+// assessment (same DiagnosticAssessment schema) that REPLACES the case's current
+// caseState; the phone preserves the prior in history (server is stateless).
+// Shaped so the phone-side write is trivial: caseState.hypotheses =
+// response.assessment.hypotheses. The REQUEST the phone sends is { vehicle, vin?,
+// mileage?, complaint?, priorAssessment: DiagnosticAssessment, evidence:
+// EvidenceCaptureEntry (from diagnosticCasesCore), recalls?, tsbs?, sessionId?,
+// caseId? } — assembled in 2C-4 (no named type here to avoid a circular import
+// with diagnosticCasesCore, which already imports from this module).
+//
+// FLAGGED (2C-3): this type is compile-time only and unused until 2C-4 wires the
+// phone call; committed now for contract congruence, its OTA rides with 2C-4
+// (same handling as 2C-1's capture_plan type — no empty type-only OTA now).
+export interface EvidenceUpdateResponse {
+  assessment: DiagnosticAssessment;
+  cost: ApiCostData | null;
+}
