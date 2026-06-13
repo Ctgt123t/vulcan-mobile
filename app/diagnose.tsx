@@ -277,55 +277,73 @@ export default function Screen() {
     };
   }, [phase]);
 
-  // Consume a pending OBD2 escalation (if present) on mount and pre-fill
-  // the complaint with the scanned codes — same lines the old OBD2
-  // "Diagnose with Vulcan" handoff produced. Consume-once, so a later
-  // home-tile visit doesn't re-prefill from an old escalation. The handoff
-  // STORE stays readable (it feeds the auto-assessment gate); only the
-  // escalation flag is consumed.
+  // Mount-time intake entry. ONE effect handles all non-resume entry paths in
+  // sequence (no inter-effect ordering/consume races): OBD2 escalation, then an
+  // Ask→Diagnose handoff, then — if neither applies — a fresh start. The
+  // fresh-start branch closes the previous-vehicle leak: a brand-new diagnosis
+  // opened while DISCONNECTED begins with empty fields (mirroring
+  // resetSession's disconnected branch) instead of inheriting the persisted
+  // global vehicle. When CONNECTED, the auto-VIN vehicle is kept (the
+  // legitimate persist case); a resume is handled entirely by the resume effect
+  // (guarded out here); cross-mode carryover stays explicit via the handoff.
   useEffect(() => {
-    if (resumeIdAtMount) return; // resuming → the resume effect drains it
-    const esc = consumeObd2DiagnoseEscalation();
-    if (!esc) return;
-    const dtcLine =
-      esc.dtcs.length > 0
-        ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
-        : "";
-    const permLine =
-      esc.permanentDtcs.length > 0
-        ? `Permanent codes (survived last clear): ${esc.permanentDtcs.join(", ")}.`
-        : "";
-    const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
-    if (combined) setSymptom(combined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill
-  // the intake. We don't auto-submit — the technician confirms the vehicle
-  // and symptom before the diagnostic conversation starts. Vehicle pushes
-  // into the global context so the recall/TSB lookups fire automatically.
-  useEffect(() => {
-    if (resumeIdAtMount) return; // resuming → the resume effect drains it
+    if (resumeIdAtMount) return; // resuming → the resume effect drains handoffs
     let active = true;
-    consumeHandoff("to_diagnose").then((h) => {
-      if (!active || !h) return;
-      if (h.vehicle) {
-        setVehicleManually({ ...EMPTY_VEHICLE, ...h.vehicle }, h.vin ?? null).catch(
-          () => {},
-        );
+    (async () => {
+      // 1. OBD2 escalation (in-memory, consume-once). Sets the complaint to the
+      //    scanned codes; the vehicle is the connected one, left as-is.
+      const esc = consumeObd2DiagnoseEscalation();
+      if (esc) {
+        const dtcLine =
+          esc.dtcs.length > 0
+            ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
+            : "";
+        const permLine =
+          esc.permanentDtcs.length > 0
+            ? `Permanent codes (survived last clear): ${esc.permanentDtcs.join(", ")}.`
+            : "";
+        const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
+        if (combined) setSymptom(combined);
+        return; // explicit entry — do not clear
       }
-      if (h.vin) setVin(h.vin);
-      const dtcLine =
-        h.dtcs && h.dtcs.length > 0
-          ? `OBD2 scan — stored codes: ${h.dtcs.join(", ")}.`
-          : "";
-      const permLine =
-        h.permanentDtcs && h.permanentDtcs.length > 0
-          ? `Permanent codes (survived last clear): ${h.permanentDtcs.join(", ")}.`
-          : "";
-      const combined = [dtcLine, permLine, h.symptom].filter((s) => s).join("\n\n");
-      if (combined) setSymptom(combined);
-    });
+      // 2. Ask→Diagnose handoff (AsyncStorage, consume). Prefills vehicle +
+      //    complaint; vehicle pushes to context so recall/TSB lookups fire.
+      const h = await consumeHandoff("to_diagnose");
+      if (!active) return;
+      if (h) {
+        if (h.vehicle) {
+          setVehicleManually(
+            { ...EMPTY_VEHICLE, ...h.vehicle },
+            h.vin ?? null,
+          ).catch(() => {});
+        }
+        if (h.vin) setVin(h.vin);
+        const dtcLine =
+          h.dtcs && h.dtcs.length > 0
+            ? `OBD2 scan — stored codes: ${h.dtcs.join(", ")}.`
+            : "";
+        const permLine =
+          h.permanentDtcs && h.permanentDtcs.length > 0
+            ? `Permanent codes (survived last clear): ${h.permanentDtcs.join(", ")}.`
+            : "";
+        const combined = [dtcLine, permLine, h.symptom]
+          .filter((s) => s)
+          .join("\n\n");
+        if (combined) setSymptom(combined);
+        return; // explicit entry — do not clear
+      }
+      // 3. Genuinely fresh intake. When DISCONNECTED, start empty (same clears
+      //    as resetSession's disconnected branch) so the previous vehicle
+      //    doesn't leak in. When CONNECTED, keep the auto-VIN vehicle.
+      if (!isConnected) {
+        setVin("");
+        setDecoded(false);
+        setDecodeError(null);
+        setManualOpen(false);
+        lastDecodedRef.current = "";
+        clearVehicle().catch(() => {});
+      }
+    })();
     return () => {
       active = false;
     };
