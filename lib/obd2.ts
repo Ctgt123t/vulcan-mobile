@@ -1073,6 +1073,11 @@ class Obd2Manager {
     (s: ConnectionStatus, msg: string) => void
   >();
   private liveListeners = new Set<(d: LiveData) => void>();
+  // Once-per-poll-tick subscribers (Stage 2C-2 capture detector). Fired AFTER
+  // ring-buffer maintenance with the tick's wall-clock time + the current
+  // LiveValues snapshot. Distinct from liveListeners (which fire on every
+  // intra-tick liveData commit) so the detector gets clean once-per-tick timing.
+  private tickListeners = new Set<(t: { timestamp: number; values: LiveData }) => void>();
   private logListeners = new Set<(line: LogLine) => void>();
   private deviceListeners = new Set<(devices: DiscoveredDevice[]) => void>();
 
@@ -1114,6 +1119,11 @@ class Obd2Manager {
   onLive(cb: (d: LiveData) => void): () => void {
     this.liveListeners.add(cb);
     return () => this.liveListeners.delete(cb);
+  }
+  // Subscribe to once-per-poll-tick events (Stage 2C-2 capture detector).
+  onTick(cb: (t: { timestamp: number; values: LiveData }) => void): () => void {
+    this.tickListeners.add(cb);
+    return () => this.tickListeners.delete(cb);
   }
   onLog(cb: (l: LogLine) => void): () => void {
     this.logListeners.add(cb);
@@ -1899,6 +1909,11 @@ class Obd2Manager {
         const cutoff = nowMs - Obd2Manager.RING_BUFFER_DURATION_MS;
         while (this.ringBuffer.length > 0 && this.ringBuffer[0].timestamp < cutoff) {
           this.ringBuffer.shift();
+        }
+        // Feed the once-per-tick capture detector (Stage 2C-2), if subscribed.
+        if (this.tickListeners.size > 0) {
+          const t = { timestamp: nowMs, values: this.liveData };
+          this.tickListeners.forEach((cb) => cb(t));
         }
         this.tickIndex++;
       }

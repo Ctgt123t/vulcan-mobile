@@ -9,8 +9,16 @@
 // ============================================================================
 
 import type { FreezeFrame, PidDescriptor, RingBufferEntry } from "./obd2";
-import { signalKeyOf } from "./obd2";
 import type { DiagnosticSnapshot, OperatingCondition, SnapshotSignal } from "./assessmentTypes";
+
+// Globally-unique signal key, identical to obd2.signalKeyOf. Inlined (not
+// imported as a value) so this module stays pure — a value import from ./obd2
+// pulls in the React Native transport stack and breaks node test runs
+// (captureDetector.test.ts exercises buildDiagnosticSnapshot via the 2C-2
+// evidence builder). Same type-only discipline as diagnosticCasesCore.ts.
+function signalKeyOf(s: { code: string; id: string }): string {
+  return `${s.code}@${s.id}`;
+}
 
 export function buildDiagnosticSnapshot(
   ringBuffer: RingBufferEntry[],

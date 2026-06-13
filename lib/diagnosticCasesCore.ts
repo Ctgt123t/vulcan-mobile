@@ -27,6 +27,7 @@ import type {
   DiagnosticAssessment,
   DiagnosticSnapshot,
   Hypothesis,
+  NumericRange,
   OperatingCondition,
   RequestedDataItem,
 } from "./assessmentTypes";
@@ -83,6 +84,24 @@ export interface EvidenceCaptureEntry {
   operatingCondition: OperatingCondition;
   observed: DiagnosticSnapshot; // the factual summary that was sent
   outcome: "completed" | "cancelled" | "timeout";
+  // ---- 2C-2 additive fields (optional; migrator passes them through) ----
+  // Why this capture fired: the trigger context the detector recorded at the
+  // fire moment. Lets 2C-3/Claude reason about WHEN/why the window was taken.
+  trigger?: EvidenceTrigger;
+  // Plan signals the phone could NOT watch on this vehicle (resolver could not
+  // bind them). Distinct from observed.absentSignalNames (selected but no value
+  // in the window). The "phone is honest about what it can't carry" report.
+  unavailableSignals?: { signal_id: string; reason: string }[];
+}
+
+// The fire-time context recorded by the 2C-2 detector (captureDetector.ts).
+export interface EvidenceTrigger {
+  firedAt: string; // ISO
+  firedItemIndex: number; // index into the assessment's requested_data
+  targetSignalId: string;
+  targetValueAtFire: number | null;
+  gateValuesAtFire: { signal_id: string; value: number | null; range: NumericRange }[];
+  sustainedHeldMs: number;
 }
 
 // Evolving case state. Mirrors Hypothesis from assessmentTypes so 2C's
