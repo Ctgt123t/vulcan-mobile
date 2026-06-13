@@ -994,6 +994,14 @@ class Obd2Manager {
   private status: ConnectionStatus = "idle";
   private statusMessage = "";
 
+  // Ground-truth VIN of the physically connected vehicle, cached the moment
+  // Mode 09 successfully parses one and cleared on disconnect. Read by the
+  // Stage 2B case-resume guard (liveVehicleMatchesCase) — deliberately sourced
+  // here, NOT from VehicleContext, because the context vehicle can be manually
+  // overridden by the tech and a SAFETY guard must not trust an overridable
+  // value. null until Mode 09 resolves, or for pre-2008 / no-Mode-09 vehicles.
+  private connectedVin: string | null = null;
+
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private pollPaused = false;
   private liveData: LiveData = { ...EMPTY_LIVE };
@@ -1038,6 +1046,13 @@ class Obd2Manager {
   }
   isConnected(): boolean {
     return this.status === "connected";
+  }
+  // Ground-truth VIN of the plugged-in vehicle (null until Mode 09 resolves or
+  // for no-Mode-09 vehicles). The Stage 2B resume guard reads this rather than
+  // VehicleContext.vin so the different-vehicle block can't be defeated by a
+  // manual vehicle override.
+  getConnectedVin(): string | null {
+    return this.connectedVin;
   }
   getLiveData(): LiveData {
     return this.liveData;
@@ -1631,7 +1646,10 @@ class Obd2Manager {
       this.log("•", "VIN request: vehicle doesn't expose VIN via OBD2");
       return null;
     }
-    return parseVinFromResponse(raw);
+    const vin = parseVinFromResponse(raw);
+    // Cache the live VIN as ground truth for the case-resume guard.
+    if (vin) this.connectedVin = vin;
+    return vin;
   }
 
   // ---------- DTC scan / clear / freeze frame ----------
@@ -2176,6 +2194,7 @@ class Obd2Manager {
     this.ringBuffer = [];
     this.protocolType = "unknown";
     this.protocolName = "unknown";
+    this.connectedVin = null;
     this.liveListeners.forEach((cb) => cb(this.liveData));
     this.setStatus("idle", "");
   }

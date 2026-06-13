@@ -1,7 +1,8 @@
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -42,6 +43,21 @@ import {
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
+import {
+  closeCase,
+  linkRecord,
+  loadCase,
+  pruneForNewCase,
+  upsertCase,
+} from "../lib/diagnosticCases";
+import {
+  type CaseCloseReason,
+  type CaseStatus,
+  type DiagnosticCase,
+  type SavedAssessmentEntry,
+  makeCaseId,
+  vehicleLabel,
+} from "../lib/diagnosticCasesCore";
 import { obd2 } from "../lib/obd2";
 import {
   consumeObd2DiagnoseEscalation,
@@ -89,6 +105,7 @@ export default function Screen() {
   const {
     vehicle,
     vin: ctxVin,
+    source: ctxSource,
     recalls,
     tsbs,
     setVehicleManually,
@@ -117,6 +134,58 @@ export default function Screen() {
   const [condition, setCondition] = useState<OperatingCondition>("WARM_IDLE");
   const [assessments, setAssessments] = useState<AssessmentEntry[]>([]);
   const assessmentIdRef = useRef(0);
+
+  // ---- Stage 2B: case save / resume ----
+  const params = useLocalSearchParams<{ resume?: string }>();
+  // Captured once so the mount-time prefill effects know to skip when resuming.
+  const resumeIdAtMount = useRef(
+    typeof params.resume === "string" ? params.resume : null,
+  ).current;
+  // Active-case metadata not held in screen state. null = no active case
+  // (fresh intake not yet submitted, or an unsaved session at the 25-open cap).
+  const caseMetaRef = useRef<{
+    id: string;
+    createdAt: string;
+    status: CaseStatus;
+    closeReason: CaseCloseReason | null;
+    closedAt: string | null;
+    linkedRecordIds: string[];
+    loggerSessionIds: string[];
+  } | null>(null);
+  // Resume marker. null = fresh session (2A behavior, guard always passes).
+  // Non-null = resumed, carrying the case VIN (itself null for a no-VIN /
+  // manual / pre-2008 case). Sole input to the liveVehicleMatchesCase guard.
+  const resumedCaseRef = useRef<{ vin: string | null } | null>(null);
+  // Mirrors of the volatile thread arrays so saveCase reads the latest values
+  // without an async-setState race; explicit overrides at each trigger are the
+  // primary path, these are the backstop.
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const assessmentsRef = useRef<AssessmentEntry[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    assessmentsRef.current = assessments;
+  }, [assessments]);
+
+  // The different-vehicle guard — the ONE place the resume-eligibility rule
+  // lives at render time (the resume-time block lives in the resume effect).
+  // Returns whether the live connection is provably the case's vehicle:
+  //   - fresh session            → true  (2A behavior, untouched)
+  //   - resumed, disconnected    → true  (no live car; canAutoAssess gates it)
+  //   - resumed no-VIN, connected→ false (can't prove same car → hard suppress;
+  //                                 closes the no-VIN leak structurally)
+  //   - resumed VIN, connected   → connected VIN must equal the case VIN
+  // connectedVin is read from the OBD2 manager (ground truth), never from the
+  // overridable VehicleContext.
+  function liveVehicleMatchesCase(): boolean {
+    const r = resumedCaseRef.current;
+    if (!r) return true;
+    if (!isConnected) return true;
+    if (r.vin == null) return false;
+    const live = obd2.getConnectedVin();
+    return live != null && live.toUpperCase() === r.vin.toUpperCase();
+  }
 
   const [scannerOpen, setScannerOpen] = useState(false);
   const [decoding, setDecoding] = useState(false);
@@ -168,6 +237,7 @@ export default function Screen() {
   // STORE stays readable (it feeds the auto-assessment gate); only the
   // escalation flag is consumed.
   useEffect(() => {
+    if (resumeIdAtMount) return; // resuming → the resume effect drains it
     const esc = consumeObd2DiagnoseEscalation();
     if (!esc) return;
     const dtcLine =
@@ -180,6 +250,7 @@ export default function Screen() {
         : "";
     const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
     if (combined) setSymptom(combined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Consume a handoff from Ask Vulcan (if present) on mount and pre-fill
@@ -187,6 +258,7 @@ export default function Screen() {
   // and symptom before the diagnostic conversation starts. Vehicle pushes
   // into the global context so the recall/TSB lookups fire automatically.
   useEffect(() => {
+    if (resumeIdAtMount) return; // resuming → the resume effect drains it
     let active = true;
     consumeHandoff("to_diagnose").then((h) => {
       if (!active || !h) return;
@@ -212,6 +284,104 @@ export default function Screen() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Resume a saved case (?resume=<id>). Drains any pending escalation /
+  // to_diagnose handoff (consume + discard) so a stale prefill can't surface in
+  // a later fresh intake on this screen instance, then either BLOCKS (truth-
+  // table row 4) or applies the resume.
+  useEffect(() => {
+    const resumeId = typeof params.resume === "string" ? params.resume : null;
+    if (!resumeId) return;
+    let active = true;
+    (async () => {
+      const saved = await loadCase(resumeId);
+      if (!active) return;
+      // Drain pending handoffs regardless of outcome (consume + discard).
+      consumeObd2DiagnoseEscalation();
+      consumeHandoff("to_diagnose").catch(() => {});
+      if (!saved) {
+        // Case gone / unreadable (e.g. a future-version body after a rollback).
+        // Stay on a fresh intake rather than crash; the list won't have shown it.
+        return;
+      }
+      // RESUME-TIME BLOCK (row 4): a VIN case while connected to a DIFFERENT
+      // vehicle must not open the conversation at all. connectedVin is ground
+      // truth from the OBD2 manager, not the overridable context.
+      if (saved.vehicle.vin && isConnected) {
+        const live = obd2.getConnectedVin();
+        if (live && live.toUpperCase() !== saved.vehicle.vin.toUpperCase()) {
+          const name =
+            [
+              saved.vehicle.vehicle.year,
+              saved.vehicle.vehicle.make,
+              saved.vehicle.vehicle.model,
+            ]
+              .filter((s) => s && s.length > 0)
+              .join(" ") || "case vehicle";
+          Alert.alert(
+            "Different vehicle connected",
+            `This case is for a ${vehicleLabel(saved.vehicle)}. You're connected to a different vehicle. Disconnect, or connect to the ${name}, to resume it.`,
+          );
+          return; // conversation never opens
+        }
+      }
+      applyResume(saved);
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.resume]);
+
+  // Restore a saved case into the screen. The envelope carries NO live data, so
+  // nothing here can arm the assess gate; resumedCaseRef makes the guard active.
+  function applyResume(saved: DiagnosticCase): void {
+    resumedCaseRef.current = { vin: saved.vehicle.vin };
+    caseMetaRef.current = {
+      id: saved.id,
+      createdAt: saved.createdAt,
+      status: saved.status,
+      closeReason: saved.closeReason,
+      closedAt: saved.closedAt,
+      linkedRecordIds: [...saved.linkedRecordIds],
+      loggerSessionIds: [...saved.loggerSessionIds],
+    };
+    // Restore the case vehicle into context UNLESS the live connection already
+    // IS the case car (VIN match) — then leave the live context untouched to
+    // avoid a needless recall/TSB refetch + flicker.
+    const liveMatch =
+      saved.vehicle.vin != null &&
+      isConnected &&
+      obd2.getConnectedVin()?.toUpperCase() ===
+        saved.vehicle.vin.toUpperCase();
+    if (!liveMatch) {
+      setVehicleManually(
+        { ...EMPTY_VEHICLE, ...saved.vehicle.vehicle },
+        saved.vehicle.vin,
+      ).catch(() => {});
+      setVin(saved.vehicle.vin ?? "");
+    }
+    setSymptom(saved.complaint);
+    setCondition(saved.operatingCondition);
+    setMessages(saved.messages);
+    messagesRef.current = saved.messages;
+    const restored: AssessmentEntry[] = saved.assessments.map((sa, i) => ({
+      id: i + 1,
+      afterMessageIndex: sa.afterMessageIndex,
+      slot:
+        sa.result.status === "done"
+          ? { status: "done", assessment: sa.result.assessment }
+          : { status: "error", message: sa.result.message },
+    }));
+    setAssessments(restored);
+    assessmentsRef.current = restored;
+    assessmentIdRef.current = restored.length; // next re-run gets a fresh id
+    setConfirmedDone(
+      saved.status === "closed" && saved.closeReason === "fix_confirmed",
+    );
+    setError(null);
+    setPhase("chat");
+  }
 
   useEffect(() => {
     if (phase === "chat") {
@@ -281,12 +451,91 @@ export default function Screen() {
   const canAutoAssess =
     isConnected && (assessDescriptors.length > 0 || assessDtcCount > 0);
 
+  // Gate for actually RUNNING an assessment — the data-availability gate AND
+  // the different-vehicle guard. Fresh sessions: identical to canAutoAssess.
+  // Resumed sessions: additionally require the live car to be the case car.
+  const liveAssessmentAllowed = canAutoAssess && liveVehicleMatchesCase();
+  // When resumed + connected but the guard fails, explain why the live path is
+  // off (two distinct reasons → two messages).
+  const resumeBlockBanner =
+    resumedCaseRef.current && isConnected && !liveVehicleMatchesCase()
+      ? resumedCaseRef.current.vin == null
+        ? "Live assessment isn't available on a resumed manually-entered case. Start a new case to assess the connected vehicle."
+        : "Connected to a different vehicle than this case — live assessment is disabled. Connect to this case's vehicle to assess it."
+      : null;
+
+  // ---- Persist the current envelope (Stage 2B) ----
+  // No-op when there's no active case (fresh intake pre-submit, or an unsaved
+  // over-cap session). Fire-and-forget — a failed write logs and never blocks
+  // the UI. `over` supplies the just-changed array so we never read stale state.
+  function saveCase(over?: {
+    messages?: ChatMessage[];
+    assessments?: AssessmentEntry[];
+  }): void {
+    const meta = caseMetaRef.current;
+    if (!meta) return;
+    const sid = diagnosticLogger.getCurrentSessionId();
+    if (sid && !meta.loggerSessionIds.includes(sid)) {
+      meta.loggerSessionIds.push(sid);
+    }
+    const msgs = over?.messages ?? messagesRef.current;
+    const asmts = over?.assessments ?? assessmentsRef.current;
+    const savedAssessments = asmts
+      .map((a): SavedAssessmentEntry | null => {
+        if (a.slot.status === "done") {
+          return {
+            afterMessageIndex: a.afterMessageIndex,
+            result: { status: "done", assessment: a.slot.assessment },
+            operatingCondition: condition,
+            completedAt: new Date().toISOString(),
+          };
+        }
+        if (a.slot.status === "error") {
+          return {
+            afterMessageIndex: a.afterMessageIndex,
+            result: { status: "error", message: a.slot.message },
+            operatingCondition: condition,
+            completedAt: new Date().toISOString(),
+          };
+        }
+        return null; // running slots are never persisted
+      })
+      .filter((x): x is SavedAssessmentEntry => x !== null);
+
+    const envelope: DiagnosticCase = {
+      schemaVersion: 1,
+      id: meta.id,
+      status: meta.status,
+      closeReason: meta.closeReason,
+      createdAt: meta.createdAt,
+      updatedAt: new Date().toISOString(),
+      closedAt: meta.closedAt,
+      vehicle: { vehicle, vin: vin.trim() || null, source: ctxSource },
+      complaint: symptom.trim(),
+      mileage: vehicle.mileage,
+      operatingCondition: condition,
+      messages: msgs,
+      assessments: savedAssessments,
+      linkedRecordIds: meta.linkedRecordIds,
+      loggerSessionIds: meta.loggerSessionIds,
+      evidenceLedger: [],
+      caseState: null,
+    };
+    upsertCase(envelope).catch((err) =>
+      console.warn("[cases] save failed:", err),
+    );
+  }
+
   async function runAssessment(afterMessageIndex: number, complaintText: string) {
     const id = ++assessmentIdRef.current;
-    setAssessments((prev) => [
-      ...prev,
+    const withRunning: AssessmentEntry[] = [
+      ...assessmentsRef.current,
       { id, afterMessageIndex, slot: { status: "running" } },
-    ]);
+    ];
+    setAssessments(withRunning);
+    assessmentsRef.current = withRunning;
+    // Running slots are intentionally not persisted (an in-flight call can't
+    // survive a process death), so no saveCase() here.
 
     const handoff = getObd2DiagnoseHandoff();
     const descriptors =
@@ -324,13 +573,17 @@ export default function Screen() {
         operatingCondition: condition,
         apiCost: result.cost,
       });
-      setAssessments((prev) =>
-        prev.map((a) =>
-          a.id === id
-            ? { ...a, slot: { status: "done", assessment: result.assessment } }
-            : a,
-        ),
+      const next = assessmentsRef.current.map((a) =>
+        a.id === id
+          ? {
+              ...a,
+              slot: { status: "done" as const, assessment: result.assessment },
+            }
+          : a,
       );
+      setAssessments(next);
+      assessmentsRef.current = next;
+      saveCase({ assessments: next });
     } catch (err) {
       const msg =
         err instanceof AssessError
@@ -338,11 +591,14 @@ export default function Screen() {
           : err instanceof Error
             ? err.message
             : "Assessment failed.";
-      setAssessments((prev) =>
-        prev.map((a) =>
-          a.id === id ? { ...a, slot: { status: "error", message: msg } } : a,
-        ),
+      const next = assessmentsRef.current.map((a) =>
+        a.id === id
+          ? { ...a, slot: { status: "error" as const, message: msg } }
+          : a,
       );
+      setAssessments(next);
+      assessmentsRef.current = next;
+      saveCase({ assessments: next });
     }
   }
 
@@ -417,10 +673,14 @@ export default function Screen() {
         vehicle, nextMessages, recalls, tsbs,
         diagnosticLogger.getCurrentSessionId(),
       );
-      setMessages([
+      const appended: ChatMessage[] = [
         ...nextMessages,
         { role: "assistant", content: JSON.stringify(result.turn) },
-      ]);
+      ];
+      setMessages(appended);
+      messagesRef.current = appended;
+      // "Once per completed turn" save grain.
+      saveCase({ messages: appended });
       if (result.cost) {
         diagnosticLogger.log({
           type: "diagnose_turn",
@@ -456,9 +716,36 @@ export default function Screen() {
   async function onSubmitIntake() {
     if (!intakeValid()) return;
     const first: ChatMessage = { role: "user", content: symptom.trim() };
+    // Create a fresh case (cap-enforced). This is a NEW session even if the VIN
+    // matches an existing case — cases key on their own id. resumedCaseRef stays
+    // null so the guard runs in fresh mode (2A behavior).
+    resumedCaseRef.current = null;
+    const decision = await pruneForNewCase();
+    if (decision.blocked) {
+      // 25 open cases, none closable without consent. Batch 2 fallback: run
+      // UNSAVED (caseMetaRef null → saveCase no-ops). The all-25-open consent
+      // UX lands in Batch 3.
+      caseMetaRef.current = null;
+      console.warn(
+        "[cases] 25 open cases — running this session unsaved (consent UX in Batch 3)",
+      );
+    } else {
+      const now = new Date().toISOString();
+      caseMetaRef.current = {
+        id: makeCaseId(),
+        createdAt: now,
+        status: "open",
+        closeReason: null,
+        closedAt: null,
+        linkedRecordIds: [],
+        loggerSessionIds: [],
+      };
+    }
     setMessages([first]);
+    messagesRef.current = [first];
     setPhase("chat");
-    if (canAutoAssess) {
+    saveCase({ messages: [first] });
+    if (liveAssessmentAllowed) {
       // Deliberately not awaited — the assessment and the first
       // conversational call run in parallel. Independent calls: if the
       // assessment fails, the conversation proceeds untouched.
@@ -475,7 +762,11 @@ export default function Screen() {
       { role: "user", content: trimmed },
     ];
     setMessages(next);
+    messagesRef.current = next;
     setAnswer("");
+    // Save the user turn before the API call so a failure/crash after this
+    // point doesn't lose the technician's input.
+    saveCase({ messages: next });
     await callApi(next);
   }
 
@@ -521,14 +812,16 @@ export default function Screen() {
     router.replace("/ask");
   }
 
+  // Returns the generated record id so the caller can link it to the case.
   async function persistRecord(
     outcome: RecordOutcome,
     diagnosis: FinalDiagnosis,
     snapshot: ChatMessage[],
-  ) {
+  ): Promise<string> {
+    const recordId = makeRecordId();
     const record: DiagnosticRecord = {
       type: "diagnosis",
-      id: makeRecordId(),
+      id: recordId,
       date: new Date().toISOString(),
       vehicle,
       vin: vin.trim() || undefined,
@@ -545,17 +838,45 @@ export default function Screen() {
     } finally {
       setSavingRecord(false);
     }
+    return recordId;
   }
 
   async function onConfirmDiagnosis() {
     if (latestTurn?.kind !== "diagnosis") return;
-    await persistRecord("confirmed", latestTurn.diagnosis, messages);
+    const recordId = await persistRecord(
+      "confirmed",
+      latestTurn.diagnosis,
+      messages,
+    );
+    // Confirm Fix = the DiagnosticRecords tie-in: close the case and link the
+    // record. closeCase enqueues after the diagnosis-turn save (same write
+    // queue), so it closes the full-thread body. Keep meta in sync for any
+    // later save.
+    const meta = caseMetaRef.current;
+    if (meta) {
+      meta.status = "closed";
+      meta.closeReason = "fix_confirmed";
+      meta.closedAt = new Date().toISOString();
+      meta.linkedRecordIds = [...meta.linkedRecordIds, recordId];
+      await closeCase(meta.id, "fix_confirmed", recordId);
+    }
     setConfirmedDone(true);
   }
 
   async function onRejectDiagnosis() {
     if (latestTurn?.kind !== "diagnosis") return;
-    await persistRecord("incorrect", latestTurn.diagnosis, messages);
+    const recordId = await persistRecord(
+      "incorrect",
+      latestTurn.diagnosis,
+      messages,
+    );
+    // Reject = link the record but keep the case OPEN (still diagnosing); the
+    // rejection turn below then lands via the normal callApi save.
+    const meta = caseMetaRef.current;
+    if (meta) {
+      meta.linkedRecordIds = [...meta.linkedRecordIds, recordId];
+      await linkRecord(meta.id, recordId);
+    }
     const rejection =
       "That diagnosis was not correct — the indicated fix did not resolve the issue. Continue investigating: ask any additional clarifying questions you need, then commit to a different diagnosis.";
     await sendUserMessage(rejection);
@@ -564,11 +885,20 @@ export default function Screen() {
   function resetSession() {
     setPhase("intake");
     setMessages([]);
+    messagesRef.current = [];
     setAssessments([]);
+    assessmentsRef.current = [];
     setAnswer("");
     setSymptom("");
     setError(null);
     setConfirmedDone(false);
+    // Stage 2B: the previous case was already saved at its last completed turn
+    // and stays OPEN + resumable from the list — reset does NOT touch its stored
+    // body or status. Clearing these refs makes the next intake a genuinely
+    // fresh case (new id at submit) and drops the resume guard. The
+    // connection-aware vehicle handling below is unchanged from 2A.
+    caseMetaRef.current = null;
+    resumedCaseRef.current = null;
     // Only clear the vehicle when no adapter is connected. With a live
     // connection the vehicle came from the OBD2 auto-VIN flow — wiping it
     // would desync the global context from the physically-connected vehicle.
@@ -833,6 +1163,13 @@ export default function Screen() {
           contentContainerStyle={styles.threadContent}
           data={threadRows}
           keyExtractor={(item) => item.key}
+          ListHeaderComponent={
+            resumeBlockBanner ? (
+              <View style={styles.resumeBanner}>
+                <Text style={styles.resumeBannerText}>{resumeBlockBanner}</Text>
+              </View>
+            ) : null
+          }
           renderItem={({ item }) =>
             item.kind === "message" ? (
               <MessageRow message={item.message} />
@@ -840,8 +1177,7 @@ export default function Screen() {
               <AssessmentThreadCard
                 entry={item.entry}
                 onRerun={
-                  isConnected &&
-                  canAutoAssess &&
+                  liveAssessmentAllowed &&
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status !== "running"
                     ? onRerunAssessment
@@ -1274,6 +1610,21 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 6,
     marginBottom: 14,
+  },
+  // Resumed-case live-assessment-disabled banner (different-vehicle guard).
+  resumeBanner: {
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  resumeBannerText: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
   },
   // Intake — live-data section (connected only)
   dataStatusRow: {
