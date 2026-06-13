@@ -45,13 +45,16 @@ import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import {
   closeCase,
+  deleteCase,
   linkRecord,
   loadCase,
+  loadIndex,
   pruneForNewCase,
   upsertCase,
 } from "../lib/diagnosticCases";
 import {
   type CaseCloseReason,
+  type CaseIndexEntry,
   type CaseStatus,
   type DiagnosticCase,
   type SavedAssessmentEntry,
@@ -167,6 +170,24 @@ export default function Screen() {
   useEffect(() => {
     assessmentsRef.current = assessments;
   }, [assessments]);
+
+  // Saved-cases list (intake) + lifecycle state.
+  const [cases, setCases] = useState<CaseIndexEntry[]>([]);
+  const [showAllCases, setShowAllCases] = useState(false);
+  // True when an over-cap session is running unsaved (the tech chose "continue
+  // without saving" at the all-25-open prompt). Surfaced as a chat banner.
+  const [unsaved, setUnsaved] = useState(false);
+
+  const refreshCases = () => {
+    loadIndex()
+      .then(setCases)
+      .catch((err) => console.warn("[cases] index load failed:", err));
+  };
+  // Refresh the list whenever the intake screen is shown (covers initial mount
+  // and every return to intake via resetSession). Cheap — index only, no bodies.
+  useEffect(() => {
+    if (phase === "intake") refreshCases();
+  }, [phase]);
 
   // The different-vehicle guard — the ONE place the resume-eligibility rule
   // lives at render time (the resume-time block lives in the resume effect).
@@ -292,46 +313,49 @@ export default function Screen() {
   useEffect(() => {
     const resumeId = typeof params.resume === "string" ? params.resume : null;
     if (!resumeId) return;
-    let active = true;
-    (async () => {
-      const saved = await loadCase(resumeId);
-      if (!active) return;
-      // Drain pending handoffs regardless of outcome (consume + discard).
-      consumeObd2DiagnoseEscalation();
-      consumeHandoff("to_diagnose").catch(() => {});
-      if (!saved) {
-        // Case gone / unreadable (e.g. a future-version body after a rollback).
-        // Stay on a fresh intake rather than crash; the list won't have shown it.
-        return;
-      }
-      // RESUME-TIME BLOCK (row 4): a VIN case while connected to a DIFFERENT
-      // vehicle must not open the conversation at all. connectedVin is ground
-      // truth from the OBD2 manager, not the overridable context.
-      if (saved.vehicle.vin && isConnected) {
-        const live = obd2.getConnectedVin();
-        if (live && live.toUpperCase() !== saved.vehicle.vin.toUpperCase()) {
-          const name =
-            [
-              saved.vehicle.vehicle.year,
-              saved.vehicle.vehicle.make,
-              saved.vehicle.vehicle.model,
-            ]
-              .filter((s) => s && s.length > 0)
-              .join(" ") || "case vehicle";
-          Alert.alert(
-            "Different vehicle connected",
-            `This case is for a ${vehicleLabel(saved.vehicle)}. You're connected to a different vehicle. Disconnect, or connect to the ${name}, to resume it.`,
-          );
-          return; // conversation never opens
-        }
-      }
-      applyResume(saved);
-    })();
-    return () => {
-      active = false;
-    };
+    attemptResume(resumeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.resume]);
+
+  // Block-checked resume, shared by the ?resume param effect (external entry —
+  // Batch 4 auto-prompt) and the saved-cases list taps (in-screen entry).
+  // Drains pending handoffs so a stale prefill can't surface later, enforces
+  // the resume-time different-vehicle BLOCK (truth-table row 4 — connectedVin is
+  // ground truth from the OBD2 manager, not the overridable context), then
+  // applies the resume.
+  async function attemptResume(resumeId: string): Promise<void> {
+    const saved = await loadCase(resumeId);
+    consumeObd2DiagnoseEscalation();
+    consumeHandoff("to_diagnose").catch(() => {});
+    if (!saved) {
+      // Gone / unreadable (e.g. a future-version body after a rollback).
+      Alert.alert(
+        "Case unavailable",
+        "This case couldn't be loaded — it may have been removed, or was saved by a newer version of the app.",
+      );
+      refreshCases();
+      return;
+    }
+    if (saved.vehicle.vin && isConnected) {
+      const live = obd2.getConnectedVin();
+      if (live && live.toUpperCase() !== saved.vehicle.vin.toUpperCase()) {
+        const name =
+          [
+            saved.vehicle.vehicle.year,
+            saved.vehicle.vehicle.make,
+            saved.vehicle.vehicle.model,
+          ]
+            .filter((s) => s && s.length > 0)
+            .join(" ") || "case vehicle";
+        Alert.alert(
+          "Different vehicle connected",
+          `This case is for a ${vehicleLabel(saved.vehicle)}. You're connected to a different vehicle. Disconnect, or connect to the ${name}, to resume it.`,
+        );
+        return; // conversation never opens
+      }
+    }
+    applyResume(saved);
+  }
 
   // Restore a saved case into the screen. The envelope carries NO live data, so
   // nothing here can arm the assess gate; resumedCaseRef makes the guard active.
@@ -715,32 +739,14 @@ export default function Screen() {
 
   async function onSubmitIntake() {
     if (!intakeValid()) return;
-    const first: ChatMessage = { role: "user", content: symptom.trim() };
     // Create a fresh case (cap-enforced). This is a NEW session even if the VIN
     // matches an existing case — cases key on their own id. resumedCaseRef stays
     // null so the guard runs in fresh mode (2A behavior).
     resumedCaseRef.current = null;
-    const decision = await pruneForNewCase();
-    if (decision.blocked) {
-      // 25 open cases, none closable without consent. Batch 2 fallback: run
-      // UNSAVED (caseMetaRef null → saveCase no-ops). The all-25-open consent
-      // UX lands in Batch 3.
-      caseMetaRef.current = null;
-      console.warn(
-        "[cases] 25 open cases — running this session unsaved (consent UX in Batch 3)",
-      );
-    } else {
-      const now = new Date().toISOString();
-      caseMetaRef.current = {
-        id: makeCaseId(),
-        createdAt: now,
-        status: "open",
-        closeReason: null,
-        closedAt: null,
-        linkedRecordIds: [],
-        loggerSessionIds: [],
-      };
-    }
+    setUnsaved(false);
+    const proceed = await ensureCaseForNewSession();
+    if (!proceed) return; // tech cancelled at the all-25-open prompt → stay on intake
+    const first: ChatMessage = { role: "user", content: symptom.trim() };
     setMessages([first]);
     messagesRef.current = [first];
     setPhase("chat");
@@ -752,6 +758,102 @@ export default function Screen() {
       runAssessment(0, symptom.trim());
     }
     await callApi([first]);
+  }
+
+  function newCaseMeta() {
+    const now = new Date().toISOString();
+    return {
+      id: makeCaseId(),
+      createdAt: now,
+      status: "open" as CaseStatus,
+      closeReason: null,
+      closedAt: null,
+      linkedRecordIds: [] as string[],
+      loggerSessionIds: [] as string[],
+    };
+  }
+
+  // Cap + all-25-open consent. Sets caseMetaRef (saved session) or leaves it
+  // null + flags unsaved. Returns false ONLY if the tech cancelled the submit.
+  // pruneForNewCase already deleted the oldest CLOSED case when one existed;
+  // `blocked` means all 25 are open, which needs explicit consent.
+  async function ensureCaseForNewSession(): Promise<boolean> {
+    const decision = await pruneForNewCase();
+    if (!decision.blocked) {
+      caseMetaRef.current = newCaseMeta();
+      return true;
+    }
+    const oldest = [...decision.openEntries].sort((a, b) =>
+      a.updatedAt.localeCompare(b.updatedAt),
+    )[0];
+    const choice = await promptAllOpenConsent(oldest);
+    if (choice === "cancel") return false;
+    if (choice === "unsaved") {
+      caseMetaRef.current = null;
+      setUnsaved(true);
+      return true;
+    }
+    // delete_oldest — the ONLY way to free a cap slot when all 25 are open
+    // (closing keeps the case stored, so it wouldn't make room). Explicit,
+    // labeled deletion with consent.
+    if (oldest) await deleteCase(oldest.id);
+    caseMetaRef.current = newCaseMeta();
+    refreshCases();
+    return true;
+  }
+
+  // Three-way consent for the all-25-open edge. Honest labels: the make-room
+  // action DELETES the oldest open case (closing can't free a slot).
+  function promptAllOpenConsent(
+    oldest: CaseIndexEntry | undefined,
+  ): Promise<"delete_oldest" | "unsaved" | "cancel"> {
+    const label = oldest?.vehicleLabel ?? "the oldest open case";
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Case limit reached (25 open)",
+        `All 25 case slots are open. To SAVE this new case, the oldest open case must be deleted:\n\n${label}\n\nOr continue without saving this session.`,
+        [
+          { text: "Cancel", style: "cancel", onPress: () => resolve("cancel") },
+          {
+            text: "Continue without saving",
+            onPress: () => resolve("unsaved"),
+          },
+          {
+            text: "Delete oldest & save",
+            style: "destructive",
+            onPress: () => resolve("delete_oldest"),
+          },
+        ],
+        { cancelable: true, onDismiss: () => resolve("cancel") },
+      );
+    });
+  }
+
+  // ---- Saved-cases list actions ----
+
+  function onCloseCaseFromList(entry: CaseIndexEntry) {
+    closeCase(entry.id, "closed_by_user")
+      .then(refreshCases)
+      .catch((err) => console.warn("[cases] close failed:", err));
+  }
+
+  function onDeleteCaseFromList(entry: CaseIndexEntry) {
+    Alert.alert(
+      "Delete case?",
+      `Permanently delete this case?\n\n${entry.vehicleLabel}\n${entry.complaintPreview}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            deleteCase(entry.id)
+              .then(refreshCases)
+              .catch((err) => console.warn("[cases] delete failed:", err));
+          },
+        },
+      ],
+    );
   }
 
   async function sendUserMessage(text: string) {
@@ -892,6 +994,7 @@ export default function Screen() {
     setSymptom("");
     setError(null);
     setConfirmedDone(false);
+    setUnsaved(false);
     // Stage 2B: the previous case was already saved at its last completed turn
     // and stays OPEN + resumable from the list — reset does NOT touch its stored
     // body or status. Clearing these refs makes the next intake a genuinely
@@ -935,6 +1038,39 @@ export default function Screen() {
               Scan the VIN on the driver door jamb sticker, or enter it
               manually. Vehicle details auto-populate from NHTSA.
             </Text>
+
+            {cases.length > 0 && (
+              <View style={styles.casesSection}>
+                <Text style={styles.casesSectionLabel}>
+                  SAVED CASES ({cases.length})
+                </Text>
+                {(showAllCases ? cases : cases.slice(0, 3)).map((c) => (
+                  <CaseRow
+                    key={c.id}
+                    entry={c}
+                    onOpen={() => attemptResume(c.id)}
+                    onCloseCase={() => onCloseCaseFromList(c)}
+                    onDeleteCase={() => onDeleteCaseFromList(c)}
+                  />
+                ))}
+                {cases.length > 3 && (
+                  <TouchableOpacity
+                    style={styles.casesToggle}
+                    onPress={() => setShowAllCases((s) => !s)}
+                    activeOpacity={0.7}
+                    accessibilityLabel={
+                      showAllCases ? "Show fewer cases" : "View all cases"
+                    }
+                  >
+                    <Text style={styles.disclosureText}>
+                      {showAllCases
+                        ? "Show fewer"
+                        : `View all (${cases.length})`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             <View style={styles.card}>
               <Text style={styles.label}>VIN</Text>
@@ -1164,9 +1300,23 @@ export default function Screen() {
           data={threadRows}
           keyExtractor={(item) => item.key}
           ListHeaderComponent={
-            resumeBlockBanner ? (
-              <View style={styles.resumeBanner}>
-                <Text style={styles.resumeBannerText}>{resumeBlockBanner}</Text>
+            unsaved || resumeBlockBanner ? (
+              <View style={styles.bannerStack}>
+                {unsaved && (
+                  <View style={styles.resumeBanner}>
+                    <Text style={styles.resumeBannerText}>
+                      This session isn&apos;t being saved — the 25-case limit
+                      was reached, so it won&apos;t appear in Saved Cases.
+                    </Text>
+                  </View>
+                )}
+                {resumeBlockBanner && (
+                  <View style={styles.resumeBanner}>
+                    <Text style={styles.resumeBannerText}>
+                      {resumeBlockBanner}
+                    </Text>
+                  </View>
+                )}
               </View>
             ) : null
           }
@@ -1316,6 +1466,85 @@ function Field({
         autoCapitalize={autoCapitalize ?? "none"}
         autoCorrect={false}
       />
+    </View>
+  );
+}
+
+// Relative-time formatter for saved-case rows. Coarse buckets — exact
+// timestamps add no value to a "when did I last touch this" list.
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return `${Math.floor(d / 30)}mo ago`;
+}
+
+// One saved-case row. Tapping the body resumes (open) / views (closed) via the
+// block-checked attemptResume; the trailing action is Close (open) or Delete
+// (closed). Renders from the lightweight index entry — no case body is loaded
+// until the row is actually opened.
+function CaseRow({
+  entry,
+  onOpen,
+  onCloseCase,
+  onDeleteCase,
+}: {
+  entry: CaseIndexEntry;
+  onOpen: () => void;
+  onCloseCase: () => void;
+  onDeleteCase: () => void;
+}) {
+  const isOpen = entry.status === "open";
+  return (
+    <View style={styles.caseRow}>
+      <TouchableOpacity
+        style={styles.caseRowMain}
+        onPress={onOpen}
+        activeOpacity={0.7}
+        accessibilityLabel={`${isOpen ? "Resume" : "View"} case: ${entry.vehicleLabel}`}
+      >
+        <View style={styles.caseRowHeader}>
+          <Text style={styles.caseVehicle} numberOfLines={1}>
+            {entry.vehicleLabel}
+          </Text>
+          <View
+            style={[
+              styles.caseChip,
+              isOpen ? styles.caseChipOpen : styles.caseChipClosed,
+            ]}
+          >
+            <Text
+              style={[
+                styles.caseChipText,
+                isOpen ? styles.caseChipTextOpen : styles.caseChipTextClosed,
+              ]}
+            >
+              {isOpen ? "OPEN" : "CLOSED"}
+            </Text>
+          </View>
+        </View>
+        {entry.complaintPreview ? (
+          <Text style={styles.caseComplaint} numberOfLines={1}>
+            {entry.complaintPreview}
+          </Text>
+        ) : null}
+        <Text style={styles.caseMeta}>{formatRelative(entry.updatedAt)}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.caseAction}
+        onPress={isOpen ? onCloseCase : onDeleteCase}
+        activeOpacity={0.7}
+        accessibilityLabel={isOpen ? "Close case" : "Delete case"}
+      >
+        <Text style={styles.caseActionText}>{isOpen ? "Close" : "Delete"}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -1625,6 +1854,100 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     lineHeight: 17,
+  },
+  bannerStack: {
+    gap: 8,
+    marginBottom: 4,
+  },
+  // Saved-cases list (intake)
+  casesSection: {
+    marginBottom: 20,
+    gap: 8,
+  },
+  casesSectionLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: colors.muted,
+    letterSpacing: 0.7,
+    marginBottom: 2,
+  },
+  casesToggle: {
+    minHeight: HIT_TARGET - 12,
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  caseRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  caseRowMain: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 3,
+    minHeight: HIT_TARGET,
+    justifyContent: "center",
+  },
+  caseRowHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  caseVehicle: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  caseChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  caseChipOpen: {
+    backgroundColor: colors.okBg,
+  },
+  caseChipClosed: {
+    backgroundColor: colors.surface2,
+  },
+  caseChipText: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  caseChipTextOpen: {
+    color: colors.okText,
+  },
+  caseChipTextClosed: {
+    color: colors.muted,
+  },
+  caseComplaint: {
+    color: colors.muted,
+    fontSize: 13,
+  },
+  caseMeta: {
+    color: colors.muted,
+    fontSize: 11,
+  },
+  caseAction: {
+    minWidth: 64,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.border,
+    backgroundColor: colors.surface2,
+  },
+  caseActionText: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: "600",
   },
   // Intake — live-data section (connected only)
   dataStatusRow: {
