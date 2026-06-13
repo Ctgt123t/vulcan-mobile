@@ -41,11 +41,18 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
   - **Capture-card placeholder (`components/assessment/CaptureCard.tsx`):** presentational-only Stage 2 primitive (waiting / capturing / complete, progress bar, signal chips, optional cancel). Rendered with mocked tap-to-cycle states at the bottom of every assessment result behind the `DEBUG_UI` flag (see Debug Logging) so it's reviewable on the shop preview build. Stage 2's capture executor will drive it with real state; no component changes needed.
   - **Inspection Report: KEEP (decided 2026-06-10).** Zero cost in the new nav; revisit at UI-redesign time.
 
+- **Stage 2B — diagnostic case save/resume (2026-06, "the patient chart"):** a tech can pause a diagnosis, switch cars, and resume later. Mobile-only; **no server/endpoint/schema changes** (resume re-sends saved conversation history to `/api/diagnose` exactly as an in-session continuation does). This is the persistence layer Stage 2C's evidence loop will write into, so the data model is the load-bearing part. See the Diagnostic Engine Architecture → "Diagnostic case save/resume" subsection for the full design. Key points:
+  - **Versioned case envelope** (`lib/diagnosticCasesCore.ts`, `DiagnosticCaseV1`, `schemaVersion`) with reserved-but-empty 2C slots (`evidenceLedger` shaped on `RequestedDataItem[]`+`DiagnosticSnapshot`, `caseState` mirroring `Hypothesis`) so 2C extends rather than retrofits. The envelope carries NO live-connection data by type (no `PidDescriptor[]`/DTC arrays/`FreezeFrame`/snapshot) — that absence IS the history-vs-live staleness guarantee.
+  - **Auto-save, no save button** — persists once per completed turn (intake submit, user turn, assistant turn, assessment resolve, confirm/reject) through a serialized write queue. Per-case storage keys + a lightweight index (per-device AsyncStorage).
+  - **Keying:** each case has its own generated id (primary key); VIN is an index, not the key (one VIN → many cases; no-VIN cases live in the manual list only). Resume-by-VIN = open cases on that VIN.
+  - **Different-vehicle guard (the safety core):** a case resumes AS LIVE only with no connection, or when the connected VIN matches the case VIN; resuming a VIN case while connected to a different vehicle is BLOCKED, and a resumed no-VIN case never enables the live-assessment path. No state ever exists where Claude could reason over the wrong car's live data. Ground-truth VIN comes from `obd2.getConnectedVin()`, never the overridable VehicleContext.
+  - **Lifecycle:** open/closed; confirm-fix closes + links the `DiagnosticRecord` (the confirmed-fix DB feed; surfaced as a distinct FIXED chip); cap 25, prune oldest CLOSED first, all-25-open requires explicit consent (delete oldest open, or continue unsaved). Reopen of a closed case is deferred to 2C.
+
 **Open action items (near-term):**
 
 - **iOS native cleanup:** exclude `react-native-bluetooth-classic` pod from iOS build via Expo config plugin (latent crash risk; requires full iOS rebuild; do before TestFlight)
 - **Offline resilience:** graceful handling when connectivity drops during connect/VIN-decode (currently fails silently into a degraded PID list); plus offline data buffering for road tests
-- **Diagnostic engine Stage 2:** iterative evidence loop — Claude requests specific data under specific conditions, phone captures automatically via monitoring loop, sends back for an evidence-update call. **The UI home is ready (Stage 2A):** the merged `/diagnose` thread renders assessment cards in anchored slots, and the capture-card primitive exists with mocked states; what remains is the capture executor + the evidence-update backend (build on `server/askToolLoop.js`)
+- **Diagnostic engine Stage 2C:** iterative evidence loop — Claude requests specific data under specific conditions, phone captures automatically via monitoring loop, sends back for an evidence-update call. **The UI home is ready (Stage 2A)** (merged `/diagnose` thread, anchored assessment slots, capture-card primitive with mocked states) **and the persistence layer is ready (Stage 2B)** (the case envelope's reserved `evidenceLedger`/`caseState` slots are shaped for exactly this — 2C populates them). What remains is the capture executor + the evidence-update backend (build on `server/askToolLoop.js`)
 
 **Next major feature:**
 
@@ -65,7 +72,7 @@ Vulcan is an AI-powered automotive diagnostic app for professional technicians. 
 | 1. Get off Expo Go | COMPLETE |
 | 2. OBD2 Foundation | COMPLETE |
 | 3a. Diagnostic engine — Stage 1 (single-shot assessment) | COMPLETE |
-| 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | IN PROGRESS — Stage 2A UI restructure COMPLETE (merged diagnostic mode, OBD2 escalation handoff, capture-card placeholder); evidence loop (capture executor + backend) NOT STARTED |
+| 3b. Diagnostic engine — Stage 2 (iterative evidence loop) | IN PROGRESS — Stage 2A UI restructure COMPLETE (merged diagnostic mode, OBD2 escalation handoff, capture-card placeholder); **Stage 2B case save/resume COMPLETE** (versioned envelope, auto-save, VIN-match resume, different-vehicle guard); evidence loop (capture executor + backend, Stage 2C) NOT STARTED |
 | 3c. Diagnostic engine — Stage 3 (adaptive stance UI, guided checklists) | NOT STARTED |
 | 4. Pre-launch infrastructure | IN PROGRESS — Supabase data layer: foundation + productionized extraction engine (validated Sierra/Ford/Honda) + live Option C spec path + tool-use routing all landed; PAUSED for Stage 2. Pending: real extraction feed at scale, NHTSA normalization + pickers (pre-launch), JSON→Postgres migration |
 | 5. Testing & launch | NOT STARTED |
@@ -390,6 +397,11 @@ The diagnostic engine is a local-state + LLM-reasoning hybrid. Core principles (
 | `components/assessment/ConditionSelector.tsx`, `DataBadge.tsx` | Intake pieces: operating-condition chip grid; data-available pills. |
 | `components/assessment/CaptureCard.tsx` | Stage 2 capture primitive — presentational only (`state: waiting/capturing/complete`, `conditionLabel`, `signalIds`, `durationSeconds?`, `progress?`, `onCancel?`). Stage 2's executor drives it; no logic inside. |
 | `app/obd2.tsx` | "Escalate to Diagnosis" buttons (DTC section when codes exist; LIVE DATA section with/without PIDs) → one handler sets the handoff store, `router.push("/diagnose")`. `onClearDtcs` mirrors clears into the store. |
+| `lib/diagnosticCasesCore.ts` | **Stage 2B PURE core** (zero RN deps, Node-testable). `DiagnosticCaseV1` envelope + reserved 2C slots, `CASE_SCHEMA_VERSION`, tolerant `migrateCase` (never throws / never yields a bad object), `deriveIndexEntry`, pure `selectPrune`, `reconcileIndex`, `CASE_CAP=25`. |
+| `lib/diagnosticCases.ts` | **Stage 2B storage** — per-case body keys + one index key, serialized write queue, injectable `KVBackend` test seam. `loadCase` NEVER deletes an unreadable/future-version body (OTA-rollback survival). `upsert`/`close`/`delete`/`linkRecord`/`pruneForNewCase`/`findOpenCasesByVin`, self-healing index rebuild. |
+| `lib/diagnosticCases.test.ts` | **Stage 2B gate** (Node, 70 assertions) — migrator never-throws/never-deletes across malformed/truncated/future(99) fixtures, prune selection, self-heal, VIN lookup, index `closeReason`. Run: same `npx ts-node …` invocation as `dtcParser.test.ts`. |
+| `lib/activeDiagnoseSession.ts` | Module flag (`setDiagnoseSessionActive`/`isDiagnoseSessionActive`) the diagnose screen sets on `phase==="chat"` so the VIN auto-prompt won't hijack a mid-thread diagnosis. |
+| `components/CaseResumePrompt.tsx` | Root-mounted (in `app/_layout.tsx`, inside the providers), renders null. On a connect VIN commit, offers to resume matching OPEN case(s). Suppression: once-per-connect, obd2-auto VIN only, never during an active chat. Fires after VehicleContext's mismatch alert resolves (no alert stacking). |
 
 ### Data flow (Stage 1 inside the merged mode)
 
@@ -425,6 +437,37 @@ obd2.captureSnapshot(5000)                         POST /api/diagnose with [comp
 ### Stage 2 hook
 
 The `NextStep` type includes `requested_data?: RequestedDataItem[]` (present when `type === "DATA_CAPTURE"`). Stage 1 surfaces this to the tech as text in the next-step card. Stage 2 will auto-execute it: phone detects the operating condition, captures the window, sends an evidence-update call. **The UI side is staged:** the merged `/diagnose` thread renders assessment cards in anchored slots (an evidence-update card is just another `AssessmentEntry`), and `components/assessment/CaptureCard.tsx` is the watch/capture status primitive, currently behind `DEBUG_UI` with mocked states. What remains: the capture executor (condition detection + window capture + cost safeguards) and the evidence-update backend. **Server-side groundwork already exists:** `server/askToolLoop.js` (PR-1) is the execute-then-continue tool-loop pattern — Claude requests data → server provides → Claude continues — which is the same machinery Stage 2's evidence loop needs. Build Stage 2 on that pattern rather than inventing a parallel one. See Backend → vehicle spec retrieval.
+
+### Diagnostic case save/resume (Stage 2B)
+
+The "patient chart": a versioned, auto-saved record of a diagnostic session so a tech can pause, switch cars, and resume later. **Mobile-only — no server, endpoint, schema, or AI-behavior change.** Resume re-sends the saved conversation history to `/api/diagnose` exactly as an in-session continuation does. This is the persistence layer Stage 2C's evidence loop writes into, which is why the **data model is the load-bearing part**.
+
+**The envelope (`lib/diagnosticCasesCore.ts`, `DiagnosticCaseV1`).** Holds: thread (`messages` — assistant content is JSON `AssistantTurn` as everywhere; `assessments` as `SavedAssessmentEntry[]` = result + anchor only), intake (`complaint`/`mileage`/`operatingCondition`), `vehicle` (identity + VIN + source as history), timestamps, `status`/`closeReason`, `linkedRecordIds`, `loggerSessionIds`. **Reserved-but-empty 2C slots:** `evidenceLedger: EvidenceCaptureEntry[]` (shaped on `RequestedDataItem[]` + `DiagnosticSnapshot` — the exact objects 2C's capture executor will hold) and `caseState: CaseStateSlot | null` (mirrors `Hypothesis`). **The envelope carries NO live-connection data by type** (no `PidDescriptor[]`, no DTC arrays, no `FreezeFrame`, no snapshot inputs). That absence is the structural form of the history-vs-live split — a restored case literally cannot feed the auto-assess gate because the fields don't exist (the type-level version of the cleared-codes-handoff discipline).
+
+**Versioning / migration (a hard gate).** Every envelope carries `schemaVersion` (currently 1). `migrateCase(raw)` is tolerant by contract: malformed / truncated / unversioned / **future-version (newer than this app)** input → `null`, NEVER throws. A future-version body (e.g. after an OTA rollback) returns null AND `loadCase` leaves it untouched on disk — the **never-deletes** invariant, so a later compatible app version can still read it. Per-case body keys (not one array) make this safe: a whole-array write can't clobber an unknown body. The 70-assertion `lib/diagnosticCases.test.ts` is the gate — Batch 1 wasn't "done" until malformed/truncated/`schemaVersion:99` fixtures all proved never-throws + never-deletes.
+
+**Storage (`lib/diagnosticCases.ts`).** Per-device AsyncStorage: `vulcan:cases:case:<id>:v1` per body + `vulcan:cases:index:v1` (lightweight `CaseIndexEntry[]` for the list + VIN lookup, no body loads). A **serialized write queue** prevents auto-save's read-modify-write of the index from interleaving. Self-healing: a missing/corrupt index rebuilds from bodies. **Scalability:** per-device, cap-bounded at 25 — does NOT scale to multi-device/shared-shop; **server-side case sync is the post-auth migration path** (this AsyncStorage layer becomes an offline cache when auth + the backend user model land). Flagged in the module header.
+
+**Keying + resume-by-VIN.** Each case has its own generated id (primary key). VIN is an **index, not the key** — one VIN maps to many cases (same truck, different problems, weeks apart); no-VIN cases (manual / pre-2008) exist and live in the manual list only. `findOpenCasesByVin` returns OPEN cases on a VIN; multiple → the tech picks from the filtered list.
+
+**Auto-save grain.** No save button. Six triggers, once per completed turn, via the serialized queue: intake submit (creates the case, cap-enforced), user turn (saved before the API call so a crash can't lose input), assistant turn, assessment resolve (running slots NEVER persisted — an in-flight call can't survive process death), confirm (close+link), reject (link, stays open). `messagesRef`/`assessmentsRef` mirror the volatile arrays so each save reads fresh values, not stale state.
+
+**The different-vehicle guard (the safety core).** The ONE place the resume-eligibility rule lives. `liveVehicleMatchesCase()` (render-time, derived) + a resume-time block, both reading `obd2.getConnectedVin()` — **ground truth from the OBD2 manager, NEVER the overridable VehicleContext**, so a manual vehicle override can't defeat it. The truth table (`liveAssessmentAllowed = canAutoAssess && liveVehicleMatchesCase()`):
+
+| Session | Connection | Result |
+|---|---|---|
+| fresh | any | guard always true — 2A behavior untouched |
+| resumed, has VIN | disconnected | resumes freely (no live car to mismatch) |
+| resumed, has VIN | connected, VIN matches | resumes; live assessment allowed (live = case car) |
+| resumed, has VIN | connected, VIN differs | **BLOCKED** — conversation never opens (resume-time) / live path disabled + banner (mid-session) |
+| resumed, NO VIN | connected | live-assessment path **hard-suppressed** (can't prove same car) — closes the no-VIN leak structurally |
+| resumed, NO VIN | disconnected | resumes freely |
+
+There is no state where the live connection is one vehicle and the open conversation is another — the autopilot "reasoning over the wrong car's live data" failure is structurally impossible, not merely UI-gated.
+
+**Lifecycle.** `open`/`closed`. Confirm-fix → `closeCase(id,"fix_confirmed",recordId)` (the DiagnosticRecords tie-in / confirmed-fix DB feed; shown as a distinct **FIXED** chip vs a user-close **CLOSED** chip — `closeReason` rides on the index entry). Reject links the record but keeps the case open. Cap 25: prune oldest CLOSED first; **all-25-open requires explicit consent** — an honest three-way prompt (delete the named oldest open case / continue unsaved / cancel), because closing can't free a cap slot (only deletion can) and a "close" label that silently deleted would be dishonest. Reopen of a closed case is deferred to 2C. `resetSession` leaves the prior case open + resumable and starts the next intake as a fresh id; its connection-aware vehicle branch is unchanged from 2A.
+
+**Entry points.** Manual: the saved-cases list on the intake screen (renders from the index; tap = resume/view; close/delete actions). Automatic: `CaseResumePrompt` (root-mounted) offers resume when a connecting VIN matches open case(s). Both go through one shared, block-checked `attemptResume` that also drains pending escalation / `to_diagnose` handoffs, so a resume always wins over a stale prefill.
 
 ### Safety discipline (non-negotiable)
 
