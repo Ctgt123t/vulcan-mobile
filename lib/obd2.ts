@@ -560,6 +560,47 @@ interface Obd2Transport {
   isConnected(): boolean;
 }
 
+// Upper bound on the act of WRITING a command's bytes to the transport — NOT
+// the adapter's response (that has its own per-command timeout via
+// CommandBuffer.awaitResponse). A write only hands bytes to the OS Bluetooth
+// stack and returns; on a healthy adapter it completes in well under 100ms. But
+// on a socket that has silently died (e.g. the adapter was unplugged from one
+// vehicle and moved to another), the native write can block forever with no
+// error — and since sendCommand awaits the write BEFORE the response timeout,
+// that hang permanently stalls the shared command queue and every later
+// handshake chains behind it (the vehicle-switch hang). 4000ms is ~40× a normal
+// write, so it can never kill a slow-but-valid first-contact write, while
+// guaranteeing a dead-socket write SETTLES (rejects) so the queue keeps moving.
+const WRITE_TIMEOUT_MS = 4000;
+
+// Reject if `p` hasn't settled within `ms`. The underlying native write promise
+// is abandoned on timeout (it may never settle), but it is no longer awaited by
+// the command queue, so it can't stall anything.
+function writeWithTimeout(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error(`write timed out after ${ms}ms`));
+    }, ms);
+    p.then(
+      () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      },
+      (err) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 // ---------- BLE transport ----------
 
 class BleTransport implements Obd2Transport {
@@ -656,10 +697,13 @@ class BleTransport implements Obd2Transport {
     this.cmdBuf.reset();
     const p = this.cmdBuf.awaitResponse(timeoutMs);
     try {
-      await this.device.writeCharacteristicWithResponseForService(
-        this.writeServiceUUID,
-        this.writeCharUUID,
-        asciiToB64(cmd + "\r"),
+      await writeWithTimeout(
+        this.device.writeCharacteristicWithResponseForService(
+          this.writeServiceUUID,
+          this.writeCharUUID,
+          asciiToB64(cmd + "\r"),
+        ),
+        WRITE_TIMEOUT_MS,
       );
     } catch (err) {
       this.log("•", `BLE write failed: ${(err as Error).message}`);
@@ -938,10 +982,10 @@ class ClassicTransport implements Obd2Transport {
     this.cmdBuf.reset();
     const p = this.cmdBuf.awaitResponse(timeoutMs);
     try {
-      await this.device.write(cmd + "\r");
+      await writeWithTimeout(this.device.write(cmd + "\r"), WRITE_TIMEOUT_MS);
     } catch (err) {
       console.warn(
-        `[obd2 classic] write threw: ${(err as Error).message}`,
+        `[obd2 classic] write threw/timed out: ${(err as Error).message}`,
       );
       this.cmdBuf.reset();
       return null;
@@ -1368,6 +1412,15 @@ class Obd2Manager {
       };
     }
 
+    // Proactively tear down any prior connection BEFORE opening a new one. A
+    // vehicle switch may never have fired a disconnect event (adapter physically
+    // moved, socket silently dead), leaving an orphaned transport, a running
+    // poll loop, and — critically — a poisoned command queue. teardownAfterDisconnect
+    // (non-awaiting: it fire-and-forgets the old transport.disconnect) clears all
+    // of that and resets commandQueue. No-op on a clean fresh start (transport
+    // null, stopPolling no-op, queue reset harmless).
+    this.teardownAfterDisconnect();
+
     this.setStatus("connecting", `Connecting via ${known.transport}…`);
     this.log("•", `Connecting to ${known.name} (${known.transport})`);
 
@@ -1437,6 +1490,12 @@ class Obd2Manager {
       this.setStatus("error", perm.reason || "Permission denied.");
       return { ok: false, message: perm.reason || "Permission denied." };
     }
+
+    // Proactively tear down any prior connection before reconnecting — same
+    // rationale as connect(). No-op on a clean fresh start (the common
+    // auto-reconnect-on-mount case), where it only resets an already-empty
+    // command queue.
+    this.teardownAfterDisconnect();
 
     this.setStatus(
       "connecting",
@@ -2195,6 +2254,14 @@ class Obd2Manager {
     this.protocolType = "unknown";
     this.protocolName = "unknown";
     this.connectedVin = null;
+    // Reset the shared command mutex to a fresh, unblocked chain. Without this,
+    // an in-flight command whose underlying write never settled (a dead-socket
+    // write) stays the tail of commandQueue, and the NEXT connection's handshake
+    // chains behind it forever — the vehicle-switch hang. Every other field is
+    // cleared above; the command chain must be too. (The write-timeout in the
+    // transports now also guarantees those writes settle, so this is belt-and-
+    // suspenders against any future never-settling command.)
+    this.commandQueue = Promise.resolve();
     this.liveListeners.forEach((cb) => cb(this.liveData));
     this.setStatus("idle", "");
   }
