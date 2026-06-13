@@ -1051,6 +1051,104 @@ const ASSESS_TOOL = {
                   type: "number",
                   description: "How many seconds of data to capture.",
                 },
+                capture_plan: {
+                  type: "object",
+                  description:
+                    "Executable monitoring plan. Provide this whenever type is DATA_CAPTURE. Express EVERY condition as numeric ranges in the SAME unit the snapshot reports that signal in (raw OBDb units — degC not degF, kPa not psi, km/h not mph, % for fuel trims). A range here is your chosen capture trigger / observation window — it is NOT a factory specification; never phrase a range as the correct or expected value. If a condition cannot be expressed as numbers, it is not a DATA_CAPTURE (use PHYSICAL_INSPECTION instead).",
+                  properties: {
+                    context_gate: {
+                      type: "array",
+                      description:
+                        "The situation that must hold for the capture to arm — the 'when'. Every entry must hold simultaneously (logical AND). Use an empty array only if the target should be captured under any condition.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          signal_id: {
+                            type: "string",
+                            description:
+                              "OBDb signal id exactly as it appears in the snapshot (e.g. RPM, ECT, VSS).",
+                          },
+                          range: {
+                            type: "object",
+                            description:
+                              "Inclusive numeric band in the signal's raw OBDb unit. Use null for an unbounded side (e.g. '>= 80 degC' is {min:80, max:null}).",
+                            properties: {
+                              min: {
+                                type: ["number", "null"],
+                                description:
+                                  "Inclusive lower bound in the signal's snapshot unit; null = unbounded below.",
+                              },
+                              max: {
+                                type: ["number", "null"],
+                                description:
+                                  "Inclusive upper bound in the signal's snapshot unit; null = unbounded above.",
+                              },
+                              unit: {
+                                type: "string",
+                                description:
+                                  "The raw OBDb unit the bounds are in (e.g. %, rpm, degC, kPa, km/h). Must match the snapshot's unit for this signal.",
+                              },
+                            },
+                            required: ["min", "max", "unit"],
+                          },
+                        },
+                        required: ["signal_id", "range"],
+                      },
+                    },
+                    measured_target: {
+                      type: "object",
+                      description:
+                        "The single signal + threshold band that IS the actual evidence you want to capture — the 'what'.",
+                      properties: {
+                        signal_id: {
+                          type: "string",
+                          description:
+                            "OBDb signal id exactly as it appears in the snapshot (e.g. SHRTFT11, MAF).",
+                        },
+                        range: {
+                          type: "object",
+                          description:
+                            "Inclusive numeric band in the signal's raw OBDb unit that defines the evidence event (e.g. STFT sustained >= +10% is {min:10, max:null, unit:'%'}).",
+                          properties: {
+                            min: {
+                              type: ["number", "null"],
+                              description:
+                                "Inclusive lower bound in the signal's snapshot unit; null = unbounded below.",
+                            },
+                            max: {
+                              type: ["number", "null"],
+                              description:
+                                "Inclusive upper bound in the signal's snapshot unit; null = unbounded above.",
+                            },
+                            unit: {
+                              type: "string",
+                              description:
+                                "The raw OBDb unit the bounds are in. Must match the snapshot's unit for this signal.",
+                            },
+                          },
+                          required: ["min", "max", "unit"],
+                        },
+                      },
+                      required: ["signal_id", "range"],
+                    },
+                    sustained_seconds: {
+                      type: "number",
+                      description:
+                        "The gate AND target must hold continuously for this many seconds before the capture counts (noise + cost safeguard).",
+                    },
+                    capture_window_seconds: {
+                      type: "number",
+                      description:
+                        "How many seconds of live data to package once the plan fires.",
+                    },
+                  },
+                  required: [
+                    "context_gate",
+                    "measured_target",
+                    "sustained_seconds",
+                    "capture_window_seconds",
+                  ],
+                },
               },
               required: ["signal_id", "operating_condition", "duration_seconds"],
             },
@@ -1097,6 +1195,77 @@ const ASSESS_TOOL = {
   },
 };
 
+// ---- Soft-validator for the 2C-1 monitoring plan -------------------------
+//
+// JSON schema can't make capture_plan conditionally-required ("required iff
+// type === DATA_CAPTURE"), so we enforce its SHAPE here, fail-soft. A
+// missing/malformed plan is DROPPED (never thrown), leaving the Stage-1 prose
+// fields (operating_condition) intact so the client cleanly falls back to
+// rendering text. This matches the codebase's fail-soft discipline (a model
+// quirk degrades the feature, it never 500s the assess path).
+function isValidRange(r) {
+  return (
+    r != null &&
+    typeof r === "object" &&
+    (r.min === null || typeof r.min === "number") &&
+    (r.max === null || typeof r.max === "number") &&
+    typeof r.unit === "string" &&
+    r.unit.length > 0
+  );
+}
+
+function isValidSignalCondition(c) {
+  return (
+    c != null &&
+    typeof c === "object" &&
+    typeof c.signal_id === "string" &&
+    c.signal_id.length > 0 &&
+    isValidRange(c.range)
+  );
+}
+
+// Returns the plan if well-formed, else null. Never throws.
+function validateCapturePlan(plan) {
+  if (plan == null || typeof plan !== "object") return null;
+  if (!Array.isArray(plan.context_gate)) return null;
+  if (!plan.context_gate.every(isValidSignalCondition)) return null;
+  if (!isValidSignalCondition(plan.measured_target)) return null;
+  if (typeof plan.sustained_seconds !== "number") return null;
+  if (typeof plan.capture_window_seconds !== "number") return null;
+  return plan;
+}
+
+// Soft-validate (and prune) the monitoring plan(s) on a DATA_CAPTURE assessment.
+// Mutates the assessment in place and returns it. Never throws.
+function softValidateAssessmentPlan(assessment) {
+  try {
+    const ns = assessment?.next_step;
+    if (!ns || ns.type !== "DATA_CAPTURE") return assessment;
+    if (!Array.isArray(ns.requested_data)) return assessment;
+    for (const item of ns.requested_data) {
+      if (item == null || typeof item !== "object") continue;
+      const sigLabel = typeof item.signal_id === "string" ? item.signal_id : "?";
+      if (item.capture_plan == null) {
+        console.warn(
+          `[assess] DATA_CAPTURE item signal_id=${sigLabel} has no capture_plan; falling back to Stage-1 prose.`,
+        );
+        continue;
+      }
+      if (!validateCapturePlan(item.capture_plan)) {
+        console.warn(
+          `[assess] DATA_CAPTURE item signal_id=${sigLabel} had a malformed capture_plan; dropping it, falling back to Stage-1 prose.`,
+        );
+        delete item.capture_plan;
+      }
+    }
+  } catch (e) {
+    console.warn(
+      `[assess] soft-validate of capture_plan failed: ${e?.message ?? e}`,
+    );
+  }
+  return assessment;
+}
+
 const ASSESS_SYSTEM_PROMPT = `${APP_CONTEXT}
 
 DIAGNOSTIC ASSESSMENT — SINGLE-SHOT STRUCTURED ANALYSIS
@@ -1130,7 +1299,7 @@ The following have been verified by the Vulcan backend and injected into this co
    Give one plain-English sentence for why this stance fits this specific case.
 
 5. ONE NEXT STEP. The single cheapest action that most changes the hypothesis ranking. Not a checklist — exactly one.
-   - DATA_CAPTURE: Specific OBD2 signals under specific operating conditions. List each signal ID, the exact conditions, and duration in requested_data.
+   - DATA_CAPTURE: Specific OBD2 signals under specific, NUMERICALLY-EXPRESSED conditions the phone can watch for automatically. For each requested_data item, fill capture_plan as specified in the MONITORING PLAN section below. (Also fill the human-readable signal_id / operating_condition / duration_seconds fields — they are the plain-language summary of the same plan.)
    - PHYSICAL_INSPECTION: A specific, actionable check. Name the exact component and the exact test.
    - QUESTION: The single highest-diagnostic-value piece of information you're missing that would most change the ranking.
 
@@ -1142,6 +1311,21 @@ The following have been verified by the Vulcan backend and injected into this co
 
 7. DATA CEILING. If the generic OBD2 data genuinely cannot distinguish between the leading hypotheses, say so plainly in data_ceiling_note. Honesty about the data's limits is more valuable than a forced conclusion. Leave it empty if the data is sufficient to differentiate.
 
+=== MONITORING PLAN (for a DATA_CAPTURE next step) ===
+
+When the next step is DATA_CAPTURE, the phone will watch the live data stream LOCALLY (zero cost) and capture the evidence window automatically when your conditions are met. For this to work, every condition must be expressed as numbers the phone can check. For each requested_data item, fill capture_plan with:
+
+- context_gate: the SITUATION that must hold for the capture to arm — the "when". A list of {signal_id, range} entries that must ALL hold simultaneously (e.g. RPM 600-900 AND coolant >= 80 degC AND speed = 0). Use an empty array only if the target should be captured under any condition.
+- measured_target: the SINGLE signal + threshold band that IS the evidence — the "what" (e.g. SHRTFT11 >= +10%).
+- sustained_seconds: how long the gate AND target must hold continuously before it counts (filters noise; controls cost).
+- capture_window_seconds: how many seconds of data to package once it fires.
+
+RULES FOR THE NUMBERS:
+- Express EVERY range in the SAME unit the snapshot reports that signal in — raw OBDb units. The snapshot gives coolant in degC (not degF), pressures in kPa (not psi), speed in km/h (not mph), fuel trims in %. State that unit in each range.unit. A range in the wrong unit makes the phone watch for the wrong thing.
+- Reference signals by the exact signal_id shown in the snapshot. Prefer signals present in the snapshot's live readings. The phone validates each signal against the vehicle's supported PIDs and will report any it cannot watch — so do not invent signal ids.
+- A bound may be null for an unbounded side: ">= +10%" is {min:10, max:null}; "<= 5 kPa" is {min:null, max:5}; "600-900 rpm" is {min:600, max:900}.
+- If a condition genuinely cannot be expressed as numbers on an OBD2 signal, it is NOT a DATA_CAPTURE — make it a PHYSICAL_INSPECTION instead.
+
 === CRITICAL SAFETY DISCIPLINE — NON-NEGOTIABLE ===
 
 You may freely apply diagnostic logic, pattern recognition, and mechanistic reasoning from your training. That is your core value as a master technician.
@@ -1151,6 +1335,14 @@ You must NOT state any specific numeric factory specification — exact torque v
 If you need such a value and it was not provided: add it to unverified_specs_needed with the parameter name and why you need it. Recommend the technician confirm against the OEM service manual.
 
 A confidently-stated wrong factory number can cause a technician to condemn a good part or miss the real fault. This is the worst failure mode. When uncertain about a specific numeric value: flag it as unverified, don't state it.
+
+A CAPTURE RANGE IS NOT A FACTORY SPEC. The numeric ranges you put in a capture_plan (a context_gate band like "RPM 600-900", or a measured_target threshold like "STFT >= +10%") are your CHOSEN OBSERVATION WINDOW — an instruction to the phone about WHEN to look and WHAT counts as the evidence event. They are NOT claims about the vehicle's correct or factory-expected value, and the safety rule above does NOT forbid them. Setting these ranges from your diagnostic judgment is expected and encouraged — do not refuse or hedge a range because the number "feels like a spec".
+
+Keep the two cleanly separate:
+- A range = an imperative: "capture data WHEN/IF the signal is in this band." Allowed freely. Never phrase it as the correct/expected/factory value (don't write "the spec is..." or "it should read..." around a capture range).
+- A factory value you'd need to JUDGE the captured reading (e.g. the true factory-acceptable STFT range, or the expected idle MAF) is a claim of fact — it still goes in unverified_specs_needed, never asserted, and never smuggled into a range as if it were the spec.
+
+Example of doing both correctly for a suspected lean condition: set measured_target SHRTFT11 {min:10, max:null, unit:"%"} as your capture trigger AND add an unverified_specs_needed entry {parameter:"Factory-acceptable short-term fuel trim range at warm idle for this vehicle", purpose:"to judge whether the captured trim is actually out of spec"}. The trigger says when to look; the spec request says what the correct value is — different questions, different fields.
 
 === FREEZE FRAME vs. LIVE DATA ===
 
@@ -1299,8 +1491,12 @@ app.post("/api/assess", async (req, res) => {
       });
     }
 
+    // Soft-validate the 2C-1 monitoring plan: drop any missing/malformed
+    // capture_plan (fail-soft → Stage-1 prose fallback), never throw.
+    const assessment = softValidateAssessmentPlan(toolUse.input);
+
     // Return cost alongside the assessment so the app can log it per-session.
-    return res.json({ assessment: toolUse.input, cost: costData ?? null });
+    return res.json({ assessment, cost: costData ?? null });
   } catch (err) {
     return respondWithError(res, err, "assess");
   }

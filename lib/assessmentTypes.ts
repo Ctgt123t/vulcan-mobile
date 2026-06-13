@@ -84,10 +84,64 @@ export type Stance = "AUTOPILOT" | "GUIDED";
 // to the tech; Stage 2 will auto-execute it via the monitoring loop.
 export type NextStepType = "DATA_CAPTURE" | "PHYSICAL_INSPECTION" | "QUESTION";
 
-export interface RequestedDataItem {
+// ---- Stage 2C-1: executable monitoring plan ----
+//
+// The monitoring plan is NOT a new tool or endpoint — it is the EXISTING
+// requested_data, ENRICHED to be machine-executable (Stage 2C-1). Each
+// DATA_CAPTURE request carries a CapturePlan so the phone (2C-2) can detect the
+// condition locally (zero API cost) and capture the evidence window.
+//
+// SAFETY NOTE (load-bearing): a `range` here is Claude's chosen OBSERVATION
+// WINDOW / capture trigger — an instruction to the phone about WHEN to look and
+// WHAT counts as the evidence event. It is NOT a claimed factory specification.
+// A needed factory value (the correct/expected value used to INTERPRET a
+// capture) still routes to DiagnosticAssessment.unverified_specs_needed — there
+// is deliberately no schema slot to assert one here. See ASSESS_SYSTEM_PROMPT.
+
+// A numeric band the phone can check against the live stream. Bounds are
+// INCLUSIVE; null = unbounded on that side, so ">= +10%" is {min:10,max:null}
+// and "600-900 rpm" is {min:600,max:900}. `unit` is the RAW OBDb unit the
+// snapshot reports the signal in (degC, kPa, %, rpm, km/h) — NOT a display unit
+// (never degF/psi/mph). The phone compares in raw units.
+export interface NumericRange {
+  min: number | null;
+  max: number | null;
+  unit: string;
+}
+
+// A signal the plan references, named by its concrete OBDb signal id exactly as
+// it appears in the snapshot. The phone resolves signal_id -> PID/command and
+// validates it against the vehicle's supported-PID set in 2C-2 (2C-2 concern:
+// the OBDb id is not globally unique — e.g. SHRTFT11 lives at both 01 14 and
+// 01 15 — so the phone must prefer the command in the captured/selected set and
+// report what it can't resolve rather than guessing).
+export interface SignalCondition {
   signal_id: string;
-  operating_condition: string;
-  duration_seconds: number;
+  range: NumericRange;
+}
+
+// The executable form of a DATA_CAPTURE request. Present ONLY on DATA_CAPTURE
+// next steps; absent everywhere else (optional on RequestedDataItem). Consumed
+// by 2C-2 (detector/executor) and stored verbatim in the 2B evidenceLedger
+// (EvidenceCaptureEntry.requested is RequestedDataItem[], so this rides along
+// with no retrofit).
+export interface CapturePlan {
+  // The "when": every condition must hold SIMULTANEOUSLY (logical AND).
+  // [] means "no gate — capture whenever the target is observed".
+  context_gate: SignalCondition[];
+  // The "what": the single signal + threshold band that IS the evidence.
+  measured_target: SignalCondition;
+  // Cost safeguard: gate AND target must hold continuously this long to count.
+  sustained_seconds: number;
+  // How many seconds of data to package once the plan fires.
+  capture_window_seconds: number;
+}
+
+export interface RequestedDataItem {
+  signal_id: string; // Stage 1 display (= measured_target.signal_id by convention)
+  operating_condition: string; // Stage 1 prose (human rendering of context_gate)
+  duration_seconds: number; // Stage 1 display (= capture_window_seconds by convention)
+  capture_plan?: CapturePlan; // 2C-1: the executable monitoring plan
 }
 
 export interface Hypothesis {
