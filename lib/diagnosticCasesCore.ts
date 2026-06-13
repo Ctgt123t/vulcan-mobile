@@ -132,6 +132,10 @@ export interface CaseIndexEntry {
   id: string;
   schemaVersion: number; // surfaced so the list can flag "needs app update"
   status: CaseStatus;
+  // Distinguishes a confirmed-fix close (the confirmed-fix DB feed) from a
+  // user close in the list chip, without loading the body. null while open or
+  // for a legacy index entry written before this field existed.
+  closeReason: CaseCloseReason | null;
   vin: string | null; // the VIN index for resume lookup
   vehicleLabel: string;
   complaintPreview: string;
@@ -325,6 +329,7 @@ export function deriveIndexEntry(c: DiagnosticCase): CaseIndexEntry {
     id: c.id,
     schemaVersion: c.schemaVersion,
     status: c.status,
+    closeReason: c.closeReason,
     vin: c.vehicle.vin,
     vehicleLabel: vehicleLabel(c.vehicle),
     complaintPreview: c.complaint.slice(0, 80),

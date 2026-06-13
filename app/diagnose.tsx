@@ -42,6 +42,7 @@ import {
 } from "../lib/assessmentTypes";
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
+import { setDiagnoseSessionActive } from "../lib/activeDiagnoseSession";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import {
   closeCase,
@@ -139,7 +140,7 @@ export default function Screen() {
   const assessmentIdRef = useRef(0);
 
   // ---- Stage 2B: case save / resume ----
-  const params = useLocalSearchParams<{ resume?: string }>();
+  const params = useLocalSearchParams<{ resume?: string; focusVin?: string }>();
   // Captured once so the mount-time prefill effects know to skip when resuming.
   const resumeIdAtMount = useRef(
     typeof params.resume === "string" ? params.resume : null,
@@ -174,6 +175,9 @@ export default function Screen() {
   // Saved-cases list (intake) + lifecycle state.
   const [cases, setCases] = useState<CaseIndexEntry[]>([]);
   const [showAllCases, setShowAllCases] = useState(false);
+  // When the multi-match auto-prompt routes here with ?focusVin, the list filters
+  // to that vehicle's cases (open + closed) until the tech taps "Show all".
+  const [caseFilterVin, setCaseFilterVin] = useState<string | null>(null);
   // True when an over-cap session is running unsaved (the tech chose "continue
   // without saving" at the all-25-open prompt). Surfaced as a chat banner.
   const [unsaved, setUnsaved] = useState(false);
@@ -188,6 +192,28 @@ export default function Screen() {
   useEffect(() => {
     if (phase === "intake") refreshCases();
   }, [phase]);
+
+  // Mark a diagnose CHAT session active so the VIN auto-prompt won't hijack it.
+  useEffect(() => {
+    setDiagnoseSessionActive(phase === "chat");
+    return () => setDiagnoseSessionActive(false);
+  }, [phase]);
+
+  // Apply a ?focusVin filter from the multi-match auto-prompt.
+  useEffect(() => {
+    if (typeof params.focusVin === "string" && params.focusVin) {
+      setCaseFilterVin(params.focusVin);
+      setShowAllCases(true);
+    }
+  }, [params.focusVin]);
+
+  const displayedCases = caseFilterVin
+    ? cases.filter(
+        (c) =>
+          c.vin != null &&
+          c.vin.toUpperCase() === caseFilterVin.toUpperCase(),
+      )
+    : cases;
 
   // The different-vehicle guard — the ONE place the resume-eligibility rule
   // lives at render time (the resume-time block lives in the resume effect).
@@ -1041,10 +1067,26 @@ export default function Screen() {
 
             {cases.length > 0 && (
               <View style={styles.casesSection}>
-                <Text style={styles.casesSectionLabel}>
-                  SAVED CASES ({cases.length})
-                </Text>
-                {(showAllCases ? cases : cases.slice(0, 3)).map((c) => (
+                <View style={styles.casesSectionHeader}>
+                  <Text style={styles.casesSectionLabel}>
+                    {caseFilterVin
+                      ? `CASES FOR THIS VEHICLE (${displayedCases.length})`
+                      : `SAVED CASES (${cases.length})`}
+                  </Text>
+                  {caseFilterVin && (
+                    <TouchableOpacity
+                      onPress={() => setCaseFilterVin(null)}
+                      activeOpacity={0.7}
+                      accessibilityLabel="Show all cases"
+                    >
+                      <Text style={styles.casesClearFilter}>Show all</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {(showAllCases
+                  ? displayedCases
+                  : displayedCases.slice(0, 3)
+                ).map((c) => (
                   <CaseRow
                     key={c.id}
                     entry={c}
@@ -1053,7 +1095,12 @@ export default function Screen() {
                     onDeleteCase={() => onDeleteCaseFromList(c)}
                   />
                 ))}
-                {cases.length > 3 && (
+                {displayedCases.length === 0 && (
+                  <Text style={styles.casesEmpty}>
+                    No saved cases for this vehicle.
+                  </Text>
+                )}
+                {!caseFilterVin && displayedCases.length > 3 && (
                   <TouchableOpacity
                     style={styles.casesToggle}
                     onPress={() => setShowAllCases((s) => !s)}
@@ -1065,7 +1112,7 @@ export default function Screen() {
                     <Text style={styles.disclosureText}>
                       {showAllCases
                         ? "Show fewer"
-                        : `View all (${cases.length})`}
+                        : `View all (${displayedCases.length})`}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1502,6 +1549,21 @@ function CaseRow({
   onDeleteCase: () => void;
 }) {
   const isOpen = entry.status === "open";
+  // Three chip states: OPEN (in progress), FIXED (confirmed-fix close — also the
+  // confirmed-fix DB feed, so it stands out), CLOSED (user-closed / other).
+  const chip = isOpen
+    ? { label: "OPEN", box: styles.caseChipOpen, text: styles.caseChipTextOpen }
+    : entry.closeReason === "fix_confirmed"
+      ? {
+          label: "FIXED",
+          box: styles.caseChipFixed,
+          text: styles.caseChipTextFixed,
+        }
+      : {
+          label: "CLOSED",
+          box: styles.caseChipClosed,
+          text: styles.caseChipTextClosed,
+        };
   return (
     <View style={styles.caseRow}>
       <TouchableOpacity
@@ -1514,20 +1576,8 @@ function CaseRow({
           <Text style={styles.caseVehicle} numberOfLines={1}>
             {entry.vehicleLabel}
           </Text>
-          <View
-            style={[
-              styles.caseChip,
-              isOpen ? styles.caseChipOpen : styles.caseChipClosed,
-            ]}
-          >
-            <Text
-              style={[
-                styles.caseChipText,
-                isOpen ? styles.caseChipTextOpen : styles.caseChipTextClosed,
-              ]}
-            >
-              {isOpen ? "OPEN" : "CLOSED"}
-            </Text>
+          <View style={[styles.caseChip, chip.box]}>
+            <Text style={[styles.caseChipText, chip.text]}>{chip.label}</Text>
           </View>
         </View>
         {entry.complaintPreview ? (
@@ -1864,12 +1914,27 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     gap: 8,
   },
+  casesSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 2,
+  },
   casesSectionLabel: {
     fontSize: 11,
     fontWeight: "500",
     color: colors.muted,
     letterSpacing: 0.7,
-    marginBottom: 2,
+  },
+  casesClearFilter: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  casesEmpty: {
+    color: colors.muted,
+    fontSize: 13,
+    paddingVertical: 6,
   },
   casesToggle: {
     minHeight: HIT_TARGET - 12,
@@ -1911,6 +1976,9 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   caseChipOpen: {
+    backgroundColor: colors.surface2,
+  },
+  caseChipFixed: {
     backgroundColor: colors.okBg,
   },
   caseChipClosed: {
@@ -1922,6 +1990,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   caseChipTextOpen: {
+    color: colors.accent,
+  },
+  caseChipTextFixed: {
     color: colors.okText,
   },
   caseChipTextClosed: {

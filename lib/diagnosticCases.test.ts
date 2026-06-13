@@ -213,6 +213,22 @@ async function main(): Promise<void> {
     check("upsert → index has one entry", index.length === 1);
     check("index entry has vin for lookup", index[0]?.vin === body.vehicle.vin);
     check("index entry derived label", index[0]?.vehicleLabel.includes("Sierra"));
+    check("open index entry → closeReason null", index[0]?.closeReason === null);
+  }
+
+  // --- Index closeReason distinguishes fix_confirmed from user close ---
+  {
+    setKVBackendForTests(makeMemBackend());
+    await upsertCase(validBody({ id: "fixed1" }));
+    await upsertCase(validBody({ id: "userclosed1" }));
+    await closeCase("fixed1", "fix_confirmed", "rec_fix");
+    await closeCase("userclosed1", "closed_by_user");
+    const idx = await loadIndex();
+    const fixed = idx.find((e) => e.id === "fixed1");
+    const userClosed = idx.find((e) => e.id === "userclosed1");
+    check("index closeReason → fix_confirmed surfaced", fixed?.closeReason === "fix_confirmed");
+    check("index closeReason → closed_by_user surfaced", userClosed?.closeReason === "closed_by_user");
+    check("deriveIndexEntry → closeReason from a closed body", deriveIndexEntry(validBody({ status: "closed", closeReason: "fix_confirmed" })).closeReason === "fix_confirmed");
   }
 
   // --- NEVER DELETES: future-version body survives an unreadable load ---

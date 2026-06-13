@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import CaseResumePrompt from "../components/CaseResumePrompt";
 import { Obd2Provider } from "../contexts/Obd2Context";
 import { VehicleProvider } from "../contexts/VehicleContext";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
@@ -21,6 +22,9 @@ export default function RootLayout() {
           <View style={styles.root}>
             <StatusBar style="dark" backgroundColor={colors.surface} />
             <Stack screenOptions={{ headerShown: false, contentStyle: styles.root }} />
+            {/* Renders nothing — watches for a connecting VIN and offers to
+                resume matching open cases (Stage 2B). */}
+            <CaseResumePrompt />
           </View>
         </VehicleProvider>
       </Obd2Provider>
