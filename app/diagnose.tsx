@@ -1258,7 +1258,18 @@ export default function Screen() {
       const next = [...assessmentsRef.current, entry];
       setAssessments(next);
       assessmentsRef.current = next;
-      saveCase({ assessments: next });
+      // Keep the patient chart's last-known differential current: REPLACE the
+      // hypotheses, preserve the ruled-out list + diagnostic trail (the capture
+      // loop appends a step per round; a direct assessment turn is a
+      // reassessment, not a step). buildTurnHistory reconstructs the narrative
+      // from assessments[] — this is a chart-completeness write, not brain input.
+      const caseState: CaseStateSlot = {
+        hypotheses: turn.assessment.hypotheses,
+        ruledOut: caseStateRef.current?.ruledOut ?? [],
+        stepsTaken: caseStateRef.current?.stepsTaken ?? [],
+      };
+      caseStateRef.current = caseState;
+      saveCase({ assessments: next, caseState });
       return;
     }
     // question | diagnosis → an assistant turn in the message thread (the exact
