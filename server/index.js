@@ -1286,7 +1286,15 @@ const EVIDENCE_UPDATE_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, EVIDENCE_UP
 //
 // Stage-1 behavior is preserved exactly: /api/assess passes extraContextBlocks=[]
 // so the block order/text and the user message are byte-identical to pre-2C-3.
-async function runStructuredAssessment({
+// Assemble the verified-data system blocks shared by the structured-assessment
+// path (/api/assess), the evidence-update path, and the unified diagnostic turn
+// (/api/diagnose-turn, SB3): the cached system prompt, recall/TSB blocks, DTC
+// enrichment (from the snapshot codes), fail-soft spec injection (lookupSpec
+// never throws), any endpoint-specific extraContextBlocks, then the
+// snapshot/observed data block LAST. Logs a one-line summary under logLabel.
+// Extracted from runStructuredAssessment (SB3-1) so the unified turn reuses the
+// IDENTICAL context assembly; /api/assess behavior is unchanged.
+async function buildAssessmentContextBlocks({
   systemPrompt,
   vehicle,
   snapshot,
@@ -1294,12 +1302,8 @@ async function runStructuredAssessment({
   tsbsArr,
   complaintText,
   extraContextBlocks = [],
-  userMessage,
-  callType,
   logLabel,
-  sessionId,
 }) {
-  // Build system context blocks in the same layered pattern as /api/diagnose.
   const systemBlocks = [
     {
       type: "text",
@@ -1375,6 +1379,33 @@ async function runStructuredAssessment({
       `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length} ` +
       `extraBlocks=${extraContextBlocks.length}`,
   );
+
+  return systemBlocks;
+}
+
+async function runStructuredAssessment({
+  systemPrompt,
+  vehicle,
+  snapshot,
+  recallsArr,
+  tsbsArr,
+  complaintText,
+  extraContextBlocks = [],
+  userMessage,
+  callType,
+  logLabel,
+  sessionId,
+}) {
+  const systemBlocks = await buildAssessmentContextBlocks({
+    systemPrompt,
+    vehicle,
+    snapshot,
+    recallsArr,
+    tsbsArr,
+    complaintText,
+    extraContextBlocks,
+    logLabel,
+  });
 
   const response = await callAnthropicWithRetry(() =>
     client.messages.create({
