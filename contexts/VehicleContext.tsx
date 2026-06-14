@@ -297,14 +297,25 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // No conflict — apply silently with a brief toast-style alert.
+      // No conflict — apply silently. Show the "Vehicle detected" toast only
+      // when it's worth surfacing: a USER-initiated connect, or a GENUINE
+      // vehicle change (different truck than last time). Suppress it for a SILENT
+      // same-vehicle auto-reconnect, which would otherwise pop on every app
+      // launch now that reconnect is app-level (SB2-B). (The same-VIN early
+      // return above already covers the hydrated case; this also covers the
+      // launch race where the persisted VIN hasn't loaded yet.)
+      const isSilentReconnect = obd2.wasLastConnectSilent();
+      const isGenuineChange =
+        vehicleHasIdentity(current) && vehiclesDiffer(current, decodedVehicle);
       await applyDecodedFromObd2(detectedVin, decodedVehicle);
-      Alert.alert(
-        "Vehicle detected",
-        formatVehicleShort(decodedVehicle),
-        [{ text: "OK" }],
-        { cancelable: true },
-      );
+      if (!isSilentReconnect || isGenuineChange) {
+        Alert.alert(
+          "Vehicle detected",
+          formatVehicleShort(decodedVehicle),
+          [{ text: "OK" }],
+          { cancelable: true },
+        );
+      }
     });
     return () => {
       off();

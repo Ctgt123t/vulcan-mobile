@@ -1078,6 +1078,11 @@ class Obd2Manager {
   // LiveValues snapshot. Distinct from liveListeners (which fire on every
   // intra-tick liveData commit) so the detector gets clean once-per-tick timing.
   private tickListeners = new Set<(t: { timestamp: number; values: LiveData }) => void>();
+  // Fired when the connected-vehicle VIN resolves (Mode-09 parse) or clears
+  // (disconnect), so Obd2Context can expose connectedVin REACTIVELY — the clean
+  // "connected + what is it" signal the unified-flow merge (SB3+) reads. The VIN
+  // resolves AFTER status "connected", so a status-only watcher would miss it.
+  private vinListeners = new Set<(vin: string | null) => void>();
   private logListeners = new Set<(line: LogLine) => void>();
   private deviceListeners = new Set<(devices: DiscoveredDevice[]) => void>();
 
@@ -1124,6 +1129,15 @@ class Obd2Manager {
   onTick(cb: (t: { timestamp: number; values: LiveData }) => void): () => void {
     this.tickListeners.add(cb);
     return () => this.tickListeners.delete(cb);
+  }
+  // Subscribe to connected-VIN changes (resolve → the VIN string; disconnect →
+  // null). Used by Obd2Context to expose connectedVin reactively.
+  onVin(cb: (vin: string | null) => void): () => void {
+    this.vinListeners.add(cb);
+    return () => this.vinListeners.delete(cb);
+  }
+  private emitVin(vin: string | null): void {
+    this.vinListeners.forEach((cb) => cb(vin));
   }
   onLog(cb: (l: LogLine) => void): () => void {
     this.logListeners.add(cb);
@@ -1178,6 +1192,28 @@ class Obd2Manager {
       }
     }
     return { ok: true };
+  }
+
+  // Non-prompting permission check. Used to gate app-level auto-reconnect so it
+  // NEVER triggers a Bluetooth/location permission dialog at cold launch —
+  // first-time pairing (which prompts) stays a deliberate OBD2-screen action.
+  async hasRequiredPermissions(): Promise<boolean> {
+    if (Platform.OS !== "android") return true;
+    try {
+      const apiLevel = Platform.Version as number;
+      if (apiLevel >= 31) {
+        const [scan, connect] = await Promise.all([
+          PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN),
+          PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT),
+        ]);
+        return scan && connect;
+      }
+      return await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      );
+    } catch {
+      return false;
+    }
   }
 
   // ---------- Lifecycle ----------
@@ -1422,6 +1458,14 @@ class Obd2Manager {
   // the prerequisite that makes app-wide connect triggering safe.
   private connectInFlight: Promise<{ ok: boolean; message: string }> | null = null;
   private connectInFlightKey: string | null = null;
+  // Whether the most recent connect attempt was a SILENT auto-reconnect
+  // (connectDirect) vs a USER-initiated picker connect. VehicleContext reads
+  // this to suppress the "Vehicle detected" alert on a silent same-vehicle
+  // reconnect while still alerting on a genuine vehicle change / user connect.
+  private lastConnectSilent = false;
+  wasLastConnectSilent(): boolean {
+    return this.lastConnectSilent;
+  }
 
   private async runExclusiveConnect(
     key: string,
@@ -1463,6 +1507,7 @@ class Obd2Manager {
     }
 
     return this.runExclusiveConnect(deviceId, async () => {
+      this.lastConnectSilent = false; // user-initiated picker connect
       // Proactively tear down any prior connection BEFORE opening a new one. A
       // vehicle switch may never have fired a disconnect event (adapter physically
       // moved, socket silently dead), leaving an orphaned transport, a running
@@ -1544,6 +1589,7 @@ class Obd2Manager {
     }
 
     return this.runExclusiveConnect(saved.deviceId, async () => {
+      this.lastConnectSilent = true; // silent auto-reconnect
       // Proactively tear down any prior connection before reconnecting — same
       // rationale as connect(). No-op on a clean fresh start (the common
       // auto-reconnect-on-mount case), where it only resets an already-empty
@@ -1609,6 +1655,37 @@ class Obd2Manager {
 
   async loadSavedAdapter(): Promise<SavedAdapter | null> {
     return loadSavedAdapter();
+  }
+
+  // Single, idempotent, gated entry point for app-level auto-reconnect. Safe to
+  // call from anywhere (app launch, AppState→active, a screen on focus) — the
+  // connect mutex (runExclusiveConnect) coalesces concurrent calls so it can
+  // never double-fire teardown. Gated so it is silent and side-effect-free when
+  // it shouldn't act:
+  //   - already connected / connecting → no-op (never tears down a live link),
+  //   - no remembered adapter → no-op (first-time pairing stays on the OBD2
+  //     screen, where the permission prompt belongs),
+  //   - permissions not already granted → no-op (NO cold-launch prompt).
+  // On a reachable adapter it connects silently; on an unreachable one
+  // connectDirect resolves to "idle" and the caller/screen offers the picker.
+  // True while a connection exists or is being established — read fresh each
+  // call (a method, so TS doesn't narrow it across awaits in ensureAutoReconnect).
+  private isConnectingOrConnected(): boolean {
+    return (
+      this.status === "connected" ||
+      this.status === "connecting" ||
+      this.status === "handshaking"
+    );
+  }
+
+  async ensureAutoReconnect(): Promise<void> {
+    if (this.isConnectingOrConnected()) return;
+    const saved = await loadSavedAdapter();
+    if (!saved) return;
+    if (!(await this.hasRequiredPermissions())) return;
+    // Re-check after the awaits — another trigger may have connected meanwhile.
+    if (this.isConnectingOrConnected()) return;
+    await this.connectDirect(saved).catch(() => {});
   }
 
   async forgetSavedAdapter(): Promise<void> {
@@ -1761,7 +1838,10 @@ class Obd2Manager {
     }
     const vin = parseVinFromResponse(raw);
     // Cache the live VIN as ground truth for the case-resume guard.
-    if (vin) this.connectedVin = vin;
+    if (vin) {
+      this.connectedVin = vin;
+      this.emitVin(vin);
+    }
     return vin;
   }
 
@@ -2313,6 +2393,7 @@ class Obd2Manager {
     this.protocolType = "unknown";
     this.protocolName = "unknown";
     this.connectedVin = null;
+    this.emitVin(null);
     // Reset the shared command mutex to a fresh, unblocked chain. Without this,
     // an in-flight command whose underlying write never settled (a dead-socket
     // write) stays the tail of commandQueue, and the NEXT connection's handshake
