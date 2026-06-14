@@ -152,15 +152,36 @@ export default function Screen() {
     setVehicleManually,
     clearVehicle,
   } = useVehicle();
-  // Local VIN input — synced with the context's vin when the context
-  // updates from elsewhere (e.g. OBD2 auto-detect).
-  const [vin, setVin] = useState<string>(ctxVin ?? "");
+  // Local VIN input. SEEDED FROM THE CONNECTED ADAPTER (obd2.getConnectedVin() —
+  // manager ground truth, set on Mode-09 parse, cleared on disconnect), NEVER
+  // from the persisted/overridable VehicleContext vin (which leaks the PREVIOUS
+  // vehicle's VIN into a fresh intake). Fresh + disconnected starts empty.
+  const [vin, setVin] = useState<string>(() =>
+    obd2.isConnected() ? obd2.getConnectedVin() ?? "" : "",
+  );
+  // Auto-import the connected vehicle's VIN into the intake field — ONCE per
+  // resolved VIN, so a late auto-VIN resolve (Mode-09 decoding after the intake
+  // is already open) reactively populates it, while a tech's later manual
+  // edit/scan is never fought. ctxVin is the reactive trigger (it changes when
+  // the auto-VIN flow commits a vehicle); we read the VALUE from
+  // obd2.getConnectedVin() (ground truth) so a stale persisted obd2-auto VIN can
+  // never flash in during a reconnect. Gated to the intake screen so it can
+  // never write the connected car's VIN into a saved case's envelope during chat
+  // (a resumed no-VIN case must stay no-VIN). Disconnected leaves the field as
+  // typed. The connect-time mismatch case (tech kept a manual vehicle) keeps the
+  // typed VIN naturally: "keep entered" leaves ctxVin unchanged, so this never
+  // re-runs to override it.
+  const autoVinAppliedRef = useRef<string | null>(null);
   useEffect(() => {
-    if ((ctxVin ?? "") !== vin) {
-      setVin(ctxVin ?? "");
+    if (phase !== "intake") return;
+    if (!obd2.isConnected()) return;
+    const connectedVin = obd2.getConnectedVin();
+    if (connectedVin && autoVinAppliedRef.current !== connectedVin) {
+      autoVinAppliedRef.current = connectedVin;
+      setVin(connectedVin);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctxVin]);
+  }, [phase, ctxVin]);
   const [symptom, setSymptom] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
@@ -1435,6 +1456,10 @@ export default function Screen() {
     // connection-aware vehicle handling below is unchanged from 2A.
     caseMetaRef.current = null;
     resumedCaseRef.current = null;
+    // SB1: re-arm the connected-VIN auto-import so "New Diagnosis" re-derives the
+    // field from adapter ground truth (connected → connected VIN; the
+    // disconnected branch below clears it).
+    autoVinAppliedRef.current = null;
     // Stage 2C-4: stop any live capture round and drop the evidence-loop refs —
     // the next intake is a fresh case.
     captureExecutorRef.current?.stop();
