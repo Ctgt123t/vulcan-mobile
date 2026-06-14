@@ -7,7 +7,13 @@ import type {
   Tsb,
   VehicleInfo,
 } from "./types";
-import type { ApiCostData, DiagnosticAssessment, DiagnosticSnapshot } from "./assessmentTypes";
+import type {
+  ApiCostData,
+  DiagnosticAssessment,
+  DiagnosticSnapshot,
+  EvidenceUpdateResponse,
+} from "./assessmentTypes";
+import type { EvidenceCaptureEntry } from "./diagnosticCasesCore";
 
 const BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(
   /\/+$/,
@@ -371,6 +377,95 @@ export async function assess(
   }
 
   const result = json as { assessment: DiagnosticAssessment; cost?: ApiCostData | null };
+  return {
+    assessment: result.assessment,
+    cost: result.cost ?? null,
+  };
+}
+
+export class EvidenceUpdateError extends Error {}
+
+// Stage 2C-4: the evidence-loop call. Sends the prior assessment + the phone's
+// summarized captured-evidence window (the 2C-2 EvidenceCaptureEntry, passed
+// through UNRESHAPED) to /api/evidence-update (2C-3) and returns the EVOLVED
+// assessment. Single-shot; the phone writes the result into the case chart.
+// Mirrors assess() exactly (same error/parse discipline). First caller of the
+// 2C-3 EvidenceUpdateResponse type — its OTA rides with this build.
+export async function evidenceUpdate(
+  vehicle: VehicleInfo,
+  vin: string | null,
+  mileage: string,
+  complaint: string,
+  priorAssessment: DiagnosticAssessment,
+  evidence: EvidenceCaptureEntry,
+  recalls: Recall[] = [],
+  tsbs: Tsb[] = [],
+  sessionId?: string | null,
+  caseId?: string | null,
+): Promise<EvidenceUpdateResponse> {
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new EvidenceUpdateError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+
+  const url = `${BASE_URL}/api/evidence-update`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "ngrok-skip-browser-warning": "true",
+  };
+  const bodyStr = JSON.stringify({
+    vehicle,
+    vin,
+    mileage,
+    complaint,
+    priorAssessment,
+    evidence,
+    recalls,
+    tsbs,
+    sessionId: sessionId ?? null,
+    caseId: caseId ?? null,
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: bodyStr });
+  } catch {
+    throw new EvidenceUpdateError(
+      "Network error. Check your connection and try again.",
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch {
+    throw new EvidenceUpdateError(
+      `Couldn't read server response (${res.status}).`,
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new EvidenceUpdateError(
+      `Server returned an unexpected response (${res.status}).`,
+    );
+  }
+
+  if (!res.ok) {
+    const msg =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : `Request failed (${res.status}).`;
+    throw new EvidenceUpdateError(msg);
+  }
+
+  const result = json as {
+    assessment: DiagnosticAssessment;
+    cost?: ApiCostData | null;
+  };
   return {
     assessment: result.assessment,
     cost: result.cost ?? null,

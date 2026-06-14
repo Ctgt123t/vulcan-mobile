@@ -23,6 +23,7 @@ import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import AssessmentResult from "../components/assessment/AssessmentResult";
+import CaptureCard from "../components/assessment/CaptureCard";
 import ConditionSelector from "../components/assessment/ConditionSelector";
 import DataBadge from "../components/assessment/DataBadge";
 import { useObd2 } from "../contexts/Obd2Context";
@@ -30,12 +31,21 @@ import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
   AssessError,
   DiagnoseError,
+  EvidenceUpdateError,
   VinDecodeError,
   assess,
   decodeVin,
   diagnose,
+  evidenceUpdate,
   isLikelyVin,
 } from "../lib/api";
+import { CaptureExecutor } from "../lib/captureExecutor";
+import { resolvePlan, type ResolveContext } from "../lib/captureResolver";
+import {
+  buildSelectedDescriptors,
+  loadCachedBitmask,
+  loadCachedCatalog,
+} from "../lib/pidCatalog";
 import {
   type DiagnosticAssessment,
   type OperatingCondition,
@@ -56,13 +66,15 @@ import {
 import {
   type CaseCloseReason,
   type CaseIndexEntry,
+  type CaseStateSlot,
   type CaseStatus,
   type DiagnosticCase,
+  type EvidenceCaptureEntry,
   type SavedAssessmentEntry,
   makeCaseId,
   vehicleLabel,
 } from "../lib/diagnosticCasesCore";
-import { obd2 } from "../lib/obd2";
+import { obd2, signalKeyOf, type PidDescriptor } from "../lib/obd2";
 import {
   consumeObd2DiagnoseEscalation,
   getObd2DiagnoseHandoff,
@@ -87,6 +99,28 @@ type Phase = "intake" | "chat";
 // `afterMessageIndex` anchors the card to a fixed position (rendered after
 // that message) so the layout doesn't jump when the assessment resolves
 // after later conversational turns have already rendered.
+// Stage 2C-4 (transient, never persisted): the live capture-round state shown on
+// a DATA_CAPTURE assessment card after "Start monitoring" is tapped. `phase`
+// is broader than CaptureCardState so terminal non-complete outcomes
+// (stopped/unavailable) carry an explanatory note. The evolved assessment from
+// the round is a SEPARATE appended AssessmentEntry — this only drives the card.
+interface CaptureUiState {
+  // "waiting" | "capturing" | "complete" map 1:1 to CaptureCardState; the
+  // terminal "stopped" | "unavailable" | "error" render a note box instead.
+  phase:
+    | "waiting"
+    | "capturing"
+    | "complete"
+    | "stopped"
+    | "unavailable"
+    | "error";
+  conditionLabel: string;
+  signalIds: string[];
+  durationSeconds?: number;
+  progress?: number;
+  note?: string;
+}
+
 interface AssessmentEntry {
   id: number;
   afterMessageIndex: number;
@@ -94,6 +128,9 @@ interface AssessmentEntry {
     | { status: "running" }
     | { status: "done"; assessment: DiagnosticAssessment }
     | { status: "error"; message: string };
+  // Present only on a DATA_CAPTURE assessment whose capture round is in
+  // progress / done this session. Runtime-only; SavedAssessmentEntry omits it.
+  capture?: CaptureUiState | null;
 }
 
 type ThreadRow =
@@ -171,6 +208,49 @@ export default function Screen() {
   useEffect(() => {
     assessmentsRef.current = assessments;
   }, [assessments]);
+  // Stage 2C-4: the evidence loop's persisted output. evidenceLedger accrues one
+  // EvidenceCaptureEntry per completed capture round; caseState holds the
+  // last-known evolved differential (REPLACE-current). Mirror the messagesRef
+  // pattern so saveCase reads the latest without an async-setState race. These
+  // are runtime-held (not screen state) because nothing renders off them
+  // directly — the thread renders the prior+evolved assessment cards instead.
+  const evidenceLedgerRef = useRef<EvidenceCaptureEntry[]>([]);
+  const caseStateRef = useRef<CaseStateSlot | null>(null);
+
+  // Stage 2C-4 capture round (one at a time). The live executor (onTick
+  // subscription) + the active-round marker. roundActiveRef.complete guards
+  // against the detector's trailing post-fire "waiting" card overwriting the
+  // "complete" state set in onEvidence. priorSelection restores the live
+  // polling selection after the round (the plan signals are added transiently).
+  const captureExecutorRef = useRef<CaptureExecutor | null>(null);
+  const roundActiveRef = useRef<{
+    entryId: number;
+    complete: boolean;
+    priorSelection: PidDescriptor[];
+  } | null>(null);
+  // Stop any live capture subscription if the screen unmounts mid-round so the
+  // detector can't keep firing in the background.
+  useEffect(() => {
+    return () => {
+      captureExecutorRef.current?.stop();
+      captureExecutorRef.current = null;
+      roundActiveRef.current = null;
+    };
+  }, []);
+
+  // If the adapter disconnects mid-round, the poll loop stops feeding ticks —
+  // end the round gracefully instead of leaving the card stuck watching.
+  useEffect(() => {
+    if (!isConnected && roundActiveRef.current && !roundActiveRef.current.complete) {
+      const active = roundActiveRef.current;
+      patchCapture(active.entryId, {
+        phase: "stopped",
+        note: "Connection lost — monitoring stopped.",
+      });
+      teardownRound(false); // disconnect already stopped polling; nothing to restore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected]);
 
   // Saved-cases list (intake) + lifecycle state.
   const [cases, setCases] = useState<CaseIndexEntry[]>([]);
@@ -444,6 +524,10 @@ export default function Screen() {
     setAssessments(restored);
     assessmentsRef.current = restored;
     assessmentIdRef.current = restored.length; // next re-run gets a fresh id
+    // Stage 2C-4: restore the evidence-loop output so a resumed case carries its
+    // capture history + last-known evolved differential forward.
+    evidenceLedgerRef.current = [...saved.evidenceLedger];
+    caseStateRef.current = saved.caseState;
     setConfirmedDone(
       saved.status === "closed" && saved.closeReason === "fix_confirmed",
     );
@@ -539,6 +623,8 @@ export default function Screen() {
   function saveCase(over?: {
     messages?: ChatMessage[];
     assessments?: AssessmentEntry[];
+    evidenceLedger?: EvidenceCaptureEntry[];
+    caseState?: CaseStateSlot | null;
   }): void {
     const meta = caseMetaRef.current;
     if (!meta) return;
@@ -586,8 +672,12 @@ export default function Screen() {
       assessments: savedAssessments,
       linkedRecordIds: meta.linkedRecordIds,
       loggerSessionIds: meta.loggerSessionIds,
-      evidenceLedger: [],
-      caseState: null,
+      // Stage 2C-4: persist the evidence-loop output (was hardcoded []/null,
+      // which erased every round's result on the next save). `over` supplies the
+      // just-changed value so we never read stale refs.
+      evidenceLedger: over?.evidenceLedger ?? evidenceLedgerRef.current,
+      caseState:
+        over?.caseState !== undefined ? over.caseState : caseStateRef.current,
     };
     upsertCase(envelope).catch((err) =>
       console.warn("[cases] save failed:", err),
@@ -668,6 +758,305 @@ export default function Screen() {
       assessmentsRef.current = next;
       saveCase({ assessments: next });
     }
+  }
+
+  // ---- Stage 2C-4: single-round evidence loop ----
+  // MINIMAL wiring to run ONE capture round end-to-end. SUB-BATCH 2 replaces the
+  // Start affordance with the hands-off per-round driving UX and adds the
+  // self-continuing loop. Nothing here auto-continues.
+
+  // Merge plan descriptors into the current polling selection (dedupe by
+  // signalKey; the plan's aiSelected descriptors win).
+  function mergeSelection(
+    current: PidDescriptor[],
+    add: PidDescriptor[],
+  ): PidDescriptor[] {
+    const byKey = new Map<string, PidDescriptor>();
+    for (const p of current) byKey.set(p.signalKey ?? signalKeyOf(p), p);
+    for (const p of add) byKey.set(p.signalKey ?? signalKeyOf(p), p);
+    return [...byKey.values()];
+  }
+
+  // Patch the transient capture state on one assessment entry (merge).
+  function patchCapture(entryId: number, patch: Partial<CaptureUiState>): void {
+    const next = assessmentsRef.current.map((a) => {
+      if (a.id !== entryId) return a;
+      const base: CaptureUiState =
+        a.capture ?? { phase: "waiting", conditionLabel: "", signalIds: [] };
+      return { ...a, capture: { ...base, ...patch } };
+    });
+    setAssessments(next);
+    assessmentsRef.current = next;
+  }
+
+  function teardownRound(restoreSelection: boolean): void {
+    const active = roundActiveRef.current;
+    captureExecutorRef.current?.stop();
+    captureExecutorRef.current = null;
+    if (restoreSelection && active) {
+      // Drop the transiently-added plan signals from the live polling view.
+      try {
+        obd2.setSelectedPids(active.priorSelection);
+      } catch {
+        // best-effort
+      }
+    }
+    roundActiveRef.current = null;
+  }
+
+  // Kick off ONE capture round from a DATA_CAPTURE assessment card.
+  async function startCaptureRound(entry: AssessmentEntry): Promise<void> {
+    if (roundActiveRef.current) return; // one round at a time
+    if (entry.slot.status !== "done") return;
+    const assessment = entry.slot.assessment;
+    if (assessment.next_step.type !== "DATA_CAPTURE") return;
+    const requestedData = assessment.next_step.requested_data ?? [];
+    if (requestedData.length === 0) return;
+    if (!liveAssessmentAllowed) return; // connected + different-vehicle guard
+
+    // Initial card so the tech sees "waiting" immediately (refined by onCard).
+    const firstItem = requestedData[0];
+    patchCapture(entry.id, {
+      phase: "waiting",
+      conditionLabel: firstItem?.operating_condition ?? "the requested condition",
+      signalIds: requestedData.map((rd) => rd.signal_id),
+      durationSeconds: firstItem?.capture_plan?.capture_window_seconds,
+      progress: undefined,
+      note: undefined,
+    });
+
+    // Build the resolve context from the connected vehicle.
+    const catalog = await loadCachedCatalog(
+      vehicle.make,
+      vehicle.model,
+      vehicle.year,
+    );
+    if (!catalog) {
+      patchCapture(entry.id, {
+        phase: "unavailable",
+        note: "Couldn't load this vehicle's signal catalog to set up monitoring. Open the OBD2 screen once to load it, then try again.",
+      });
+      return;
+    }
+    const selectedKeys = new Set(
+      obd2.getSelectedPids().map((p) => p.signalKey ?? signalKeyOf(p)),
+    );
+    const supportedMode01 =
+      (await loadCachedBitmask(vehicle.make, vehicle.model, vehicle.year)) ??
+      new Set<number>();
+    const resolveContext: ResolveContext = {
+      catalog: catalog.signals,
+      selectedKeys,
+      supportedMode01,
+      unsupportedKeys: obd2.getUnsupportedPids(),
+    };
+
+    // Resolve to know which signals are runnable + which to poll.
+    const resolved = resolvePlan(requestedData, resolveContext);
+    const runnable = resolved.filter((r) => r.runnable);
+    if (runnable.length === 0) {
+      const firstUnrunnable = resolved.find((r) => !r.runnable);
+      const reason =
+        firstUnrunnable && !firstUnrunnable.runnable
+          ? `${firstUnrunnable.targetSignalId} (${firstUnrunnable.detail.status === "unavailable" ? firstUnrunnable.detail.reason : "unavailable"})`
+          : "the requested signal";
+      patchCapture(entry.id, {
+        phase: "unavailable",
+        note: `Can't watch ${reason} on this vehicle. Pick a different test or capture it manually on the OBD2 screen.`,
+      });
+      return;
+    }
+
+    // Collect the resolved plan signalKeys and build descriptors to poll.
+    const planKeys = new Set<string>();
+    for (const item of runnable) {
+      if (!item.runnable) continue;
+      if (item.target.availability.status === "resolved") {
+        planKeys.add(item.target.availability.signalKey);
+      }
+      for (const g of item.gate) {
+        if (g.availability.status === "resolved") planKeys.add(g.availability.signalKey);
+      }
+    }
+    const planDescriptors = buildSelectedDescriptors(
+      catalog,
+      [...planKeys],
+      resolveContext.unsupportedKeys,
+      planKeys,
+    );
+
+    // Apply the plan to the live polling driver (existing API; in-memory only).
+    const priorSelection = obd2.getSelectedPids();
+    const merged = mergeSelection(priorSelection, planDescriptors);
+    obd2.setSelectedPids(merged);
+    if (!obd2.isPolling()) {
+      obd2.startPolling(merged);
+    }
+
+    const handoff = getObd2DiagnoseHandoff();
+    const executor = new CaptureExecutor({
+      requestedData,
+      resolveContext,
+      evidenceContext: {
+        descriptors: planDescriptors,
+        operatingCondition: condition,
+        dtcs: handoff.dtcs,
+        pendingDtcs: handoff.pendingDtcs,
+        permanentDtcs: handoff.permanentDtcs,
+        freezeFrame: handoff.freezeFrame,
+      },
+      callbacks: {
+        onCard: (u) => {
+          if (roundActiveRef.current?.complete) return; // ignore post-fire reset
+          // u.state ("waiting"|"capturing"|"complete") maps 1:1 to phase.
+          patchCapture(entry.id, {
+            phase: u.state,
+            conditionLabel: u.conditionLabel,
+            signalIds: u.signalIds,
+            durationSeconds: u.durationSeconds,
+            progress: u.progress,
+            note: undefined,
+          });
+        },
+        onEvidence: (evidence) => {
+          handleCaptureEvidence(entry, assessment, evidence);
+        },
+        onStatus: (s) => {
+          if (s.type === "paused") {
+            patchCapture(entry.id, { note: "Paused — waiting for live data…" });
+          } else if (s.type === "resumed") {
+            patchCapture(entry.id, { note: undefined });
+          }
+        },
+      },
+    });
+    captureExecutorRef.current = executor;
+    roundActiveRef.current = { entryId: entry.id, complete: false, priorSelection };
+    executor.start();
+  }
+
+  // The capture fired (or was cancelled). One round → on a real capture, send to
+  // /api/evidence-update; on cancel, just stop.
+  function handleCaptureEvidence(
+    entry: AssessmentEntry,
+    priorAssessment: DiagnosticAssessment,
+    evidence: EvidenceCaptureEntry,
+  ): void {
+    const active = roundActiveRef.current;
+    if (active) active.complete = true;
+
+    if (evidence.outcome === "cancelled") {
+      patchCapture(entry.id, { phase: "stopped", note: "Monitoring stopped." });
+      teardownRound(true);
+      return;
+    }
+
+    // Completed (or timeout with a partial window): mark complete, stop the
+    // executor + restore polling, persist the evidence, and interpret it.
+    patchCapture(entry.id, { phase: "complete", progress: 1 });
+    captureExecutorRef.current?.stop();
+    captureExecutorRef.current = null;
+    if (active) {
+      try {
+        obd2.setSelectedPids(active.priorSelection);
+      } catch {
+        // best-effort
+      }
+    }
+    const ledger = [...evidenceLedgerRef.current, evidence];
+    evidenceLedgerRef.current = ledger;
+    runEvidenceUpdate(priorAssessment, evidence, ledger);
+  }
+
+  // Send the captured evidence + prior assessment to the server and render the
+  // evolved assessment as a new anchored card; write caseState/ledger to chart.
+  async function runEvidenceUpdate(
+    priorAssessment: DiagnosticAssessment,
+    evidence: EvidenceCaptureEntry,
+    ledger: EvidenceCaptureEntry[],
+  ): Promise<void> {
+    const id = ++assessmentIdRef.current;
+    const afterMessageIndex = Math.max(messagesRef.current.length - 1, 0);
+    const withRunning: AssessmentEntry[] = [
+      ...assessmentsRef.current,
+      { id, afterMessageIndex, slot: { status: "running" } },
+    ];
+    setAssessments(withRunning);
+    assessmentsRef.current = withRunning;
+
+    try {
+      const result = await evidenceUpdate(
+        vehicle,
+        vin.trim() || null,
+        vehicle.mileage,
+        symptom.trim(),
+        priorAssessment,
+        evidence,
+        recalls,
+        tsbs,
+        diagnosticLogger.getCurrentSessionId(),
+        caseMetaRef.current?.id ?? null,
+      );
+      diagnosticLogger.log({
+        type: "assessment",
+        vehicle: vehicle.year
+          ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
+          : undefined,
+        assessment: result.assessment,
+        operatingCondition: condition,
+        apiCost: result.cost,
+      });
+      const evolved = result.assessment;
+      // REPLACE-current caseState; the prior assessment stays in assessments[]
+      // (the history). One stepsTaken line per round — the diagnostic trail.
+      const caseState: CaseStateSlot = {
+        hypotheses: evolved.hypotheses,
+        ruledOut: caseStateRef.current?.ruledOut ?? [],
+        stepsTaken: [
+          ...(caseStateRef.current?.stepsTaken ?? []),
+          {
+            action: priorAssessment.next_step.action,
+            result: `Captured evidence → ${evolved.hypotheses[0]?.name ?? "updated differential"}`,
+            at: new Date().toISOString(),
+          },
+        ],
+      };
+      caseStateRef.current = caseState;
+      const next = assessmentsRef.current.map((a) =>
+        a.id === id
+          ? { ...a, slot: { status: "done" as const, assessment: evolved } }
+          : a,
+      );
+      setAssessments(next);
+      assessmentsRef.current = next;
+      saveCase({ assessments: next, evidenceLedger: ledger, caseState });
+    } catch (err) {
+      const msg =
+        err instanceof EvidenceUpdateError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Evidence update failed.";
+      const next = assessmentsRef.current.map((a) =>
+        a.id === id
+          ? { ...a, slot: { status: "error" as const, message: msg } }
+          : a,
+      );
+      setAssessments(next);
+      assessmentsRef.current = next;
+      // The capture still happened — persist the ledger even though the
+      // interpretation failed (caseState unchanged).
+      saveCase({ assessments: next, evidenceLedger: ledger });
+    } finally {
+      roundActiveRef.current = null;
+    }
+  }
+
+  function cancelCaptureRound(): void {
+    const active = roundActiveRef.current;
+    if (!active) return;
+    patchCapture(active.entryId, { phase: "stopped", note: "Monitoring stopped." });
+    teardownRound(true);
   }
 
   const latestTurn = useMemo<AssistantTurn | null>(() => {
@@ -1046,6 +1435,13 @@ export default function Screen() {
     // connection-aware vehicle handling below is unchanged from 2A.
     caseMetaRef.current = null;
     resumedCaseRef.current = null;
+    // Stage 2C-4: stop any live capture round and drop the evidence-loop refs —
+    // the next intake is a fresh case.
+    captureExecutorRef.current?.stop();
+    captureExecutorRef.current = null;
+    roundActiveRef.current = null;
+    evidenceLedgerRef.current = [];
+    caseStateRef.current = null;
     // Only clear the vehicle when no adapter is connected. With a live
     // connection the vehicle came from the OBD2 auto-VIN flow — wiping it
     // would desync the global context from the physically-connected vehicle.
@@ -1394,8 +1790,29 @@ export default function Screen() {
                 onRerun={
                   liveAssessmentAllowed &&
                   item.entry.id === lastAssessmentId &&
-                  item.entry.slot.status !== "running"
+                  item.entry.slot.status !== "running" &&
+                  !(
+                    item.entry.capture &&
+                    (item.entry.capture.phase === "waiting" ||
+                      item.entry.capture.phase === "capturing")
+                  )
                     ? onRerunAssessment
+                    : undefined
+                }
+                onStartCapture={
+                  liveAssessmentAllowed &&
+                  item.entry.id === lastAssessmentId &&
+                  item.entry.slot.status === "done" &&
+                  item.entry.slot.assessment.next_step.type === "DATA_CAPTURE" &&
+                  !item.entry.capture
+                    ? () => startCaptureRound(item.entry)
+                    : undefined
+                }
+                onCancelCapture={
+                  item.entry.capture &&
+                  (item.entry.capture.phase === "waiting" ||
+                    item.entry.capture.phase === "capturing")
+                    ? cancelCaptureRound
                     : undefined
                 }
               />
@@ -1669,10 +2086,23 @@ function MessageRow({ message }: { message: ChatMessage }) {
 function AssessmentThreadCard({
   entry,
   onRerun,
+  onStartCapture,
+  onCancelCapture,
 }: {
   entry: AssessmentEntry;
   onRerun?: () => void;
+  // Stage 2C-4: present (from the parent) only when this card is the latest
+  // done DATA_CAPTURE assessment, live-assessment is allowed, and no round has
+  // started on it yet. MINIMAL — SUB-BATCH 2 replaces this with the hands-off
+  // per-round driving UX.
+  onStartCapture?: () => void;
+  onCancelCapture?: () => void;
 }) {
+  const cap = entry.capture ?? null;
+  const isDataCapture =
+    entry.slot.status === "done" &&
+    entry.slot.assessment.next_step.type === "DATA_CAPTURE";
+
   return (
     <View style={styles.assessmentWrap}>
       <Text style={styles.assistantLabel}>STRUCTURED ASSESSMENT</Text>
@@ -1697,6 +2127,47 @@ function AssessmentThreadCard({
           </Text>
         </View>
       )}
+
+      {/* Stage 2C-4 capture round — driven by the real detector via the
+          executor's onCard. Lives under the DATA_CAPTURE assessment that
+          ordered it (its reserved home). */}
+      {cap && (cap.phase === "waiting" || cap.phase === "capturing" || cap.phase === "complete") && (
+        <CaptureCard
+          state={cap.phase}
+          conditionLabel={cap.conditionLabel}
+          signalIds={cap.signalIds}
+          durationSeconds={cap.durationSeconds}
+          progress={cap.progress}
+          onCancel={
+            cap.phase !== "complete" && onCancelCapture
+              ? onCancelCapture
+              : undefined
+          }
+        />
+      )}
+      {cap && (cap.phase === "stopped" || cap.phase === "unavailable" || cap.phase === "error") && (
+        <View style={[styles.captureNoteBox]}>
+          <Text style={styles.captureNoteText}>
+            {cap.note ?? "Monitoring stopped."}
+          </Text>
+        </View>
+      )}
+
+      {/* Minimal Start affordance (SUB-BATCH 2 replaces with the driving UX). */}
+      {isDataCapture && onStartCapture && !cap && (
+        <TouchableOpacity
+          style={styles.startCaptureBtn}
+          onPress={onStartCapture}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Start monitoring for the requested data"
+        >
+          <Text style={styles.startCaptureBtnText}>
+            ◉ Start monitoring
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {onRerun && (
         <TouchableOpacity
           style={styles.rerunLink}
@@ -2076,6 +2547,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.2,
+  },
+  // Stage 2C-4 capture-round affordances (minimal; SUB-BATCH 2 reworks the UX).
+  startCaptureBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    minHeight: HIT_TARGET,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    backgroundColor: colors.accentFade,
+    paddingHorizontal: 20,
+  },
+  startCaptureBtnText: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  captureNoteBox: {
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 12,
+  },
+  captureNoteText: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   assistantLabel: {
     fontSize: 10,

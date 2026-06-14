@@ -2,17 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import {
-  OPERATING_CONDITION_LABELS,
   type ConfidenceLevel,
   type DiagnosticAssessment,
   type Hypothesis,
-  type OperatingCondition,
-  type RequestedDataItem,
   type Stance,
 } from "../../lib/assessmentTypes";
-import { DEBUG_UI } from "../../lib/debug";
 import { HIT_TARGET, colors } from "../../lib/theme";
-import CaptureCard, { type CaptureCardState } from "./CaptureCard";
 
 // Structured assessment result display — stance banner, leading hypothesis,
 // next step, full differential, data ceiling, unverified specs. Extracted
@@ -117,18 +112,10 @@ export default function AssessmentResult({
         </View>
       )}
 
-      {/* Stage 2 capture-card placeholder — mocked states, dev/preview only.
-          Lives here because this is its real future home: under a
-          DATA_CAPTURE next step, driven by requested_data. */}
-      {DEBUG_UI && (
-        <CaptureCardDevPreview
-          requestedData={
-            assessment.next_step.type === "DATA_CAPTURE"
-              ? (assessment.next_step.requested_data ?? [])
-              : []
-          }
-        />
-      )}
+      {/* Stage 2C-4: the capture card is now driven by the real detector/
+          executor in the diagnose thread (AssessmentThreadCard), under the
+          DATA_CAPTURE next step. The DEBUG_UI mock preview that used to live
+          here has been removed now that the real round drives it. */}
 
       {onReset && (
         <TouchableOpacity style={styles.resetBtn} onPress={onReset} activeOpacity={0.85}>
@@ -137,59 +124,6 @@ export default function AssessmentResult({
         </TouchableOpacity>
       )}
     </>
-  );
-}
-
-// Dev-only wrapper that drives CaptureCard with mocked states — tap to
-// cycle waiting → capturing → complete. Renders on every assessment (with
-// mock fallback values when the next step isn't DATA_CAPTURE) so the
-// placeholder is always reachable for review. Removed when Stage 2's real
-// capture executor starts driving the card.
-const DEV_PREVIEW_STATES: CaptureCardState[] = [
-  "waiting",
-  "capturing",
-  "complete",
-];
-
-function CaptureCardDevPreview({
-  requestedData,
-}: {
-  requestedData: RequestedDataItem[];
-}) {
-  const [stateIndex, setStateIndex] = useState(0);
-  const state = DEV_PREVIEW_STATES[stateIndex];
-
-  const first = requestedData[0] ?? null;
-  const conditionLabel = first
-    ? (OPERATING_CONDITION_LABELS[first.operating_condition as OperatingCondition] ??
-      first.operating_condition)
-    : "Warm Idle";
-  const signalIds = first
-    ? requestedData.map((rd) => rd.signal_id)
-    : ["RPM", "STFT_B1", "O2_B1S1"];
-  const durationSeconds = first ? first.duration_seconds : 30;
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.8}
-      onPress={() => setStateIndex((i) => (i + 1) % DEV_PREVIEW_STATES.length)}
-      accessibilityRole="button"
-      accessibilityLabel="Capture card preview — tap to cycle states"
-    >
-      <View style={styles.devPreviewWrap}>
-        <Text style={styles.devPreviewLabel}>
-          DEV PREVIEW · STAGE 2 CAPTURE CARD · TAP TO CYCLE
-        </Text>
-        <CaptureCard
-          state={state}
-          conditionLabel={conditionLabel}
-          signalIds={signalIds}
-          durationSeconds={durationSeconds}
-          progress={state === "capturing" ? 0.4 : undefined}
-          onCancel={state !== "complete" ? () => {} : undefined}
-        />
-      </View>
-    </TouchableOpacity>
   );
 }
 
@@ -580,16 +514,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.infoText,
     lineHeight: 17,
-  },
-  // Dev preview wrapper (capture-card placeholder)
-  devPreviewWrap: {
-    gap: 6,
-  },
-  devPreviewLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1.2,
-    color: colors.muted,
   },
   // Reset button
   resetBtn: {
