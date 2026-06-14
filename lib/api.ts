@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import type {
   ApiCostData,
+  DiagnoseTurnResponse,
   DiagnosticAssessment,
   DiagnosticSnapshot,
   EvidenceUpdateResponse,
@@ -470,6 +471,89 @@ export async function evidenceUpdate(
     assessment: result.assessment,
     cost: result.cost ?? null,
   };
+}
+
+export class DiagnoseTurnError extends Error {}
+
+// Stage 2C-4 SB4: the UNIFIED diagnostic turn. One call per turn to the SB3
+// /api/diagnose-turn brain, which commits to exactly one move and returns a
+// discriminated turn (question | assessment | diagnosis). Replaces the parallel
+// assess + diagnose double-fire for the /diagnose thread. `messages` is the
+// serialized case narrative (buildTurnHistory on the phone); `snapshot` +
+// `connected` are sent only when a vehicle is connected AND the 2B
+// different-vehicle guard passes. Mirrors diagnose()/assess() error+parse
+// discipline; truncates the history like diagnose() does.
+export async function diagnoseTurn(params: {
+  vehicle: VehicleInfo;
+  vin: string | null;
+  mileage: string;
+  complaint: string;
+  messages: ChatMessage[];
+  snapshot: DiagnosticSnapshot | null;
+  connected: boolean;
+  recalls?: Recall[];
+  tsbs?: Tsb[];
+  sessionId?: string | null;
+}): Promise<DiagnoseTurnResponse> {
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new DiagnoseTurnError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+
+  const url = `${BASE_URL}/api/diagnose-turn`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "ngrok-skip-browser-warning": "true",
+  };
+  const bodyStr = JSON.stringify({
+    vehicle: params.vehicle,
+    vin: params.vin,
+    mileage: params.mileage,
+    complaint: params.complaint,
+    messages: truncateForApi(params.messages),
+    snapshot: params.snapshot,
+    connected: params.connected,
+    recalls: params.recalls ?? [],
+    tsbs: params.tsbs ?? [],
+    sessionId: params.sessionId ?? null,
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: bodyStr });
+  } catch {
+    throw new DiagnoseTurnError(
+      "Network error. Check your connection and try again.",
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch {
+    throw new DiagnoseTurnError(`Couldn't read server response (${res.status}).`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new DiagnoseTurnError(
+      `Server returned an unexpected response (${res.status}).`,
+    );
+  }
+
+  if (!res.ok) {
+    const msg =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : `Request failed (${res.status}).`;
+    throw new DiagnoseTurnError(msg);
+  }
+
+  const resp = json as DiagnoseTurnResponse;
+  return { turn: resp.turn, cost: resp.cost ?? null };
 }
 
 // Looks up a DTC against the backend's SAE + manufacturer-specific database
