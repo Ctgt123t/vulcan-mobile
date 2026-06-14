@@ -45,8 +45,10 @@ import { CaptureExecutor } from "../lib/captureExecutor";
 import { resolvePlan, type ResolveContext } from "../lib/captureResolver";
 import {
   buildSelectedDescriptors,
+  fetchPidCatalog,
   loadCachedBitmask,
   loadCachedCatalog,
+  saveCatalog,
 } from "../lib/pidCatalog";
 import {
   type DiagnoseTurn,
@@ -879,16 +881,24 @@ export default function Screen() {
       note: undefined,
     });
 
-    // Build the resolve context from the connected vehicle.
-    const catalog = await loadCachedCatalog(
+    // Build the resolve context from the connected vehicle. DB-2: prefer the
+    // cached catalog (now persisted app-wide on connect via VehicleContext), and
+    // fall back to a direct network fetch (+persist) for the cold-cache race
+    // (e.g. resume → tap Start before the app-wide prefetch lands) or a vehicle
+    // never warmed. Only a true miss (no cache AND no network) blocks the round.
+    let catalog = await loadCachedCatalog(
       vehicle.make,
       vehicle.model,
       vehicle.year,
     );
     if (!catalog) {
+      catalog = await fetchPidCatalog(vehicle.make, vehicle.model, vehicle.year);
+      if (catalog) saveCatalog(catalog).catch(() => {});
+    }
+    if (!catalog) {
       patchCapture(entry.id, {
         phase: "unavailable",
-        note: "Couldn't load this vehicle's signal catalog to set up monitoring. Open the OBD2 screen once to load it, then try again.",
+        note: "Couldn't load this vehicle's signal catalog to set up monitoring — check your connection and try again.",
       });
       return;
     }

@@ -11,6 +11,7 @@ import {
 import { Alert } from "react-native";
 import { decodeVin } from "../lib/api";
 import { obd2 } from "../lib/obd2";
+import { fetchPidCatalog, saveCatalog } from "../lib/pidCatalog";
 import { fetchRecalls } from "../lib/recalls";
 import { fetchTsbs } from "../lib/tsbs";
 import type { Recall, Tsb, VehicleInfo } from "../lib/types";
@@ -142,15 +143,22 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     } finally {
       setLookupBusy(false);
     }
-    // PID prefetch — fire-and-forget. Backend caches per vehicle so this
-    // costs nothing on repeat use.
-    const baseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(/\/+$/, "");
-    if (baseUrl && v.year && v.make && v.model) {
-      const url = `${baseUrl}/api/pids/${encodeURIComponent(v.make)}/${encodeURIComponent(v.model)}/${encodeURIComponent(v.year)}`;
-      fetch(url, {
-        method: "GET",
-        headers: { "ngrok-skip-browser-warning": "true" },
-      }).catch(() => {});
+    // PID catalog prefetch — DB-2: fetch AND PERSIST the catalog to the phone's
+    // per-vehicle cache (vulcan:pids:catalog:<make|model|year>), not just warm
+    // the backend. Previously this was a raw fetch that only warmed the server,
+    // so the phone catalog cache was written ONLY by the PID picker screen —
+    // leaving startCaptureRound (the capture flow) unable to load it on any
+    // Diagnose-first / app-level-connect flow (defect Issue 2). Persisting it
+    // here, on every vehicle change (which fires on connect + VIN decode), is
+    // the lifted-app-wide catalog load the SB2 merge deferred. Fire-and-forget;
+    // saveCatalog keys identically to loadCachedCatalog so the capture flow finds
+    // it. saveCatalog also warms the server cache as a side effect of the fetch.
+    if (v.year && v.make && v.model) {
+      fetchPidCatalog(v.make, v.model, v.year)
+        .then((catalog) => {
+          if (catalog) saveCatalog(catalog).catch(() => {});
+        })
+        .catch(() => {});
     }
   }, []);
 
