@@ -1,5 +1,5 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -192,7 +192,17 @@ export default function Screen() {
   // adapter is connected and scan data exists, an assessment runs
   // automatically on Start Diagnosis — in parallel with the conversational
   // call — and renders as a card in the thread.
-  const { isConnected } = useObd2();
+  const { isConnected, status: obd2Status } = useObd2();
+  // SB2-D: opening Diagnose attempts a silent reconnect to the remembered
+  // adapter (gated + mutex-safe; no-op if already connected, no saved adapter,
+  // or permissions not granted) so the tech doesn't have to visit the OBD2
+  // screen first. The app-level owner covers launch + foreground; this covers
+  // in-app navigation to Diagnose.
+  useFocusEffect(
+    useCallback(() => {
+      obd2.ensureAutoReconnect().catch(() => {});
+    }, []),
+  );
   const [condition, setCondition] = useState<OperatingCondition>("WARM_IDLE");
   const [assessments, setAssessments] = useState<AssessmentEntry[]>([]);
   const assessmentIdRef = useRef(0);
@@ -1704,6 +1714,38 @@ export default function Screen() {
                 </View>
               )}
 
+              {/* SB2-D: when no adapter is connected, offer to connect one
+                  (routes to the OBD2 picker — no duplicate picker here) so live
+                  monitoring is reachable without hunting for the OBD2 screen. */}
+              {!isConnected && (
+                <View style={styles.singleField}>
+                  <Text style={styles.label}>LIVE OBD2 DATA</Text>
+                  {obd2Status === "connecting" || obd2Status === "handshaking" ? (
+                    <Text style={styles.autoAssessNote}>
+                      Connecting to your OBD2 adapter…
+                    </Text>
+                  ) : (
+                    <>
+                      <Text style={styles.autoAssessNote}>
+                        No adapter connected. Connect one to add a live-data
+                        assessment and monitoring to this diagnosis.
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.connectAdapterBtn}
+                        onPress={() => router.push("/obd2")}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Connect an OBD2 adapter"
+                      >
+                        <Text style={styles.connectAdapterBtnText}>
+                          ⚲ Connect an OBD2 adapter
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              )}
+
               {canAutoAssess && (
                 <View style={styles.singleField}>
                   <Text style={styles.label}>OPERATING CONDITION</Text>
@@ -2544,6 +2586,23 @@ const styles = StyleSheet.create({
     color: colors.muted,
     lineHeight: 17,
     marginTop: 8,
+  },
+  // SB2-D: "Connect an OBD2 adapter" affordance (routes to the OBD2 picker).
+  connectAdapterBtn: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    minHeight: HIT_TARGET - 8,
+    justifyContent: "center",
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    backgroundColor: colors.accentFade,
+    paddingHorizontal: 16,
+  },
+  connectAdapterBtnText: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "700",
   },
   conditionHelp: {
     fontSize: 12,
