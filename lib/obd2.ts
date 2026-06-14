@@ -1412,6 +1412,46 @@ class Obd2Manager {
 
   // ---------- Connect ----------
 
+  // Serialize connection attempts so the proactive teardownAfterDisconnect() at
+  // the start of every connect can never overlap another attempt's teardown +
+  // transport setup — the orphaned-transport / poisoned-command-queue race the
+  // recent stabilization removed. Concurrent attempts to the SAME device
+  // COALESCE onto one in-flight promise (the common app-level case: launch +
+  // AppState-active + a screen all firing the saved-adapter auto-reconnect); a
+  // different target waits for the in-flight attempt to settle first. This is
+  // the prerequisite that makes app-wide connect triggering safe.
+  private connectInFlight: Promise<{ ok: boolean; message: string }> | null = null;
+  private connectInFlightKey: string | null = null;
+
+  private async runExclusiveConnect(
+    key: string,
+    fn: () => Promise<{ ok: boolean; message: string }>,
+  ): Promise<{ ok: boolean; message: string }> {
+    if (this.connectInFlight) {
+      if (this.connectInFlightKey === key) {
+        this.log("•", `Connect already in progress for ${key} — coalescing`);
+        return this.connectInFlight;
+      }
+      this.log("•", "Connect in progress — waiting for it to settle first");
+      try {
+        await this.connectInFlight;
+      } catch {
+        // The prior attempt's failure is its own caller's concern.
+      }
+    }
+    const run = fn();
+    this.connectInFlight = run;
+    this.connectInFlightKey = key;
+    try {
+      return await run;
+    } finally {
+      if (this.connectInFlight === run) {
+        this.connectInFlight = null;
+        this.connectInFlightKey = null;
+      }
+    }
+  }
+
   async connect(deviceId: string): Promise<{ ok: boolean; message: string }> {
     this.stopScan();
     const known = this.discovered.get(deviceId);
@@ -1422,64 +1462,66 @@ class Obd2Manager {
       };
     }
 
-    // Proactively tear down any prior connection BEFORE opening a new one. A
-    // vehicle switch may never have fired a disconnect event (adapter physically
-    // moved, socket silently dead), leaving an orphaned transport, a running
-    // poll loop, and — critically — a poisoned command queue. teardownAfterDisconnect
-    // (non-awaiting: it fire-and-forgets the old transport.disconnect) clears all
-    // of that and resets commandQueue. No-op on a clean fresh start (transport
-    // null, stopPolling no-op, queue reset harmless).
-    this.teardownAfterDisconnect();
-
-    this.setStatus("connecting", `Connecting via ${known.transport}…`);
-    this.log("•", `Connecting to ${known.name} (${known.transport})`);
-
-    if (known.transport === "classic") {
-      if (Platform.OS !== "android") {
-        return {
-          ok: false,
-          message: "Classic Bluetooth isn't supported on this platform.",
-        };
-      }
-      this.transport = new ClassicTransport(this.log);
-    } else {
-      if (!this.bleManager) {
-        return { ok: false, message: "Bluetooth not available." };
-      }
-      this.transport = new BleTransport(this.bleManager, this.log);
-    }
-
-    const onDisconnected = () => {
-      this.log("•", "Device disconnected");
+    return this.runExclusiveConnect(deviceId, async () => {
+      // Proactively tear down any prior connection BEFORE opening a new one. A
+      // vehicle switch may never have fired a disconnect event (adapter physically
+      // moved, socket silently dead), leaving an orphaned transport, a running
+      // poll loop, and — critically — a poisoned command queue. teardownAfterDisconnect
+      // (non-awaiting: it fire-and-forgets the old transport.disconnect) clears all
+      // of that and resets commandQueue. No-op on a clean fresh start (transport
+      // null, stopPolling no-op, queue reset harmless).
       this.teardownAfterDisconnect();
-    };
 
-    const result = await this.transport.connect(deviceId, onDisconnected);
-    if (!result.ok) {
-      this.transport = null;
-      this.setStatus("error", result.message);
-      return result;
-    }
+      this.setStatus("connecting", `Connecting via ${known.transport}…`);
+      this.log("•", `Connecting to ${known.name} (${known.transport})`);
 
-    this.setStatus("handshaking", "Handshaking with adapter…");
-    const handshakeFailure = await this.runHandshake();
-    if (handshakeFailure) {
-      await this.disconnect();
-      return { ok: false, message: handshakeFailure };
-    }
+      if (known.transport === "classic") {
+        if (Platform.OS !== "android") {
+          return {
+            ok: false,
+            message: "Classic Bluetooth isn't supported on this platform.",
+          };
+        }
+        this.transport = new ClassicTransport(this.log);
+      } else {
+        if (!this.bleManager) {
+          return { ok: false, message: "Bluetooth not available." };
+        }
+        this.transport = new BleTransport(this.bleManager, this.log);
+      }
 
-    this.setStatus(
-      "connected",
-      this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
-    );
-    // Remember this adapter so the next session can auto-reconnect without
-    // making the user re-scan. Replaces any previously saved adapter.
-    saveAdapter({
-      deviceId,
-      name: known.name,
-      transport: known.transport,
-    }).catch(() => {});
-    return { ok: true, message: "Connected" };
+      const onDisconnected = () => {
+        this.log("•", "Device disconnected");
+        this.teardownAfterDisconnect();
+      };
+
+      const result = await this.transport.connect(deviceId, onDisconnected);
+      if (!result.ok) {
+        this.transport = null;
+        this.setStatus("error", result.message);
+        return result;
+      }
+
+      this.setStatus("handshaking", "Handshaking with adapter…");
+      const handshakeFailure = await this.runHandshake();
+      if (handshakeFailure) {
+        await this.disconnect();
+        return { ok: false, message: handshakeFailure };
+      }
+
+      this.setStatus(
+        "connected",
+        this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
+      );
+      // Remember this adapter so the next session can auto-reconnect without
+      // making the user re-scan. Replaces any previously saved adapter.
+      saveAdapter({
+        deviceId,
+        name: known.name,
+        transport: known.transport,
+      }).catch(() => {});
+      return { ok: true, message: "Connected" };
+    });
   }
 
   // Auto-reconnect path: connect to a previously-saved adapter without going
@@ -1501,66 +1543,68 @@ class Obd2Manager {
       return { ok: false, message: perm.reason || "Permission denied." };
     }
 
-    // Proactively tear down any prior connection before reconnecting — same
-    // rationale as connect(). No-op on a clean fresh start (the common
-    // auto-reconnect-on-mount case), where it only resets an already-empty
-    // command queue.
-    this.teardownAfterDisconnect();
-
-    this.setStatus(
-      "connecting",
-      `Connecting to ${saved.name}…`,
-    );
-    this.log("•", `Auto-connecting to ${saved.name} (${saved.transport})`);
-
-    if (saved.transport === "classic") {
-      if (Platform.OS !== "android") {
-        const msg = "Classic Bluetooth isn't supported on this platform.";
-        this.setStatus("idle", "");
-        return { ok: false, message: msg };
-      }
-      this.transport = new ClassicTransport(this.log);
-    } else {
-      if (!this.bleManager) {
-        const msg = "Bluetooth not available.";
-        this.setStatus("idle", "");
-        return { ok: false, message: msg };
-      }
-      this.transport = new BleTransport(this.bleManager, this.log);
-    }
-
-    const onDisconnected = () => {
-      this.log("•", "Device disconnected");
+    return this.runExclusiveConnect(saved.deviceId, async () => {
+      // Proactively tear down any prior connection before reconnecting — same
+      // rationale as connect(). No-op on a clean fresh start (the common
+      // auto-reconnect-on-mount case), where it only resets an already-empty
+      // command queue.
       this.teardownAfterDisconnect();
-    };
 
-    const result = await this.transport.connect(saved.deviceId, onDisconnected);
-    if (!result.ok) {
-      this.transport = null;
-      // Reset to idle (not "error") so the screen can show its own friendly
-      // fallback prompt rather than the raw transport error.
-      this.setStatus("idle", "");
-      return result;
-    }
+      this.setStatus(
+        "connecting",
+        `Connecting to ${saved.name}…`,
+      );
+      this.log("•", `Auto-connecting to ${saved.name} (${saved.transport})`);
 
-    this.setStatus("handshaking", "Handshaking with adapter…");
-    const handshakeFailure = await this.runHandshake();
-    if (handshakeFailure) {
-      await this.disconnect();
-      return { ok: false, message: handshakeFailure };
-    }
+      if (saved.transport === "classic") {
+        if (Platform.OS !== "android") {
+          const msg = "Classic Bluetooth isn't supported on this platform.";
+          this.setStatus("idle", "");
+          return { ok: false, message: msg };
+        }
+        this.transport = new ClassicTransport(this.log);
+      } else {
+        if (!this.bleManager) {
+          const msg = "Bluetooth not available.";
+          this.setStatus("idle", "");
+          return { ok: false, message: msg };
+        }
+        this.transport = new BleTransport(this.bleManager, this.log);
+      }
 
-    this.setStatus(
-      "connected",
-      this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
-    );
-    // Refresh the timestamp so the most-recently-used adapter stays accurate.
-    saveAdapter({
-      deviceId: saved.deviceId,
-      name: saved.name,
-      transport: saved.transport,
-    }).catch(() => {});
-    return { ok: true, message: "Connected" };
+      const onDisconnected = () => {
+        this.log("•", "Device disconnected");
+        this.teardownAfterDisconnect();
+      };
+
+      const result = await this.transport.connect(saved.deviceId, onDisconnected);
+      if (!result.ok) {
+        this.transport = null;
+        // Reset to idle (not "error") so the screen can show its own friendly
+        // fallback prompt rather than the raw transport error.
+        this.setStatus("idle", "");
+        return result;
+      }
+
+      this.setStatus("handshaking", "Handshaking with adapter…");
+      const handshakeFailure = await this.runHandshake();
+      if (handshakeFailure) {
+        await this.disconnect();
+        return { ok: false, message: handshakeFailure };
+      }
+
+      this.setStatus(
+        "connected",
+        this.protocolName !== "unknown" ? `Connected · ${this.protocolName}` : "Connected",
+      );
+      // Refresh the timestamp so the most-recently-used adapter stays accurate.
+      saveAdapter({
+        deviceId: saved.deviceId,
+        name: saved.name,
+        transport: saved.transport,
+      }).catch(() => {});
+      return { ok: true, message: "Connected" };
+    });
   }
 
   async loadSavedAdapter(): Promise<SavedAdapter | null> {
