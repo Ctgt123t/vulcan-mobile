@@ -92,6 +92,11 @@ export interface EvidenceCaptureEntry {
   // bind them). Distinct from observed.absentSignalNames (selected but no value
   // in the window). The "phone is honest about what it can't carry" report.
   unavailableSignals?: { signal_id: string; reason: string }[];
+  // ---- 2C-4 SB4 additive field (optional; migrator passes it through) ----
+  // Thread anchor stamped when the round completes (= the message index this
+  // capture follows), so SB4 history serialization (buildTurnHistory) can order
+  // this capture against the surrounding assessments — including on resume.
+  afterMessageIndex?: number;
 }
 
 // The fire-time context recorded by the 2C-2 detector (captureDetector.ts).

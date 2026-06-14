@@ -31,11 +31,13 @@ import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
   AssessError,
   DiagnoseError,
+  DiagnoseTurnError,
   EvidenceUpdateError,
   VinDecodeError,
   assess,
   decodeVin,
   diagnose,
+  diagnoseTurn,
   evidenceUpdate,
   isLikelyVin,
 } from "../lib/api";
@@ -47,10 +49,17 @@ import {
   loadCachedCatalog,
 } from "../lib/pidCatalog";
 import {
+  type DiagnoseTurn,
   type DiagnosticAssessment,
+  type DiagnosticSnapshot,
   type OperatingCondition,
 } from "../lib/assessmentTypes";
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
+import {
+  buildTurnHistory,
+  type HistoryAssessment,
+  type HistoryCapture,
+} from "../lib/turnHistory";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { setDiagnoseSessionActive } from "../lib/activeDiagnoseSession";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
@@ -131,6 +140,10 @@ interface AssessmentEntry {
   // Present only on a DATA_CAPTURE assessment whose capture round is in
   // progress / done this session. Runtime-only; SavedAssessmentEntry omits it.
   capture?: CaptureUiState | null;
+  // Wall-clock time this assessment resolved (set on done; restored from the
+  // saved entry on resume). SB4 history serialization orders done assessments
+  // against captured-evidence results by this timestamp.
+  completedAt?: string;
 }
 
 type ThreadRow =
@@ -551,6 +564,9 @@ export default function Screen() {
         sa.result.status === "done"
           ? { status: "done", assessment: sa.result.assessment }
           : { status: "error", message: sa.result.message },
+      // Restore the resolve time so a resumed case serializes its history in
+      // true order (SB4); ledger captures carry their own afterMessageIndex.
+      completedAt: sa.completedAt,
     }));
     setAssessments(restored);
     assessmentsRef.current = restored;
@@ -634,10 +650,14 @@ export default function Screen() {
   const canAutoAssess =
     isConnected && (assessDescriptors.length > 0 || assessDtcCount > 0);
 
-  // Gate for actually RUNNING an assessment — the data-availability gate AND
-  // the different-vehicle guard. Fresh sessions: identical to canAutoAssess.
-  // Resumed sessions: additionally require the live car to be the case car.
-  const liveAssessmentAllowed = canAutoAssess && liveVehicleMatchesCase();
+  // SB4: the 2B-guarded live connection — a vehicle is connected AND it's this
+  // case's vehicle (fresh sessions always pass the guard). The SOLE gate for
+  // sending a live snapshot and running a capture. It deliberately does NOT
+  // require pre-selected signals/DTCs (the old canAutoAssess/liveAssessmentAllowed
+  // condition): a brain-requested capture resolves + selects its own PIDs, so the
+  // Start gate must be available even with nothing pre-selected. canAutoAssess
+  // remains only for the intake-screen "live data available" affordance.
+  const captureConnectionOk = isConnected && liveVehicleMatchesCase();
   // When resumed + connected but the guard fails, explain why the live path is
   // off (two distinct reasons → two messages).
   const resumeBlockBanner =
@@ -715,6 +735,9 @@ export default function Screen() {
     );
   }
 
+  // DEAD (SB4): the thread no longer fires /api/assess directly — the unified
+  // brain (runDiagnoseTurn) emits assessments. Kept until the focused dead-code
+  // cleanup pass (with the unused assess() client); not called from anywhere.
   async function runAssessment(afterMessageIndex: number, complaintText: string) {
     const id = ++assessmentIdRef.current;
     const withRunning: AssessmentEntry[] = [
@@ -843,7 +866,7 @@ export default function Screen() {
     if (assessment.next_step.type !== "DATA_CAPTURE") return;
     const requestedData = assessment.next_step.requested_data ?? [];
     if (requestedData.length === 0) return;
-    if (!liveAssessmentAllowed) return; // connected + different-vehicle guard
+    if (!captureConnectionOk) return; // connected + different-vehicle guard (2B)
 
     // Initial card so the tech sees "waiting" immediately (refined by onCard).
     const firstItem = requestedData[0];
@@ -994,9 +1017,16 @@ export default function Screen() {
         // best-effort
       }
     }
-    const ledger = [...evidenceLedgerRef.current, evidence];
+    // Stamp the thread anchor (SB4) so history serialization can order this
+    // capture against the surrounding assessments — including after a resume.
+    // Done here (not in the executor) so the 2C-4 executor stays untouched.
+    const stamped: EvidenceCaptureEntry = {
+      ...evidence,
+      afterMessageIndex: Math.max(messagesRef.current.length - 1, 0),
+    };
+    const ledger = [...evidenceLedgerRef.current, stamped];
     evidenceLedgerRef.current = ledger;
-    runEvidenceUpdate(priorAssessment, evidence, ledger);
+    runEvidenceUpdate(priorAssessment, stamped, ledger);
   }
 
   // Send the captured evidence + prior assessment to the server and render the
@@ -1055,7 +1085,11 @@ export default function Screen() {
       caseStateRef.current = caseState;
       const next = assessmentsRef.current.map((a) =>
         a.id === id
-          ? { ...a, slot: { status: "done" as const, assessment: evolved } }
+          ? {
+              ...a,
+              slot: { status: "done" as const, assessment: evolved },
+              completedAt: new Date().toISOString(),
+            }
           : a,
       );
       setAssessments(next);
@@ -1139,8 +1173,10 @@ export default function Screen() {
   const lastAssessmentId =
     assessments.length > 0 ? assessments[assessments.length - 1].id : null;
 
+  // "Re-run" re-fires the unified brain (SB4 DECISION 2) so the affordance
+  // routes through the one brain instead of the retired /api/assess path.
   function onRerunAssessment() {
-    runAssessment(Math.max(messages.length - 1, 0), symptom.trim());
+    void runDiagnoseTurn();
   }
 
   function updateVehicle<K extends keyof VehicleInfo>(
@@ -1153,6 +1189,9 @@ export default function Screen() {
     setVehicleManually({ ...vehicle, [field]: value }, vin || null).catch(() => {});
   }
 
+  // DEAD (SB4): the thread no longer fires /api/diagnose directly — the unified
+  // brain (runDiagnoseTurn) drives the conversation. Kept until the focused
+  // dead-code cleanup pass (with the unused diagnose() client); not called.
   async function callApi(nextMessages: ChatMessage[]): Promise<void> {
     setLoading(true);
     setError(null);
@@ -1191,6 +1230,148 @@ export default function Screen() {
     }
   }
 
+  // ---- Stage 2C-4 SB4: the UNIFIED diagnostic turn ----
+  // ONE call per turn to the unified brain (/api/diagnose-turn) — replaces the
+  // old parallel assess + diagnose double-fire. The brain sees the serialized
+  // case narrative (buildTurnHistory) + a live snapshot WHEN a vehicle is
+  // connected AND the 2B different-vehicle guard passes, then commits to exactly
+  // one move: a conversational question, a structured assessment (a DATA_CAPTURE
+  // next-step IS "request a live capture" — the existing 2C-4 executor runs it
+  // and /api/evidence-update interprets it), or a committed diagnosis. The old
+  // auto-assess-on-connect is now BRAIN behavior: a connected start with a
+  // live-data complaint makes the brain choose an assessment+capture itself.
+
+  // Render one discriminated turn onto the EXISTING tracks: question / diagnosis
+  // append an assistant ChatMessage (AssistantTurn JSON, as today); assessment
+  // appends a done AssessmentEntry (a DATA_CAPTURE one arms the existing Start
+  // gate). No card / anchored-slot / keyboard changes.
+  function dispatchTurn(turn: DiagnoseTurn): void {
+    if (turn.kind === "assessment") {
+      const id = ++assessmentIdRef.current;
+      const afterMessageIndex = Math.max(messagesRef.current.length - 1, 0);
+      const entry: AssessmentEntry = {
+        id,
+        afterMessageIndex,
+        slot: { status: "done", assessment: turn.assessment },
+        completedAt: new Date().toISOString(),
+      };
+      const next = [...assessmentsRef.current, entry];
+      setAssessments(next);
+      assessmentsRef.current = next;
+      saveCase({ assessments: next });
+      return;
+    }
+    // question | diagnosis → an assistant turn in the message thread (the exact
+    // AssistantTurn JSON shape MessageRow / Results already render).
+    const assistantTurn: AssistantTurn =
+      turn.kind === "question"
+        ? { kind: "question", question: turn.question, diagnosis: null }
+        : { kind: "diagnosis", question: null, diagnosis: turn.diagnosis };
+    const appended: ChatMessage[] = [
+      ...messagesRef.current,
+      { role: "assistant", content: JSON.stringify(assistantTurn) },
+    ];
+    setMessages(appended);
+    messagesRef.current = appended;
+    saveCase({ messages: appended });
+  }
+
+  async function runDiagnoseTurn(): Promise<void> {
+    setLoading(true);
+    setError(null);
+
+    // captureConnectionOk (hoisted) is the 2B-guarded live connection; when it
+    // fails (resumed + different / unprovable car) we send connected:false + no
+    // snapshot so the brain can never reason over or capture the wrong car's
+    // live data — preserving the Stage 2B guarantee.
+    let snapshot: DiagnosticSnapshot | null = null;
+    if (captureConnectionOk) {
+      const handoff = getObd2DiagnoseHandoff();
+      const descriptors =
+        handoff.selectedDescriptors.length > 0
+          ? handoff.selectedDescriptors
+          : obd2.getSelectedPids();
+      const ringBuffer = obd2.captureSnapshot(5000);
+      snapshot = buildDiagnosticSnapshot(
+        ringBuffer,
+        descriptors,
+        condition,
+        handoff.dtcs,
+        handoff.pendingDtcs,
+        handoff.permanentDtcs,
+        handoff.freezeFrame,
+      );
+    }
+
+    // Serialize the full case narrative the brain reasons on (chat + done
+    // assessments + captured evidence), time-ordered + alternating. The client
+    // truncates it (first complaint + last N).
+    const historyAssessments: HistoryAssessment[] = [];
+    for (const a of assessmentsRef.current) {
+      if (a.slot.status === "done") {
+        historyAssessments.push({
+          afterMessageIndex: a.afterMessageIndex,
+          completedAt: a.completedAt ?? new Date().toISOString(),
+          assessment: a.slot.assessment,
+        });
+      }
+    }
+    const historyCaptures: HistoryCapture[] = evidenceLedgerRef.current.map(
+      (e) => ({
+        afterMessageIndex:
+          typeof e.afterMessageIndex === "number"
+            ? e.afterMessageIndex
+            : Math.max(messagesRef.current.length - 1, 0),
+        capturedAt: e.capturedAt,
+        entry: e,
+      }),
+    );
+    const history = buildTurnHistory(
+      messagesRef.current,
+      historyAssessments,
+      historyCaptures,
+    );
+
+    try {
+      const result = await diagnoseTurn({
+        vehicle,
+        vin: vin.trim() || null,
+        mileage: vehicle.mileage,
+        complaint: symptom.trim(),
+        messages: history,
+        snapshot,
+        connected: captureConnectionOk,
+        recalls,
+        tsbs,
+        sessionId: diagnosticLogger.getCurrentSessionId(),
+      });
+      dispatchTurn(result.turn);
+      if (result.cost) {
+        diagnosticLogger.log({
+          type: "diagnose_turn",
+          vehicle: vehicle.year
+            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
+            : undefined,
+          callType: "diagnose-turn",
+          diagnoseTurnKind: result.turn.kind,
+          apiCost: result.cost,
+        });
+      }
+    } catch (err) {
+      // Graceful degradation: the turn failed, but the conversation survives —
+      // surface the error and let the tech retry with another message.
+      const msg =
+        err instanceof DiagnoseTurnError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Unexpected error. Try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function intakeValid(): boolean {
     return (
       vehicle.year.trim().length > 0 &&
@@ -1215,13 +1396,10 @@ export default function Screen() {
     messagesRef.current = [first];
     setPhase("chat");
     saveCase({ messages: [first] });
-    if (liveAssessmentAllowed) {
-      // Deliberately not awaited — the assessment and the first
-      // conversational call run in parallel. Independent calls: if the
-      // assessment fails, the conversation proceeds untouched.
-      runAssessment(0, symptom.trim());
-    }
-    await callApi([first]);
+    // SB4: ONE unified call decides the opening move. A connected start with a
+    // live-data complaint makes the brain choose an assessment+capture itself —
+    // the old auto-assess-on-connect, now brain behavior. No double-fire.
+    await runDiagnoseTurn();
   }
 
   function newCaseMeta() {
@@ -1333,7 +1511,7 @@ export default function Screen() {
     // Save the user turn before the API call so a failure/crash after this
     // point doesn't lose the technician's input.
     saveCase({ messages: next });
-    await callApi(next);
+    await runDiagnoseTurn();
   }
 
   async function onSubmitAnswer() {
@@ -1855,7 +2033,7 @@ export default function Screen() {
               <AssessmentThreadCard
                 entry={item.entry}
                 onRerun={
-                  liveAssessmentAllowed &&
+                  captureConnectionOk &&
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status !== "running" &&
                   !(
@@ -1867,7 +2045,7 @@ export default function Screen() {
                     : undefined
                 }
                 onStartCapture={
-                  liveAssessmentAllowed &&
+                  captureConnectionOk &&
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status === "done" &&
                   item.entry.slot.assessment.next_step.type === "DATA_CAPTURE" &&
