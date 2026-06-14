@@ -49,6 +49,7 @@ import { initDb } from "./db.js";
 import {
   ASSESS_BODY,
   EVIDENCE_UPDATE_BODY,
+  UNIFIED_BODY,
   buildSystemPrompt,
 } from "./assessPrompt.js";
 
@@ -1276,6 +1277,16 @@ function softValidateAssessmentPlan(assessment) {
 // pre-2C-3 literal (proven by server/scripts/verifyAssessPrompt.js).
 const ASSESS_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, ASSESS_BODY);
 const EVIDENCE_UPDATE_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, EVIDENCE_UPDATE_BODY);
+// SB3: the unified diagnostic turn (one brain, one move). Reuses the three
+// existing tool schemas verbatim — the brain picks exactly one via tool_choice
+// "any"; the spec discipline follows the tool (strict on emit_diagnostic_
+// assessment's SAFETY section, relaxed on the conversational tools).
+const UNIFIED_SYSTEM_PROMPT = buildSystemPrompt(APP_CONTEXT, UNIFIED_BODY);
+const UNIFIED_TURN_TOOLS = [
+  TOOLS.find((t) => t.name === "ask_followup_question"),
+  ASSESS_TOOL,
+  TOOLS.find((t) => t.name === "provide_diagnosis"),
+];
 
 // Shared assessment runner (Stage 2C-3 refactor). Both /api/assess (Stage 1)
 // and /api/evidence-update use this: it assembles the verified-data system
@@ -1301,6 +1312,7 @@ async function buildAssessmentContextBlocks({
   recallsArr,
   tsbsArr,
   complaintText,
+  extraDtcCodes = [],
   extraContextBlocks = [],
   logLabel,
 }) {
@@ -1319,12 +1331,20 @@ async function buildAssessmentContextBlocks({
     systemBlocks.push({ type: "text", text: buildTsbBlock(tsbsArr) });
   }
 
-  // DTC enrichment: look up all stored, pending, and permanent codes directly
-  // from the snapshot (confirmed by the scan, not typed in by the tech).
+  // DTC enrichment: codes from the snapshot when connected (confirmed by the
+  // scan), PLUS any codes from the complaint text not already present (the
+  // disconnected / typed-in path — extraDtcCodes). Snapshot codes keep their
+  // exact order/duplicates so /api/assess output is unchanged.
+  const snapshotDtcs = snapshot
+    ? [
+        ...(Array.isArray(snapshot.dtcs) ? snapshot.dtcs : []),
+        ...(Array.isArray(snapshot.pendingDtcs) ? snapshot.pendingDtcs : []),
+        ...(Array.isArray(snapshot.permanentDtcs) ? snapshot.permanentDtcs : []),
+      ]
+    : [];
   const allDtcCodes = [
-    ...(Array.isArray(snapshot.dtcs) ? snapshot.dtcs : []),
-    ...(Array.isArray(snapshot.pendingDtcs) ? snapshot.pendingDtcs : []),
-    ...(Array.isArray(snapshot.permanentDtcs) ? snapshot.permanentDtcs : []),
+    ...snapshotDtcs,
+    ...extraDtcCodes.filter((c) => !snapshotDtcs.includes(c)),
   ];
   const enrichedDtcEntries = [];
   for (const code of allDtcCodes) {
@@ -1365,16 +1385,19 @@ async function buildAssessmentContextBlocks({
   for (const b of extraContextBlocks) systemBlocks.push(b);
 
   // Formatted snapshot/observed block (the OBD2 data Claude reasons on) — LAST.
-  systemBlocks.push({
-    type: "text",
-    text: formatSnapshotBlock(snapshot),
-  });
+  // Omitted when there's no snapshot (the unified turn while disconnected).
+  if (snapshot) {
+    systemBlocks.push({
+      type: "text",
+      text: formatSnapshotBlock(snapshot),
+    });
+  }
 
   const mismatchCount = enrichedDtcEntries.filter((e) => e.configMismatch).length;
   console.log(
     `[${logLabel}] model=${DIAGNOSE_MODEL} ` +
       `dtcs=${allDtcCodes.length} enriched=${enrichedDtcEntries.length} mismatches=${mismatchCount} ` +
-      `signals=${(snapshot.signals ?? []).length} absent=${(snapshot.absentSignalNames ?? []).length} ` +
+      `signals=${snapshot ? (snapshot.signals ?? []).length : 0} absent=${snapshot ? (snapshot.absentSignalNames ?? []).length : 0} ` +
       `recalls=${recallsArr.length} tsbs=${tsbsArr.length} ` +
       `specsDetected=${specsToFetch.length} specsInjected=${verifiedSpecs.length} ` +
       `extraBlocks=${extraContextBlocks.length}`,
@@ -1706,6 +1729,128 @@ app.post("/api/evidence-update", async (req, res) => {
     return res.json({ assessment: result.assessment, cost: result.cost });
   } catch (err) {
     return respondWithError(res, err, "evidence-update");
+  }
+});
+
+// ============================================================================
+// /api/diagnose-turn — Stage 2C-4 SB3: the UNIFIED diagnostic brain.
+//
+// One brain, one move per turn. The brain commits to exactly one tool:
+//   - ask_followup_question  → a conversational question / physical-check direction
+//   - emit_diagnostic_assessment → a structured differential + next_step; a
+//     DATA_CAPTURE next_step (with capture_plan) is the "request a live capture"
+//     move (reuses the 2C-1 schema + the 2C-4 executor + /api/evidence-update,
+//     which takes this assessment as its priorAssessment)
+//   - provide_diagnosis     → a committed final diagnosis (conclude)
+// Decision rule + per-tool spec discipline live in UNIFIED_SYSTEM_PROMPT. Context
+// is assembled by the SHARED buildAssessmentContextBlocks (snapshot when
+// connected; complaint-text DTCs when not). ADDITIVE — /api/assess and
+// /api/diagnose are unchanged; this is validated by crafted deployed calls
+// before any mobile wiring. The phone-consumed `turn` shape is added compile-
+// time-only to lib/assessmentTypes.ts; its OTA rides with the mobile sub-batch.
+// ============================================================================
+app.post("/api/diagnose-turn", async (req, res) => {
+  const {
+    vehicle,
+    vin,
+    mileage,
+    complaint,
+    messages,
+    snapshot,
+    connected,
+    recalls,
+    tsbs,
+    sessionId,
+  } = req.body ?? {};
+
+  if (!vehicle || typeof vehicle !== "object") {
+    return res.status(400).json({ error: "Missing or invalid 'vehicle'." });
+  }
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "Missing or empty 'messages'." });
+  }
+  if (messages[0].role !== "user") {
+    return res.status(400).json({ error: "First message must be from the user." });
+  }
+
+  const recallsArr = Array.isArray(recalls) ? recalls : [];
+  const tsbsArr = Array.isArray(tsbs) ? tsbs : [];
+  // Connected = the app-level signal AND a usable snapshot is present. Only then
+  // does the brain have a capture path / live snapshot to reason over.
+  const hasSnapshot = !!snapshot && typeof snapshot === "object";
+  const isConnected = connected === true && hasSnapshot;
+  const presentingComplaint = String(messages[0]?.content ?? "");
+  const complaintText =
+    typeof complaint === "string" && complaint.trim().length > 0
+      ? complaint.trim()
+      : presentingComplaint;
+  // DTCs the brain should know about when disconnected (no snapshot) come from
+  // the complaint text, exactly like /api/diagnose.
+  const extraDtcCodes = extractDtcCodes(presentingComplaint);
+
+  const systemBlocks = await buildAssessmentContextBlocks({
+    systemPrompt: UNIFIED_SYSTEM_PROMPT,
+    vehicle,
+    snapshot: isConnected ? snapshot : null,
+    recallsArr,
+    tsbsArr,
+    complaintText,
+    extraDtcCodes,
+    extraContextBlocks: [],
+    logLabel: "diagnose-turn",
+  });
+
+  try {
+    const response = await callAnthropicWithRetry(() =>
+      client.messages.create({
+        model: DIAGNOSE_MODEL,
+        max_tokens: 8192,
+        system: systemBlocks,
+        tools: UNIFIED_TURN_TOOLS,
+        tool_choice: { type: "any" },
+        messages: buildMessages(vehicle, messages),
+      }),
+    );
+
+    const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
+      sessionId: typeof sessionId === "string" ? sessionId : null,
+      callType: "diagnose-turn",
+    });
+
+    const toolUse = response.content.find((b) => b.type === "tool_use");
+    if (!toolUse) {
+      return res.status(502).json({
+        error: "Model did not return a turn. Try again.",
+      });
+    }
+
+    if (toolUse.name === "ask_followup_question") {
+      return res.json({
+        turn: { kind: "question", question: toolUse.input.question },
+        cost: costData ?? null,
+      });
+    }
+    if (toolUse.name === "emit_diagnostic_assessment") {
+      // Soft-validate the 2C-1 monitoring plan (fail-soft → Stage-1 prose), same
+      // as /api/assess. A DATA_CAPTURE next_step here IS the "request a capture"
+      // move; the phone runs it and this assessment becomes the evidence-update
+      // priorAssessment.
+      const assessment = softValidateAssessmentPlan(toolUse.input);
+      return res.json({
+        turn: { kind: "assessment", assessment },
+        cost: costData ?? null,
+      });
+    }
+    if (toolUse.name === "provide_diagnosis") {
+      return res.json({
+        turn: { kind: "diagnosis", diagnosis: toolUse.input },
+        cost: costData ?? null,
+      });
+    }
+
+    return res.status(502).json({ error: `Unexpected tool: ${toolUse.name}` });
+  } catch (err) {
+    return respondWithError(res, err, "diagnose-turn");
   }
 });
 
