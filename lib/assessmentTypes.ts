@@ -7,6 +7,8 @@
 // and Stage 3 (adaptive stance switching) without structural changes here.
 // ============================================================================
 
+import type { FinalDiagnosis } from "./types";
+
 // Operating condition declared by the technician before triggering assessment.
 // This is intentionally a human declaration, not a phone inference — the tech
 // knows the relevant condition (e.g. "symptom only happens at highway speed")
@@ -214,5 +216,34 @@ export interface DiagnosticAssessment {
 // (same handling as 2C-1's capture_plan type — no empty type-only OTA now).
 export interface EvidenceUpdateResponse {
   assessment: DiagnosticAssessment;
+  cost: ApiCostData | null;
+}
+
+// ---- Stage 2C-4 SB3: unified diagnostic turn (/api/diagnose-turn) ----
+//
+// The unified brain commits to exactly ONE move per turn. The discriminated turn
+// the server returns:
+//   - "question"   → ask_followup_question (conversational ask / physical-check)
+//   - "assessment" → emit_diagnostic_assessment (structured differential; a
+//                    next_step.type === "DATA_CAPTURE" is the request-a-capture
+//                    move, consumed by the existing 2C-4 capture executor; the
+//                    assessment becomes the /api/evidence-update priorAssessment)
+//   - "diagnosis"  → provide_diagnosis (committed final answer)
+// The phone renders each kind in the /diagnose thread (SB4 wiring).
+//
+// FLAGGED (SB3): compile-time only — no phone code reads it until the mobile
+// sub-batch (SB4) switches the app onto /api/diagnose-turn. Committed now for
+// contract congruence; its OTA rides with SB4 (same handling as 2C-1's
+// capture_plan + 2C-3's EvidenceUpdateResponse types). The request the phone
+// will send: { vehicle, vin?, mileage?, complaint?, messages: ChatMessage[],
+// snapshot?: DiagnosticSnapshot (when connected), connected: boolean, recalls?,
+// tsbs?, sessionId? }.
+export type DiagnoseTurn =
+  | { kind: "question"; question: string }
+  | { kind: "assessment"; assessment: DiagnosticAssessment }
+  | { kind: "diagnosis"; diagnosis: FinalDiagnosis };
+
+export interface DiagnoseTurnResponse {
+  turn: DiagnoseTurn;
   cost: ApiCostData | null;
 }
