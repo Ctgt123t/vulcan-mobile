@@ -162,6 +162,22 @@ function coalesce(msgs: ChatMessage[]): ChatMessage[] {
   return out;
 }
 
+// TERMINAL-USER GUARANTEE (load-bearing): the conversation sent to
+// /api/diagnose-turn MUST end on a user turn — the model cannot prefill an
+// assistant turn (a trailing assistant message is a hard 400). Most entry paths
+// append a user message before the call, but a re-run (onRerunAssessment) fires
+// with NO new user message, so the serialized tail is the prior assistant
+// assessment. Drop trailing assistant turns until the last turn is a user turn.
+// messages[0] is always the user complaint, so this can never empty the history;
+// the result is "answer the last user input again" — the correct re-roll
+// semantics for re-run. This is a guarantee across EVERY entry path, not a patch
+// for the re-run case alone.
+function endOnUserTurn(msgs: ChatMessage[]): ChatMessage[] {
+  let end = msgs.length;
+  while (end > 0 && msgs[end - 1].role === "assistant") end--;
+  return end === msgs.length ? msgs : msgs.slice(0, end);
+}
+
 // Build the serialized conversation history the unified brain sees.
 // Order = the thread order: chat messages by index, and after message i the
 // assessments + captures anchored at i, merged by their timestamp (so a capture
@@ -212,5 +228,7 @@ export function buildTurnHistory(
     .sort((x, y) => x.ts.localeCompare(y.ts))
     .forEach((e) => out.push(e.msg));
 
-  return coalesce(out);
+  // Coalesce to strict alternation, THEN guarantee the history ends on a user
+  // turn (sendable to /api/diagnose-turn from every entry path, incl. re-run).
+  return endOnUserTurn(coalesce(out));
 }
