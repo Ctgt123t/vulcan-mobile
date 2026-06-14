@@ -28,13 +28,13 @@ Founder (Cole, Manchester NH) is a non-coder with automotive knowledge. The app 
 ## The app modes
 1. **Ask Vulcan** — open-ended Q&A, no VIN required, conversational. Pulls TSBs/recalls/specs.
 2. **Diagnose** — structured diagnostic flow, VIN-based, ends in confirmed diagnosis + PDF. Verified DTC defs injected server-side.
-3. **Inspection Report** — multi-point inspection w/ PDF. (Considering removing — outside core scope; decide during Stage 2 UI restructure.)
-4. **OBD2 Scan** — Bluetooth connection, DTC reading (stored/pending/permanent), live data, status panel.
-- Plus **Smart Diagnose** (the AI diagnostic engine — Stage 1 built; see below).
+3. **Inspection Report** — multi-point inspection w/ PDF. **KEEP (decided 2026-06-10)** — the app's only customer-facing PDF deliverable, zero cost in the current nav; revisit at the premium UI redesign.
+4. **OBD2 Scan** — Bluetooth connection, DTC reading (stored/pending/permanent), live data, status panel. Now a simple instrument with one door into diagnosis: "Escalate to Diagnosis."
+- The former **Smart Diagnose** (the AI diagnostic engine) was **folded into Diagnose** — it is no longer a separate mode (see below).
 
 Branding: navy blue (#004B87), white/light theme, lightning-bolt icon. Premium UI redesign planned later.
 
-NOTE: A planned **mode restructure** (Stage 2) will MERGE Diagnose + Smart Diagnose into one mode, with OBD2 becoming a simple instrument that can "escalate to diagnosis."
+NOTE: The **mode restructure** that merged Diagnose + Smart Diagnose into one mode (with OBD2 as a simple "escalate to diagnosis" instrument) is **DONE** — the Diagnose thread now runs on the unified `/api/diagnose-turn` brain (see the diagnostic-engine section below).
 
 ---
 
@@ -50,14 +50,14 @@ Local-state + LLM-reasoning hybrid. Core principles (settled):
 
 **Staged build plan (test each on a real car before the next):**
 - **Stage 1 — single-shot brain:** ✅ BUILT & VALIDATED. Snapshot → structured assessment via /api/assess, Opus, tool use. Validated on a real P0442 EVAP case.
-- **Stage 2 — iterative loop + MODE RESTRUCTURE:** 🔜 ACTIVE NEXT FOCUS (the data layer is now paused in a known-good state; Stage 2 is what's being picked up next). Claude requests specific data under specific conditions; phone auto-captures; diagnosis evolves. Decided: **UI restructure FIRST** (merge Diagnose + Smart Diagnose; OBD2 becomes a simple instrument with an "escalate to diagnosis" door; build the embeddable "capture-card" UI primitive even as a placeholder). Must include **diagnostic session save/resume from the start** (pause a job, switch cars, resume by VIN — manual list + auto "this VIN matches a saved diagnosis, resume?"). Cost safeguards on the capture loop (sustained-condition, cooldowns, per-session budget, auto-pause). Decompose into sub-stages before coding; build in batches, validate in sequence on a real car.
+- **Stage 2 — iterative loop + MODE RESTRUCTURE:** ✅ **COMPLETE & hardware-validated on a 2016 F-350 (2026-06-14).** Claude requests specific data under specific conditions, the phone auto-captures, and the diagnosis evolves — all inside the unified diagnostic turn. Delivered as: the UI restructure (Diagnose + Smart Diagnose merged; OBD2 became a simple "escalate to diagnosis" instrument; the embeddable "capture-card" primitive is now driven by the real executor); **diagnostic session save/resume** (versioned case envelope, auto-save, VIN-match resume, different-vehicle safety guard); the capture loop (resolver + sustained-hold detector + forward-capture + the `/api/evidence-update` endpoint); and the **unified-flow merge (SB1–SB4)** that put the whole thread on ONE brain at `/api/diagnose-turn` (each turn: ask / request-a-live-capture / conclude) with a self-continuing capture loop. Cost safeguards live: sustained-condition / per-PID cooldown / auto-pause retained; the per-session fire-count cap was removed once the loop was hardware-proven.
 - **Stage 3** — adaptive-stance UI switching + guided-inspection checklist (big tap buttons); stance flips mid-diagnosis.
 - **Stage 4** — confirmed-fix priors injected as starting context (ties to confirmed-fix DB flywheel).
 - **Stage 5** — hands-free voice/TTS (device-native TTS).
 
 ---
 
-## THE UNIFIED DATA LAYER (Phase 4 — PAUSED in a known-good state; Stage 2 is the active focus)
+## THE UNIFIED DATA LAYER (Phase 4 — PAUSED in a known-good state; its real feed is a pre-launch track)
 **This is the keystone that makes the AI trustworthy.** Core principle, learned from the Ask Vulcan failures: *verified data is the factual foundation; AI is the reasoning layer on top. The model must never be the source of truth for a fact it would recall from memory.* (See VULCAN_DATA_LAYER_STRATEGY.md for full detail.)
 
 **Why it exists:** Vehicle Finder API was proven a dead end this session (covers only 3 spec types, sparse, returns wrong records silently). The fix is a proprietary database Vulcan owns. Five data types: DTC defs (✅ done, 18,805 codes), VIN decode (✅ mostly, NHTSA), PID defs (✅ done, OBDb), **service specs (the gap)**, **component/config facts (new gap)**.
@@ -75,7 +75,7 @@ Local-state + LLM-reasoning hybrid. Core principles (settled):
 4. Persist page + verbatim_quote on rows — ✅ DONE. Both NOT NULL; `page` remapped to absolute PDF page; a per-run JSON snapshot is dumped so a regression baseline survives independently of the DB.
 5. Expand schema for richer manual data — **fuses, bulbs, towing capacities, warning lights, tire/TPMS, battery, octane** (a deliberate scope expansion; owner's manuals are richer than "specs + component facts") — ⏸ DEFERRED.
 
-**Tier 1 first feed (DEFERRED to near-launch, demand-ranked off the miss-log):** extract from a small set of manufacturer manuals + government data to validate the end-to-end pipeline at small scale on real, safe sources. The engine is ready; this is a content/operations effort, not the immediate next task — the data layer is paused here and **Stage 2 of the diagnostic engine is the active next focus**. (All deferred data-layer items + their windows are catalogued in VULCAN_DATA_LAYER_STRATEGY.md §11.)
+**Tier 1 first feed (DEFERRED to near-launch, demand-ranked off the miss-log):** extract from a small set of manufacturer manuals + government data to validate the end-to-end pipeline at small scale on real, safe sources. The engine is ready; this is a content/operations effort that sits in the **pre-launch** window, not the immediate next task — the data layer is paused here in a known-good state (the diagnostic engine that reasons over its facts is now complete; see above). (All deferred data-layer items + their windows are catalogued in VULCAN_DATA_LAYER_STRATEGY.md §11.)
 
 Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start here). Tier 2 = retrieval-grounded generation via Claude web search + Citations API + domain allowlist (the scale accelerator; verification de-risked this session — citations are API-guaranteed). Tier 3 = crowdsource from techs in the field (the long-game moat; builds on the confirmed-fix DB). Never scrape proprietary DBs (Identifix/AllData/Mitchell1/Innova).
 
@@ -85,7 +85,7 @@ Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start h
 - **Diagnostic engine architecture** — local-state + LLM-at-decision-points; adaptive stance; one-next-step; calibrated confidence; verified-data-only safety.
 - **Ask Vulcan accuracy fix (this session)** — was confidently wrong on specs. Root cause: confidence-gated guardrails a confident-wrong model sails past, plus a thinner prompt than Diagnose. Fixed: moved to Opus, hard provenance-based spec rule in shared APP_CONTEXT (covers all modes, label-not-suppress in conversational modes, strict in assess), internal-consistency rule, spec questions non-cacheable, version-keyed self-pruning response cache. CONCLUSION: free-form mechanical fabrication is NOT fully fixable by prompt/model — the real fix is the verified database. The guardrail makes misses *honest* in the meantime.
 - **Data layer** — see above. Generate-from-source-docs, strict store + honest fallback, Supabase foundation.
-- **Claude-directed monitoring** (not autonomous anomaly detection) for live monitoring; folds into Stage 2+. Cost safeguards as above.
+- **Claude-directed monitoring** (not autonomous anomaly detection) for live monitoring; **delivered** via the unified diagnostic turn (Stage 2). Cost safeguards as above.
 - **OBD2 parsing: harden in-house**, no adoptable third-party stack exists. Owning the parser = owning the failure mode.
 - **BLE-only on iOS** (Apple MFi blocks Classic). OBDLink MX+/LX = Android only. iPhone needs BLE (Veepeak BLE+ confirmed).
 - **Legitimate data sources only.** Proprietary DB from open/CC/gov/manufacturer-published sources + Claude extraction + confirmed-fix DB.
@@ -104,13 +104,13 @@ Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start h
 | 1. Get off Expo Go | ✅ COMPLETE |
 | 2. OBD2 Foundation | ✅ COMPLETE |
 | 3a. Diagnostic engine Stage 1 | ✅ COMPLETE |
-| 3b. Stage 2 (iterative loop + mode restructure) | 🔜 NEXT — ACTIVE FOCUS |
+| 3b. Stage 2 (iterative loop + mode restructure) | ✅ COMPLETE & hardware-validated (2016 F-350, 2026-06-14) — Stage 2A merge + 2B save/resume + 2C-1..4 + the unified-flow merge SB1–SB4 |
 | 3c. Stage 3 (adaptive-stance UI, guided checklists) | NOT STARTED |
 | 3d. Stages 4–5 (confirmed-fix priors; voice) | NOT STARTED |
-| 4. Pre-launch infrastructure | 🔄 IN PROGRESS (data layer: foundation + extraction pipeline productionized — Batch A ✅ + Option C spec path + tool-use routing live; PAUSED for Stage 2 — Tier 1 feed deferred to near-launch; deferred items in strategy §11) |
+| 4. Pre-launch infrastructure | 🔄 IN PROGRESS (data layer: foundation + extraction pipeline productionized — Batch A ✅ + Option C spec path + tool-use routing live; paused in a known-good state — Tier 1 feed deferred to near-launch; deferred items in strategy §11) |
 | 5. Testing & launch | NOT STARTED |
 
-**Where things stand right now:** (1) the data layer — extraction pipeline productionized (Batch A ✅), Option C spec path + tool-use routing live — is **PAUSED in a known-good state** (Tier 1 feed + remaining items deferred, catalogued in strategy §11); (2) **Stage 2 diagnostic engine is the active next focus**. Complementary — Stage 2 reasons over the facts the data layer provides, which is exactly why pausing the data layer here doesn't block it.
+**Where things stand right now:** the **diagnostic engine is COMPLETE and hardware-validated** (Stage 1 single-shot + Stage 2 iterative evidence loop + the mode merge, all running on the unified `/api/diagnose-turn` brain, proven on a 2016 F-350 on 2026-06-14). The **two active tracks next** are: **(1) UX / flow trimming & fine-tuning** of the diagnostic experience, and **(2) pre-launch infrastructure** (auth, billing, Sentry, analytics, the data-layer real feed, self-hosted vPIC). The data layer is **paused in a known-good state** (Tier 1 feed + remaining items deferred to pre-launch, catalogued in strategy §11) — pausing it never blocked the engine, since the engine reasons over the facts it provides. **Deferred polish on the engine** (not blocking): **baseline-poll-on-connect** (start a light passive PID poll on connect so a Diagnose-first session has a live snapshot immediately — today a connected-but-empty start asks one operating-condition question before its first capture); and the **offline-resilience priority bump** (a VIN-decode failure bit live during SB4 F-350 testing — graceful decode-failure handling + local OBD2 buffering, with the **self-hosted NHTSA vPIC decoder** as the durable fix).
 
 ### Phase 4 — Pre-launch infrastructure
 - **Unified data layer** (in progress — replaces Vehicle Finder). Supabase foundation ✅.
@@ -119,7 +119,7 @@ Sourcing tiers (layered): Tier 1 = open/gov/manufacturer-published docs (start h
 - Real auth (Supabase) — replaces a PLACEHOLDER sign-in currently in the app (no real auth; flagged in git history). Apple Sign-In if social login on iOS.
 - Billing (RevenueCat + Stripe, tiered). Sentry (errors). Mixpanel (analytics). Fallback AI provider (Claude→GPT-4o for 529s).
 - **OBD2 trust gate** — cross-validate reads vs Autel/Snap-on across makes/protocols (capture raw hex). Verify the ATDP/ATH0 non-CAN work here.
-- iOS native cleanup (exclude Classic BT pod via config plugin; needs rebuild; before TestFlight). Offline resilience. Compatible-adapters screen.
+- iOS native cleanup (exclude Classic BT pod via config plugin; needs rebuild; before TestFlight). **Offline resilience ⚠️ PRIORITY** — a VIN-decode failure bit live during SB4 F-350 testing, so it's bumped up: graceful VIN-decode-failure handling + local OBD2 buffering, with the **self-hosted NHTSA vPIC decoder** as the durable fix (removes the NHTSA-API network dependency). Compatible-adapters screen.
 
 ### Legal/Business
 - Form LLC (NH) + EIN before revenue; CPA/attorney. Switch Apple/Google to Organization after LLC. Consolidate Supabase under a business account (currently personal GitHub login). Trademark "Vulcan" (Class 9 & 42); "VulcanDX" backup; TESS search first.
@@ -129,12 +129,12 @@ TestFlight + Google Play internal testing. Finalize tiered pricing. App Store li
 
 ### Decisions to revisit
 - **Opus 4.8 vs 4.6 per-workload** — same headline rate, but a new tokenizer can inflate input tokens up to ~35%; extraction is 94% input, so MEASURE on extraction before switching. Likely worth it for reasoning modes. Mind US-inference premium + cost-tracking recalibration.
-- Inspection Report removal (decide during Stage 2 restructure).
+- ~~Inspection Report removal~~ — **decided KEEP (2026-06-10)** during the mode restructure; revisit at the premium UI redesign.
 
 ### Parked bugs / side quests
 - VIN scan inconsistent capture + "check digit" rejection (deferred to UI/interface stage).
 - 2015 Volvo XC70 read no PIDs at all (needs screenshots; modern/CAN).
-- Green "adapter connected" bar stuck on after disconnect (state-not-resetting; likely quick).
+- ~~Green "adapter connected" bar stuck on after disconnect~~ — **FIXED (2026-06-12)** (Classic disconnect listener read the nested `event.device.address`; pending shop-device confirmation).
 - Pre-existing typecheck errors in ask.tsx/diagnose.tsx (known, harmless).
 
 ---
