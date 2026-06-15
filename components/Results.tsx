@@ -25,7 +25,7 @@ export default function Results({ data }: { data: FinalDiagnosis }) {
   return (
     <View style={styles.wrap}>
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>CONFIRMED DIAGNOSIS</Text>
+        <Text style={styles.sectionTitle}>DIAGNOSIS</Text>
         <Text style={styles.h2}>{data.root_cause}</Text>
         <Text style={styles.summary}>{data.reasoning}</Text>
 

@@ -27,7 +27,7 @@ Founder (Cole, Manchester NH) is a non-coder with automotive knowledge. The app 
 
 ## The app modes
 1. **Ask Vulcan** — open-ended Q&A, no VIN required, conversational. Pulls TSBs/recalls/specs.
-2. **Diagnose** — structured diagnostic flow, VIN-based, ends in confirmed diagnosis + PDF. Verified DTC defs injected server-side.
+2. **Diagnose** — structured diagnostic flow, VIN-based, ends in an on-screen diagnosis conclusion card (heading "Diagnosis"; the engine's honest confidence ceiling is `STRONGLY_SUPPORTED`, so it does not claim "confirmed"). Verified DTC defs injected server-side. **NOTE (open question for the user): there is no diagnosis PDF in the code** — only the separate Inspection Report mode generates a PDF (`app/inspection.tsx` / `lib/inspection.ts`). The earlier "+ PDF" wording was either an intended-but-unbuilt deliverable or stale copy — **needs a decision: build a diagnosis-PDF export, or drop the expectation.**
 3. **Inspection Report** — multi-point inspection w/ PDF. **KEEP (decided 2026-06-10)** — the app's only customer-facing PDF deliverable, zero cost in the current nav; revisit at the premium UI redesign.
 4. **OBD2 Scan** — Bluetooth connection, DTC reading (stored/pending/permanent), live data, status panel. Now a simple instrument with one door into diagnosis: "Escalate to Diagnosis."
 - The former **Smart Diagnose** (the AI diagnostic engine) was **folded into Diagnose** — it is no longer a separate mode (see below).
