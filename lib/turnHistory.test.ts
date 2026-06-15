@@ -439,6 +439,107 @@ section("conversational-only thread (disconnected)");
 }
 
 // ===========================================================================
+// Stage 3 (Step 1) — a tapped inspection finding is a normal user turn.
+// The directed physical inspection arrives as an assistant assessment; the
+// tech's tapped outcome flows back through sendUserMessage as a plain user
+// ChatMessage, so buildTurnHistory should serialize it verbatim, terminal-user.
+// ===========================================================================
+function inspectionAssessment(action: string): DiagnosticAssessment {
+  return {
+    presenting_complaint: "",
+    stance: "GUIDED",
+    stance_reason: "Needs the technician's hands.",
+    hypotheses: [
+      {
+        name: "Stuck EVAP purge valve",
+        confidence: "LIKELY",
+        supporting_evidence: ["P0442 small leak"],
+        contradicting_evidence: [],
+      },
+    ],
+    next_step: {
+      action,
+      rationale: "Distinguishes stuck-open from stuck-closed.",
+      type: "PHYSICAL_INSPECTION",
+    },
+    data_ceiling_note: "",
+    unverified_specs_needed: [],
+  } as DiagnosticAssessment;
+}
+function minimalCapture(): EvidenceCaptureEntry {
+  return {
+    capturedAt: "t2",
+    requested: [],
+    operatingCondition: "WARM_IDLE",
+    observed: { signals: [] },
+    outcome: "completed",
+  } as unknown as EvidenceCaptureEntry;
+}
+
+section("Stage 3 — tapped inspection finding as a user turn");
+{
+  const out = buildTurnHistory(
+    [
+      userMsg("P0442 small evap leak."),
+      userMsg("Inspection result: Stuck open"),
+    ],
+    [
+      {
+        afterMessageIndex: 0,
+        completedAt: "t1",
+        assessment: inspectionAssessment("Check the EVAP purge valve"),
+      },
+    ],
+    [],
+  );
+  eq(out.length, 3, "complaint + inspection assessment + finding reply");
+  assertAlternates(out, "finding");
+  assertEndsOnUser(out, "finding");
+  ok(
+    find(out, "physical inspection") >= 0,
+    "inspection assessment serialized as a physical inspection",
+  );
+  ok(
+    find(out, "Inspection result: Stuck open") >= 0,
+    "tapped finding serialized verbatim as a user turn",
+  );
+  eq(
+    out[out.length - 1].content,
+    "Inspection result: Stuck open",
+    "finding reply is the terminal user turn (sendable)",
+  );
+}
+
+section("Stage 3 — finding reply + a following capture coalesce");
+{
+  const out = buildTurnHistory(
+    [
+      userMsg("P0442 small evap leak."),
+      userMsg("Inspection result: Stuck open"),
+    ],
+    [
+      {
+        afterMessageIndex: 0,
+        completedAt: "t1",
+        assessment: inspectionAssessment("Check the EVAP purge valve"),
+      },
+    ],
+    [{ afterMessageIndex: 1, capturedAt: "t2", entry: minimalCapture() }],
+  );
+  eq(out.length, 3, "finding + capture merge into one trailing user turn");
+  assertAlternates(out, "finding+capture");
+  assertEndsOnUser(out, "finding+capture");
+  ok(
+    find(out, "Inspection result: Stuck open") >= 0,
+    "finding text present in the merged user turn",
+  );
+  ok(
+    find(out, "Captured evidence") >= 0,
+    "capture text present in the merged user turn",
+  );
+}
+
+// ===========================================================================
 // SUMMARY
 // ===========================================================================
 

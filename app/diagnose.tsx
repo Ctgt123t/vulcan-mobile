@@ -24,6 +24,7 @@ import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import AssessmentResult from "../components/assessment/AssessmentResult";
 import CaptureCard from "../components/assessment/CaptureCard";
+import FindingCard from "../components/assessment/FindingCard";
 import ConditionSelector from "../components/assessment/ConditionSelector";
 import DataBadge from "../components/assessment/DataBadge";
 import { useObd2 } from "../contexts/Obd2Context";
@@ -56,6 +57,11 @@ import {
   type DiagnosticSnapshot,
   type OperatingCondition,
 } from "../lib/assessmentTypes";
+import {
+  formatInspectionResult,
+  hasFindingOptions,
+  readFindingOptions,
+} from "../lib/findingOptions";
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import {
   buildTurnHistory,
@@ -2081,6 +2087,19 @@ export default function Screen() {
                     ? cancelCaptureRound
                     : undefined
                 }
+                onSubmitFinding={
+                  item.entry.id === lastAssessmentId &&
+                  item.entry.slot.status === "done" &&
+                  item.entry.slot.assessment.next_step.type ===
+                    "PHYSICAL_INSPECTION" &&
+                  hasFindingOptions(item.entry.slot.assessment.next_step) &&
+                  // not yet answered: no user turn appended after this card's
+                  // anchor (a tapped finding appends one, which hides the card —
+                  // including during the in-flight turn and on resume).
+                  item.entry.afterMessageIndex >= messages.length - 1
+                    ? sendUserMessage
+                    : undefined
+                }
               />
             )
           }
@@ -2354,6 +2373,7 @@ function AssessmentThreadCard({
   onRerun,
   onStartCapture,
   onCancelCapture,
+  onSubmitFinding,
 }: {
   entry: AssessmentEntry;
   onRerun?: () => void;
@@ -2363,11 +2383,27 @@ function AssessmentThreadCard({
   // per-round driving UX.
   onStartCapture?: () => void;
   onCancelCapture?: () => void;
+  // Stage 3 (Step 1): present (from the parent) only when this card is the
+  // latest done PHYSICAL_INSPECTION with well-formed finding_options that has
+  // not been answered yet. Composes the tapped finding into a user turn. NO
+  // connection required — the whole point of the guided physical lane.
+  onSubmitFinding?: (resultText: string) => void;
 }) {
   const cap = entry.capture ?? null;
   const isDataCapture =
     entry.slot.status === "done" &&
     entry.slot.assessment.next_step.type === "DATA_CAPTURE";
+  // The finding-outcome card data (bounded inspection + well-formed options),
+  // derived once. null unless this is a done PHYSICAL_INSPECTION with options.
+  const finding =
+    entry.slot.status === "done"
+      ? (() => {
+          const outcomes = readFindingOptions(entry.slot.assessment.next_step);
+          return outcomes
+            ? { outcomes, action: entry.slot.assessment.next_step.action }
+            : null;
+        })()
+      : null;
 
   return (
     <View style={styles.assessmentWrap}>
@@ -2417,6 +2453,26 @@ function AssessmentThreadCard({
             {cap.note ?? "Monitoring stopped."}
           </Text>
         </View>
+      )}
+
+      {/* Stage 3 (Step 1) guided result-capture — a directed physical
+          inspection with brain-authored bounded outcomes. The parent gates this
+          to latest-card-only + not-yet-answered + NO connection required; here
+          we just render when well-formed options exist. */}
+      {finding && onSubmitFinding && (
+        <FindingCard
+          action={finding.action}
+          outcomes={finding.outcomes}
+          onOutcome={(o) =>
+            onSubmitFinding(formatInspectionResult({ outcome: o }))
+          }
+          onCouldntCheck={() =>
+            onSubmitFinding(formatInspectionResult({ couldntCheck: true }))
+          }
+          onFreeText={(t) =>
+            onSubmitFinding(formatInspectionResult({ note: t }))
+          }
+        />
       )}
 
       {/* Minimal Start affordance (SUB-BATCH 2 replaces with the driving UX). */}

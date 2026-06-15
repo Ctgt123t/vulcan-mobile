@@ -52,6 +52,7 @@ import {
   UNIFIED_BODY,
   buildSystemPrompt,
 } from "./assessPrompt.js";
+import { softValidateFindingOptions } from "./findingOptions.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -1159,6 +1160,20 @@ const ASSESS_TOOL = {
               required: ["signal_id", "operating_condition", "duration_seconds"],
             },
           },
+          finding_options: {
+            type: "object",
+            description:
+              "Populate ONLY when type is PHYSICAL_INSPECTION AND the outcome is bounded. The 2 to 4 discrete, mutually-exclusive POSITIVE results of this one directed inspection (e.g. for 'check the EVAP purge valve' → ['Stuck open','Stuck closed','Moves freely / holds vacuum']). The app renders these as big tap buttons and ALWAYS adds its own 'Couldn't check' option plus a free-text escape — do NOT author those. OMIT this block entirely for an open, qualitative, or multi-part question (use ask_followup_question with no options instead). Keep each outcome a short discrete phrase.",
+            properties: {
+              outcomes: {
+                type: "array",
+                description:
+                  "2 to 4 short, discrete, mutually-exclusive outcome strings the technician can pick from.",
+                items: { type: "string" },
+              },
+            },
+            required: ["outcomes"],
+          },
         },
         required: ["action", "rationale", "type"],
       },
@@ -1457,8 +1472,12 @@ async function runStructuredAssessment({
   }
 
   // Soft-validate the 2C-1 monitoring plan: drop any missing/malformed
-  // capture_plan (fail-soft → Stage-1 prose fallback), never throw.
-  const assessment = softValidateAssessmentPlan(toolUse.input);
+  // capture_plan (fail-soft → Stage-1 prose fallback), never throw. Then
+  // soft-validate the Stage-3 finding_options (drop a malformed block → plain
+  // inspection). Both mutate-in-place + return the assessment; both never throw.
+  const assessment = softValidateFindingOptions(
+    softValidateAssessmentPlan(toolUse.input),
+  );
   return { ok: true, assessment, cost: costData ?? null };
 }
 
@@ -1834,8 +1853,11 @@ app.post("/api/diagnose-turn", async (req, res) => {
       // Soft-validate the 2C-1 monitoring plan (fail-soft → Stage-1 prose), same
       // as /api/assess. A DATA_CAPTURE next_step here IS the "request a capture"
       // move; the phone runs it and this assessment becomes the evidence-update
-      // priorAssessment.
-      const assessment = softValidateAssessmentPlan(toolUse.input);
+      // priorAssessment. softValidateFindingOptions then drops a malformed
+      // Stage-3 finding_options block (→ plain inspection). Both never throw.
+      const assessment = softValidateFindingOptions(
+        softValidateAssessmentPlan(toolUse.input),
+      );
       return res.json({
         turn: { kind: "assessment", assessment },
         cost: costData ?? null,

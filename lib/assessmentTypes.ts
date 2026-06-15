@@ -153,11 +153,29 @@ export interface Hypothesis {
   contradicting_evidence: string[];
 }
 
+// ---- Stage 3 Step 1: brain-authored physical-inspection outcome options ----
+//
+// Present ONLY on a PHYSICAL_INSPECTION next step (absent everywhere else;
+// additive + optional — same forward-compat handling as capture_plan). The brain
+// authors 2–4 bounded, mutually-exclusive POSITIVE outcomes for the one directed
+// inspection; the phone renders them as glove-friendly tap buttons and ALWAYS
+// adds a "couldn't check" option + a free-text escape itself (the model never
+// authors those, so they can't be missing or malformed). A missing/malformed
+// block fails soft to a plain typed reply — the server drops it
+// (softValidateFindingOptions) and the client re-reads defensively
+// (readFindingOptions). Open/qualitative questions never carry this: they go
+// through ask_followup_question with no options, so "open question ⇒ no buttons"
+// is STRUCTURAL (decided by which tool the brain picks), not a UI guess.
+export interface FindingOptions {
+  outcomes: string[]; // 2–4 brain-authored bounded outcomes
+}
+
 export interface NextStep {
   action: string;
   rationale: string;
   type: NextStepType;
   requested_data?: RequestedDataItem[]; // populated when type === DATA_CAPTURE
+  finding_options?: FindingOptions; // populated when type === PHYSICAL_INSPECTION
 }
 
 export interface UnverifiedSpec {

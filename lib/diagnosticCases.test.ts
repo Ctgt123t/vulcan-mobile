@@ -199,6 +199,88 @@ async function main(): Promise<void> {
     check("malformed linkedRecordIds filtered to strings", JSON.stringify(r.result?.linkedRecordIds) === JSON.stringify(["r1", "r2"]));
   }
 
+  // --- Stage 3 (Step 1): finding_options ride through the migrator untouched ---
+  // Raw object straight to migrateNoThrow (param is `unknown`), matching the
+  // malformed-fixture pattern above so partial/loose fixtures don't trip tsc.
+  {
+    const r = migrateNoThrow({
+      schemaVersion: 1,
+      id: "finding1",
+      status: "open",
+      messages: [{ role: "user", content: "P0442 evap" }],
+      assessments: [
+        {
+          afterMessageIndex: 0,
+          result: {
+            status: "done",
+            assessment: {
+              stance: "GUIDED",
+              next_step: {
+                action: "Check the EVAP purge valve",
+                rationale: "Distinguishes stuck-open from stuck-closed.",
+                type: "PHYSICAL_INSPECTION",
+                finding_options: {
+                  outcomes: ["Stuck open", "Stuck closed", "Holds vacuum / OK"],
+                },
+              },
+            },
+          },
+          completedAt: "t",
+        },
+      ],
+    });
+    const ns = (
+      r.result?.assessments[0]?.result as {
+        assessment?: { next_step?: { finding_options?: { outcomes?: string[] } } };
+      }
+    )?.assessment?.next_step;
+    check(
+      "finding_options survives migrateCase round-trip unchanged",
+      JSON.stringify(ns?.finding_options?.outcomes) ===
+        JSON.stringify(["Stuck open", "Stuck closed", "Holds vacuum / OK"]),
+    );
+    check(
+      "assessment carrying finding_options still loads",
+      r.result?.assessments.length === 1,
+    );
+  }
+  // A malformed finding_options must not break migration (client re-reads it
+  // defensively via readFindingOptions); the migrator casts the assessment
+  // wholesale, so it passes through without throwing.
+  {
+    const r = migrateNoThrow({
+      schemaVersion: 1,
+      id: "finding2",
+      status: "open",
+      messages: [{ role: "user", content: "x" }],
+      assessments: [
+        {
+          afterMessageIndex: 0,
+          result: {
+            status: "done",
+            assessment: {
+              next_step: {
+                action: "x",
+                rationale: "y",
+                type: "PHYSICAL_INSPECTION",
+                finding_options: "garbage",
+              },
+            },
+          },
+          completedAt: "t",
+        },
+      ],
+    });
+    check(
+      "malformed finding_options → migrates without throwing",
+      !r.threw && r.result !== null,
+    );
+    check(
+      "malformed finding_options → assessment still loads",
+      r.result?.assessments.length === 1,
+    );
+  }
+
   console.log("\n[2] STORE — orchestration + 'never deletes' invariant\n");
 
   // --- Round-trip + index ---

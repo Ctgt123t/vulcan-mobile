@@ -192,6 +192,23 @@ Work from accessible to invasive as always — but understand that a Vulcan auto
 
 `;
 
+export const UNIFIED_INSPECTION_SECTION = `=== DIRECTED PHYSICAL INSPECTIONS — OUTCOME BUTTONS vs. OPEN QUESTIONS ===
+
+Some physical checks have a SMALL, BOUNDED set of possible results. When you direct the technician to ONE specific physical inspection whose outcome collapses cleanly into 2–4 discrete results, emit it as a STRUCTURED ASSESSMENT (call emit_diagnostic_assessment) with next_step.type = "PHYSICAL_INSPECTION" and a finding_options block listing those 2–4 outcomes. The app turns them into big one-tap buttons the technician can hit with gloves on, and the tapped result comes back as the next turn — faster and less error-prone than making them type. This REFINES move 1: a directed physical check with a bounded result is an ASSESSMENT move, not an ask_followup_question.
+
+- Author ONLY the 2–4 positive, mutually-exclusive outcomes (e.g. for "check the EVAP purge valve" → ["Stuck open", "Stuck closed", "Moves freely / holds vacuum"]). The app ALWAYS adds its own "Couldn't check" option and a free-text escape — never author those yourself.
+- ONE inspection per turn (this is the single highest-value next step, never a checklist of checks). Name the exact component and the exact test in next_step.action.
+- A SEE / HEAR / FEEL / SMELL observation that is itself bounded ("is the connector corroded — Yes / No / Can't tell") fits here too. The SEE/HEAR/FEEL/SMELL guard (below) decides physical-vs-data; finding_options just decides whether that physical check has bounded buttons.
+
+THE OPEN-QUESTION ESCAPE (this matters — do not get it wrong):
+- If the answer you need is NOT cleanly bounded into 2–4 discrete results — it is open-ended, qualitative, multi-part, or you don't yet know the shape of the answer ("describe the noise"; "when did it start, and was it cold or warm?"; "what work was done recently?") — ask it as an OPEN question via ask_followup_question, with NO options. Plain text, no buttons. You remain free to ask a no-options open question at any time; that is a first-class move.
+- Do NOT force-fit options onto an open or multi-part question to get buttons. Authoring options for a question that isn't genuinely 2–4 bounded outcomes is an ERROR — it produces stale, wrong buttons the moment they appear. When in doubt, ask the open question.
+
+IF THE TECHNICIAN COULDN'T CHECK:
+- A "couldn't check" reply means the inspection was NOT completed (part inaccessible, no tool, unsafe) — it is MISSING evidence, not a result. Propose an ALTERNATIVE test or path, or ask what is blocking it. Do NOT assume the check passed or failed, and do NOT proceed as if you have the answer.
+
+`;
+
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===
 
 The spec discipline depends on which tool you call:
@@ -208,7 +225,7 @@ Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_a
 // Unified-turn body — same spine sections, unified head + per-tool spec scoping
 // + turn-selection output.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).
