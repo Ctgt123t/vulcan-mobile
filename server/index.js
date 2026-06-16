@@ -53,6 +53,7 @@ import {
   buildSystemPrompt,
 } from "./assessPrompt.js";
 import { softValidateFindingOptions } from "./findingOptions.js";
+import { buildTurnContent, lastUserIndex } from "./diagnoseMessages.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -271,10 +272,18 @@ function buildContextMessage(vehicle, firstUserContent) {
 // The client sends assistant turns as stringified AssistantTurn JSON. Surface
 // the prior question text so the model sees what it asked.
 function buildMessages(vehicle, messages) {
+  // Photo Evidence (Step 1): an image content block is emitted only for the
+  // FINAL user turn carrying an image WITH base64 (the just-attached turn).
+  // m.image is undefined for every text-only turn / other endpoint, so this is
+  // behaviorally identical to before when no photo is present.
+  const finalUserIdx = lastUserIndex(messages);
   return messages.map((m, i) => {
     if (m.role === "user") {
-      const content = i === 0 ? buildContextMessage(vehicle, m.content) : m.content;
-      return { role: "user", content };
+      const text = i === 0 ? buildContextMessage(vehicle, m.content) : m.content;
+      return {
+        role: "user",
+        content: buildTurnContent("user", text, m.image, i === finalUserIdx),
+      };
     }
     let text = m.content;
     try {
@@ -291,7 +300,10 @@ function buildMessages(vehicle, messages) {
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+// 6mb: a single resized JPEG (~1.15 MP) as base64 is ~0.3–0.7 MB; only ONE
+// image rides per /api/diagnose-turn request (the final attach turn, lean rule),
+// so 6mb comfortably covers it + the text history. (1mb could clip a detailed photo.)
+app.use(express.json({ limit: "6mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

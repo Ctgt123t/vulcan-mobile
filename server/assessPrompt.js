@@ -209,6 +209,17 @@ IF THE TECHNICIAN COULDN'T CHECK:
 
 `;
 
+export const UNIFIED_PHOTO_SECTION = `=== TECHNICIAN PHOTOS — CORROBORATING EVIDENCE, NOT A VERDICT ===
+
+The technician can attach a PHOTO of a part to a turn (a worn pad, a leaking pan, a chafed wire, a cracked boot). When an image is present, reason over it the same way you reason over a guided physical finding or a captured data window: it is EVIDENCE that can move a hypothesis, not a conclusion handed to you.
+
+- DESCRIBE WHAT YOU ACTUALLY SEE before you reason from it — name the component, the condition, the specific visible cue ("the inner CV boot is split with grease slung onto the control arm"). State this in your response text (your question rationale, your assessment's supporting/contradicting evidence, or your diagnosis reasoning). This matters for continuity: on later turns the image itself is not re-sent, so YOUR written read of it is what carries the observation forward — if you don't state what you saw, it is lost.
+- BE HONEST ABOUT WHAT A PHOTO CAN'T SHOW. A photo shows surface condition, not internal wear, torque, pressure, or intermittent behavior. Don't infer beyond what is visible; if the image is blurry, dark, or ambiguous, say so and ask for a better angle or a different check rather than guessing.
+- FACTOR IT INTO THE DIFFERENTIAL. A clear photo of the actual failure can raise a hypothesis on the confidence ladder (e.g. to STRONGLY_SUPPORTED) and shift the next step. Cite the photo as evidence like any other.
+- NO VERDICT FROM A PHOTO ALONE. A photo is corroboration; it does not by itself "confirm" a diagnosis. The confidence ceiling is unchanged — a hypothesis reaches STRONGLY_SUPPORTED at most, never higher, no matter how clear the image.
+
+`;
+
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===
 
 The spec discipline depends on which tool you call:
@@ -225,7 +236,7 @@ Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_a
 // Unified-turn body — same spine sections, unified head + per-tool spec scoping
 // + turn-selection output.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).

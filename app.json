@@ -21,9 +21,9 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSCameraUsageDescription": "Vulcan uses the camera to scan VIN barcodes on door jamb stickers and to capture photos for inspection reports.",
+        "NSCameraUsageDescription": "Vulcan uses the camera to scan VIN barcodes on door jamb stickers and to capture photos of parts and conditions as diagnostic evidence and for inspection reports.",
         "NSMicrophoneUsageDescription": "Vulcan uses the microphone to transcribe spoken notes during a diagnosis.",
-        "NSPhotoLibraryUsageDescription": "Vulcan accesses photos to attach images to inspection reports.",
+        "NSPhotoLibraryUsageDescription": "Vulcan accesses photos to attach images as diagnostic evidence and to inspection reports.",
         "NSPhotoLibraryAddUsageDescription": "Vulcan saves inspection report photos to your photo library.",
         "NSBluetoothAlwaysUsageDescription": "Vulcan connects to OBD2 scan tools over Bluetooth to read live vehicle data.",
         "NSBluetoothPeripheralUsageDescription": "Vulcan connects to OBD2 scan tools over Bluetooth to read live vehicle data.",
@@ -62,8 +62,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Vulcan accesses photos to attach images to inspection reports.",
-          "cameraPermission": "Vulcan uses the camera to capture photos for inspection reports."
+          "photosPermission": "Vulcan accesses photos to attach images as diagnostic evidence and to inspection reports.",
+          "cameraPermission": "Vulcan uses the camera to capture photos of parts and conditions as diagnostic evidence and for inspection reports."
         }
       ],
       "expo-font",

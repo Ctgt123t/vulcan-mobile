@@ -1,9 +1,11 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -62,6 +64,7 @@ import {
   hasFindingOptions,
   readFindingOptions,
 } from "../lib/findingOptions";
+import { persistPhoto, pickAndResize, withoutBase64 } from "../lib/photoEvidence";
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import {
   buildTurnHistory,
@@ -107,6 +110,7 @@ import type {
   AssistantTurn,
   ChatMessage,
   FinalDiagnosis,
+  ImageAttachment,
   VehicleInfo,
 } from "../lib/types";
 
@@ -206,6 +210,13 @@ export default function Screen() {
   const [symptom, setSymptom] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
+  // Photo Evidence (Step 1): a photo staged in the main composer before Send,
+  // and a flag while the picker is open. The transient base64 of the most
+  // recently attached photo (the attach turn) lives in a ref — it's injected
+  // into the ONE outgoing request and never persisted (lean cost-in-history).
+  const [pendingPhoto, setPendingPhoto] = useState<ImageAttachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const pendingPhotoBase64Ref = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1353,8 +1364,31 @@ export default function Screen() {
         entry: e,
       }),
     );
+    // Photo lean-history: inject the transient base64 into the LAST user turn
+    // carrying an image (the attach turn) so the bytes ride THIS request only.
+    // The persisted messages never hold base64; this is a local clone, and
+    // buildTurnHistory keeps the image only on the final user turn (else a text
+    // placeholder), so the server re-sends bytes exactly once.
+    let msgsForHistory = messagesRef.current;
+    const outgoingB64 = pendingPhotoBase64Ref.current;
+    if (outgoingB64) {
+      let injectIdx = -1;
+      for (let i = msgsForHistory.length - 1; i >= 0; i--) {
+        if (msgsForHistory[i].role === "user" && msgsForHistory[i].image) {
+          injectIdx = i;
+          break;
+        }
+      }
+      if (injectIdx >= 0) {
+        msgsForHistory = msgsForHistory.map((m, i) =>
+          i === injectIdx && m.image
+            ? { ...m, image: { ...m.image, base64: outgoingB64 } }
+            : m,
+        );
+      }
+    }
     const history = buildTurnHistory(
-      messagesRef.current,
+      msgsForHistory,
       historyAssessments,
       historyCaptures,
     );
@@ -1525,16 +1559,49 @@ export default function Screen() {
     );
   }
 
-  async function sendUserMessage(text: string) {
+  // Offer camera vs library, then pick → resize → durable-persist. Returns an
+  // ImageAttachment (durable uri + transient base64) or null (cancel/denied/fail
+  // — all fail-soft). Mode-agnostic primitive in lib/photoEvidence.ts.
+  function chooseSource(): Promise<"camera" | "library" | null> {
+    return new Promise((resolve) => {
+      Alert.alert("Add a photo", undefined, [
+        { text: "Take Photo", onPress: () => resolve("camera") },
+        { text: "Choose from Library", onPress: () => resolve("library") },
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+      ]);
+    });
+  }
+
+  async function attachPhoto(): Promise<ImageAttachment | null> {
+    const source = await chooseSource();
+    if (!source) return null;
+    setAttaching(true);
+    try {
+      const picked = await pickAndResize(source);
+      if (!picked) return null;
+      const uri = await persistPhoto(picked.uri);
+      return { ...picked, uri };
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  // A user turn = trimmed text and/or a photo. The persisted message carries the
+  // image WITHOUT base64 (bytes are transient); the base64 is held in the ref
+  // and injected into the ONE outgoing request by runDiagnoseTurn (the attach
+  // turn). A subsequent text turn supersedes it (ref cleared to null).
+  async function sendUserMessage(text: string, image?: ImageAttachment | null) {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    const next: ChatMessage[] = [
-      ...messages,
-      { role: "user", content: trimmed },
-    ];
+    if (!trimmed && !image) return;
+    const content = trimmed || (image ? "Photo attached" : "");
+    const stored: ChatMessage = image
+      ? { role: "user", content, image: withoutBase64(image) }
+      : { role: "user", content };
+    const next: ChatMessage[] = [...messages, stored];
     setMessages(next);
     messagesRef.current = next;
     setAnswer("");
+    pendingPhotoBase64Ref.current = image?.base64 ?? null;
     // Save the user turn before the API call so a failure/crash after this
     // point doesn't lose the technician's input.
     saveCase({ messages: next });
@@ -1542,7 +1609,16 @@ export default function Screen() {
   }
 
   async function onSubmitAnswer() {
-    await sendUserMessage(answer);
+    const photo = pendingPhoto;
+    setPendingPhoto(null);
+    await sendUserMessage(answer, photo);
+  }
+
+  // Composer "attach" button (general / anytime entry point): stage a photo so
+  // Send ships text + photo as one turn.
+  async function onComposerAttach() {
+    const photo = await attachPhoto();
+    if (photo) setPendingPhoto(photo);
   }
 
   function handleVinScanned(scanned: string) {
@@ -1597,7 +1673,11 @@ export default function Screen() {
       vehicle,
       vin: vin.trim() || undefined,
       symptom: symptom.trim() || snapshot[0]?.content || "",
-      conversation: snapshot,
+      // Strip photos from the confirmed-fix record: local URIs are install-scoped
+      // and meaningless once a device is wiped. Keep the text trail + outcome.
+      conversation: snapshot.map((m) =>
+        m.image ? { role: m.role, content: m.content } : m,
+      ),
       diagnosis,
       outcome,
     };
@@ -1664,6 +1744,8 @@ export default function Screen() {
     setError(null);
     setConfirmedDone(false);
     setUnsaved(false);
+    setPendingPhoto(null);
+    pendingPhotoBase64Ref.current = null;
     // Stage 2B: the previous case was already saved at its last completed turn
     // and stays OPEN + resumable from the list — reset does NOT touch its stored
     // body or status. Clearing these refs makes the next intake a genuinely
@@ -2100,6 +2182,7 @@ export default function Screen() {
                     ? sendUserMessage
                     : undefined
                 }
+                onPickPhoto={attachPhoto}
               />
             )
           }
@@ -2172,30 +2255,65 @@ export default function Screen() {
                   Switch to Ask Vulcan ›
                 </Text>
               </TouchableOpacity>
-              <View style={styles.answerRow}>
-                <TextInput
-                  style={styles.answerInput}
-                  multiline
-                  placeholder="Type your response…"
-                  placeholderTextColor={colors.muted}
-                  value={answer}
-                  onChangeText={setAnswer}
-                  editable={!loading}
-                  textAlignVertical="top"
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.sendBtn,
-                    (loading || answer.trim().length === 0) &&
-                      styles.submitDisabled,
-                  ]}
-                  onPress={onSubmitAnswer}
-                  disabled={loading || answer.trim().length === 0}
-                  activeOpacity={0.85}
-                  accessibilityLabel="Send"
-                >
-                  <Text style={styles.sendBtnText}>Send</Text>
-                </TouchableOpacity>
+              <View style={styles.composerWrap}>
+                {pendingPhoto && (
+                  <View style={styles.stagedChip}>
+                    <Image
+                      source={{ uri: pendingPhoto.uri }}
+                      style={styles.stagedThumb}
+                      resizeMode="cover"
+                    />
+                    <Text style={styles.stagedText}>Photo attached</Text>
+                    <TouchableOpacity
+                      onPress={() => setPendingPhoto(null)}
+                      accessibilityLabel="Remove photo"
+                      hitSlop={8}
+                    >
+                      <Ionicons name="close-circle" size={18} color={colors.muted} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+                <View style={styles.answerRow}>
+                  <TouchableOpacity
+                    style={styles.attachBtn}
+                    onPress={onComposerAttach}
+                    disabled={loading || attaching}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Attach a photo"
+                  >
+                    <Ionicons
+                      name="camera-outline"
+                      size={22}
+                      color={loading || attaching ? colors.muted : colors.accent}
+                    />
+                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.answerInput}
+                    multiline
+                    placeholder="Type your response…"
+                    placeholderTextColor={colors.muted}
+                    value={answer}
+                    onChangeText={setAnswer}
+                    editable={!loading}
+                    textAlignVertical="top"
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.sendBtn,
+                      (loading ||
+                        (answer.trim().length === 0 && !pendingPhoto)) &&
+                        styles.submitDisabled,
+                    ]}
+                    onPress={onSubmitAnswer}
+                    disabled={
+                      loading || (answer.trim().length === 0 && !pendingPhoto)
+                    }
+                    activeOpacity={0.85}
+                    accessibilityLabel="Send"
+                  >
+                    <Text style={styles.sendBtnText}>Send</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </>
           )}
@@ -2319,14 +2437,39 @@ function CaseRow({
   );
 }
 
+// Photo Evidence (Step 1): a user-bubble thumbnail. A dangling local URI
+// (reinstall / OS cache purge) degrades to a placeholder, never a crash.
+function PhotoThumb({ image }: { image: ImageAttachment }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <View style={styles.photoMissing}>
+        <Text style={styles.photoMissingText}>📷 photo (not available)</Text>
+      </View>
+    );
+  }
+  return (
+    <Image
+      source={{ uri: image.uri }}
+      style={styles.photoThumb}
+      resizeMode="cover"
+      onError={() => setFailed(true)}
+      accessibilityLabel="Attached photo"
+    />
+  );
+}
+
 function MessageRow({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
       <View style={styles.userWrap}>
         <View style={[styles.bubble, styles.bubbleUser]}>
-          <Text style={[styles.bubbleText, styles.bubbleTextUser]}>
-            {message.content}
-          </Text>
+          {message.image && <PhotoThumb image={message.image} />}
+          {message.content.length > 0 && (
+            <Text style={[styles.bubbleText, styles.bubbleTextUser]}>
+              {message.content}
+            </Text>
+          )}
         </View>
       </View>
     );
@@ -2374,6 +2517,7 @@ function AssessmentThreadCard({
   onStartCapture,
   onCancelCapture,
   onSubmitFinding,
+  onPickPhoto,
 }: {
   entry: AssessmentEntry;
   onRerun?: () => void;
@@ -2387,9 +2531,19 @@ function AssessmentThreadCard({
   // latest done PHYSICAL_INSPECTION with well-formed finding_options that has
   // not been answered yet. Composes the tapped finding into a user turn. NO
   // connection required — the whole point of the guided physical lane.
-  onSubmitFinding?: (resultText: string) => void;
+  onSubmitFinding?: (resultText: string, image?: ImageAttachment | null) => void;
+  // Photo Evidence (Step 1): the shared picker so a finding + photo is ONE turn.
+  onPickPhoto?: () => Promise<ImageAttachment | null>;
 }) {
   const cap = entry.capture ?? null;
+  // A photo staged against this finding card; sent with the next outcome tap.
+  const [stagedFindingPhoto, setStagedFindingPhoto] =
+    useState<ImageAttachment | null>(null);
+  async function handleFindingAttach() {
+    if (!onPickPhoto) return;
+    const p = await onPickPhoto();
+    if (p) setStagedFindingPhoto(p);
+  }
   const isDataCapture =
     entry.slot.status === "done" &&
     entry.slot.assessment.next_step.type === "DATA_CAPTURE";
@@ -2464,14 +2618,22 @@ function AssessmentThreadCard({
           action={finding.action}
           outcomes={finding.outcomes}
           onOutcome={(o) =>
-            onSubmitFinding(formatInspectionResult({ outcome: o }))
+            onSubmitFinding(
+              formatInspectionResult({ outcome: o }),
+              stagedFindingPhoto,
+            )
           }
           onCouldntCheck={() =>
-            onSubmitFinding(formatInspectionResult({ couldntCheck: true }))
+            onSubmitFinding(
+              formatInspectionResult({ couldntCheck: true }),
+              stagedFindingPhoto,
+            )
           }
           onFreeText={(t) =>
-            onSubmitFinding(formatInspectionResult({ note: t }))
+            onSubmitFinding(formatInspectionResult({ note: t }), stagedFindingPhoto)
           }
+          onAttachPhoto={onPickPhoto ? handleFindingAttach : undefined}
+          photoStaged={!!stagedFindingPhoto}
         />
       )}
 
@@ -3015,12 +3177,71 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.2,
   },
+  composerWrap: {
+    flexDirection: "column",
+  },
   answerRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
+  },
+  attachBtn: {
+    minHeight: HIT_TARGET,
+    minWidth: HIT_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+    backgroundColor: colors.surface2,
+  },
+  // Staged-photo chip above the input
+  stagedChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.accentFade,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    alignSelf: "flex-start",
+  },
+  stagedThumb: {
+    width: 32,
+    height: 32,
+    borderRadius: 4,
+  },
+  stagedText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.accent,
+  },
+  // In-bubble photo thumbnail + missing-file placeholder
+  photoThumb: {
+    width: 200,
+    height: 150,
+    borderRadius: 8,
+    marginBottom: 6,
+    backgroundColor: colors.surface2,
+  },
+  photoMissing: {
+    width: 200,
+    height: 90,
+    borderRadius: 8,
+    marginBottom: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  photoMissingText: {
+    fontSize: 12,
+    color: colors.muted,
   },
   answerInput: {
     flex: 1,

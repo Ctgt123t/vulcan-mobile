@@ -24,6 +24,7 @@ import type {
   NumericRange,
 } from "./assessmentTypes";
 import type { EvidenceCaptureEntry } from "./diagnosticCasesCore";
+import { imageBlockForTurn, serializePhotoPlaceholder } from "./photoEvidence";
 
 // One assessment turn, with the ordering metadata the thread already holds
 // (afterMessageIndex anchors it after a chat message; completedAt orders it
@@ -130,7 +131,13 @@ export function serializeCapture(entry: EvidenceCaptureEntry): string {
 }
 
 function serializeMessage(m: ChatMessage): ChatMessage {
-  if (m.role === "user") return { role: "user", content: m.content };
+  if (m.role === "user") {
+    // Carry an attached photo through; the block/placeholder decision happens
+    // in buildTurnHistory once final-turn position is known.
+    return m.image
+      ? { role: "user", content: m.content, image: m.image }
+      : { role: "user", content: m.content };
+  }
   // Assistant content is JSON AssistantTurn (question/diagnosis), as everywhere.
   try {
     const turn = JSON.parse(m.content);
@@ -155,8 +162,16 @@ function coalesce(msgs: ChatMessage[]): ChatMessage[] {
     const last = out[out.length - 1];
     if (last && last.role === m.role) {
       last.content = `${last.content}\n\n${m.content}`;
+      // Preserve a photo across a merge (prefer the one still carrying bytes).
+      if (m.image && (!last.image || (m.image.base64 && !last.image.base64))) {
+        last.image = m.image;
+      }
     } else {
-      out.push({ role: m.role, content: m.content });
+      out.push(
+        m.image
+          ? { role: m.role, content: m.content, image: m.image }
+          : { role: m.role, content: m.content },
+      );
     }
   }
   return out;
@@ -230,5 +245,19 @@ export function buildTurnHistory(
 
   // Coalesce to strict alternation, THEN guarantee the history ends on a user
   // turn (sendable to /api/diagnose-turn from every entry path, incl. re-run).
-  return endOnUserTurn(coalesce(out));
+  const merged = endOnUserTurn(coalesce(out));
+
+  // Photo lean-history pass: the image bytes ride ONLY on the final user turn
+  // that carries them (the just-attached turn — base64 injected by the caller
+  // before this runs). Every other photo turn becomes a text placeholder so the
+  // bytes are never re-sent (~6× cost + payload bloat avoided); the brain's own
+  // prior visual read in history carries the information forward.
+  const lastIdx = merged.length - 1;
+  return merged.map((m, i) => {
+    const decision = imageBlockForTurn(m, i === lastIdx);
+    if (decision === "placeholder") {
+      return { role: m.role, content: serializePhotoPlaceholder(m) };
+    }
+    return m; // "block" keeps the image bytes; "none" is unchanged
+  });
 }

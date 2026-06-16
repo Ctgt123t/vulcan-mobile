@@ -281,6 +281,79 @@ async function main(): Promise<void> {
     );
   }
 
+  // --- Photo Evidence (Step 1): sanitizeMessages preserves a valid image, ---
+  // drops a malformed one without losing the message, never restores base64.
+  {
+    const r = migrateNoThrow({
+      schemaVersion: 1,
+      id: "photo1",
+      status: "open",
+      messages: [
+        {
+          role: "user",
+          content: "Here's the boot",
+          image: {
+            uri: "file:///doc/p.jpg",
+            mediaType: "image/jpeg",
+            width: 1200,
+            height: 900,
+            base64: "SHOULD_NOT_PERSIST",
+          },
+        },
+      ],
+    });
+    const m = r.result?.messages[0] as {
+      image?: { uri?: string; mediaType?: string; width?: number; height?: number; base64?: string };
+    };
+    check(
+      "valid image preserved through migrateCase",
+      m?.image?.uri === "file:///doc/p.jpg" && m?.image?.mediaType === "image/jpeg",
+    );
+    check(
+      "image dimensions preserved",
+      m?.image?.width === 1200 && m?.image?.height === 900,
+    );
+    check("base64 is NEVER restored (transient)", m?.image?.base64 === undefined);
+  }
+  {
+    const r = migrateNoThrow({
+      schemaVersion: 1,
+      id: "photo2",
+      status: "open",
+      messages: [
+        { role: "user", content: "bad image", image: "garbage" },
+        { role: "user", content: "bad uri", image: { uri: 123, mediaType: "image/jpeg" } },
+        { role: "user", content: "non-jpeg", image: { uri: "file:///x.jpg", mediaType: "image/png" } },
+      ],
+    });
+    const msgs = r.result?.messages as { image?: unknown }[] | undefined;
+    check(
+      "malformed image → message still loads (3 kept), never throws",
+      !r.threw && msgs?.length === 3,
+    );
+    check(
+      "malformed image fields dropped, not the message",
+      msgs?.[0]?.image === undefined &&
+        msgs?.[1]?.image === undefined &&
+        msgs?.[2]?.image === undefined,
+    );
+  }
+  {
+    const r = migrateNoThrow({
+      schemaVersion: 1,
+      id: "photo3",
+      status: "open",
+      messages: [
+        { role: "user", content: "gone", image: { uri: "file:///deleted.jpg", mediaType: "image/jpeg" } },
+      ],
+    });
+    const m = r.result?.messages[0] as { image?: { uri?: string } };
+    check(
+      "dangling uri survives migration (render degrades, not a crash)",
+      m?.image?.uri === "file:///deleted.jpg",
+    );
+  }
+
   console.log("\n[2] STORE — orchestration + 'never deletes' invariant\n");
 
   // --- Round-trip + index ---

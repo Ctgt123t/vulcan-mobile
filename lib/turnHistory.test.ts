@@ -540,6 +540,81 @@ section("Stage 3 — finding reply + a following capture coalesce");
 }
 
 // ===========================================================================
+// Photo Evidence (Step 1) — image bytes ride ONLY the final user turn; every
+// other photo turn is a text placeholder (lean cost-in-history).
+// ===========================================================================
+function photoMsg(content: string, base64?: string): ChatMessage {
+  return {
+    role: "user",
+    content,
+    image: {
+      uri: "file:///doc/diagnose-photos/x.jpg",
+      mediaType: "image/jpeg",
+      ...(base64 ? { base64 } : {}),
+    },
+  } as ChatMessage;
+}
+
+section("Photo — final user turn keeps the image block");
+{
+  const out = buildTurnHistory(
+    [
+      userMsg("Is the CV boot torn?"),
+      questionMsg("Can you show me the inner boot?"),
+      photoMsg("Here's the boot", "B64DATA"),
+    ],
+    [],
+    [],
+  );
+  eq(out.length, 3, "complaint + question + photo turn");
+  assertAlternates(out, "photo-final");
+  assertEndsOnUser(out, "photo-final");
+  ok(!!out[2].image, "final user turn KEEPS the image (block)");
+  eq(out[2].image?.base64, "B64DATA", "image carries the base64 to the server");
+  eq(out[2].content, "Here's the boot", "caption unchanged on the block turn");
+}
+
+section("Photo — a non-final photo turn becomes a placeholder (no bytes)");
+{
+  const out = buildTurnHistory(
+    [
+      userMsg("Is the CV boot torn?"),
+      questionMsg("Show me the inner boot."),
+      photoMsg("Here's the boot", "B64DATA"),
+      questionMsg("Thanks — any grease slung around?"),
+      userMsg("Yes, all over the control arm."),
+    ],
+    [],
+    [],
+  );
+  eq(out.length, 5, "five turns");
+  assertAlternates(out, "photo-nonfinal");
+  assertEndsOnUser(out, "photo-nonfinal");
+  ok(out[2].image === undefined, "non-final photo turn drops the image (no re-send)");
+  ok(
+    find(out, "Here's the boot [photo attached]") >= 0,
+    "non-final photo turn serialized as a text placeholder",
+  );
+  ok(out[out.length - 1].image === undefined, "final non-photo turn has no image");
+}
+
+section("Photo — image survives coalesce with a following capture");
+{
+  const out = buildTurnHistory(
+    [userMsg("Lean code P0171."), questionMsg("Take a photo of the intake."), photoMsg("Intake boot", "B64DATA")],
+    [],
+    // a capture anchored after the photo turn (index 2) → adjacent user-origin →
+    // coalesces with the photo turn; the image must survive the merge and, being
+    // the final user turn, stay a block.
+    [{ afterMessageIndex: 2, capturedAt: "t9", entry: minimalCapture() }],
+  );
+  assertAlternates(out, "photo-coalesce");
+  assertEndsOnUser(out, "photo-coalesce");
+  ok(!!out[out.length - 1].image, "image preserved across coalesce on the final turn");
+  ok(find(out, "Captured evidence") >= 0, "capture text merged into the same user turn");
+}
+
+// ===========================================================================
 // SUMMARY
 // ===========================================================================
 

@@ -22,7 +22,7 @@
 //     staleness guarantee (Stage 2B constraint 3).
 // ============================================================================
 
-import type { ChatMessage, VehicleInfo } from "./types";
+import type { ChatMessage, ImageAttachment, VehicleInfo } from "./types";
 import type {
   DiagnosticAssessment,
   DiagnosticSnapshot,
@@ -188,9 +188,25 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-// A ChatMessage we are willing to restore: {role: user|assistant, content:string}.
-// Anything that doesn't match is dropped (not fatal — a partial thread still
-// renders and re-sends).
+// A photo attachment we are willing to restore. base64 is NEVER persisted (it's
+// transient — sent once on the attach turn), so it is never restored. A
+// malformed image is dropped (returns undefined) WITHOUT dropping the message —
+// the thread still renders, just without that thumbnail (a dangling/absent URI
+// degrades to a placeholder at render time). Never throws.
+function sanitizeImage(v: unknown): ImageAttachment | undefined {
+  if (!isObj(v)) return undefined;
+  if (typeof v.uri !== "string" || v.uri.length === 0) return undefined;
+  if (v.mediaType !== "image/jpeg") return undefined;
+  const img: ImageAttachment = { uri: v.uri, mediaType: "image/jpeg" };
+  if (typeof v.width === "number") img.width = v.width;
+  if (typeof v.height === "number") img.height = v.height;
+  return img;
+}
+
+// A ChatMessage we are willing to restore: {role: user|assistant, content:string}
+// plus an optional validated image (Photo Evidence Step 1 — additive; an earlier
+// build / a malformed image still loads). Anything that doesn't match the core
+// shape is dropped (not fatal — a partial thread still renders and re-sends).
 function sanitizeMessages(v: unknown): ChatMessage[] {
   return arr<unknown>(v)
     .filter(
@@ -199,7 +215,12 @@ function sanitizeMessages(v: unknown): ChatMessage[] {
         (m.role === "user" || m.role === "assistant") &&
         typeof m.content === "string",
     )
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => {
+      const msg: ChatMessage = { role: m.role, content: m.content };
+      const img = sanitizeImage((m as { image?: unknown }).image);
+      if (img) msg.image = img;
+      return msg;
+    });
 }
 
 function sanitizeVehicle(v: unknown): CaseVehicle {

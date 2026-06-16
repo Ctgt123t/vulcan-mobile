@@ -28,13 +28,15 @@ export default function FindingCard({
   onCouldntCheck,
   onFreeText,
   onAttachPhoto,
+  photoStaged,
 }: {
   action: string;
   outcomes: string[];
   onOutcome: (outcome: string) => void;
   onCouldntCheck: () => void;
   onFreeText: (text: string) => void;
-  onAttachPhoto?: () => void; // photo seam — disabled/absent for now
+  onAttachPhoto?: () => void; // Photo Evidence (Step 1): stage a photo for this finding
+  photoStaged?: boolean; // a photo is staged → it rides the next outcome tap
 }) {
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState("");
@@ -97,17 +99,26 @@ export default function FindingCard({
           </TouchableOpacity>
         )}
 
-        {/* PHOTO SEAM: renders only when a handler is supplied (none today). */}
+        {/* Photo Evidence (Step 1): stage a photo that rides the next outcome
+            tap, so finding + photo is ONE turn. */}
         {onAttachPhoto && (
           <TouchableOpacity
             style={styles.escapeBtn}
             onPress={onAttachPhoto}
             activeOpacity={0.8}
             accessibilityRole="button"
-            accessibilityLabel="Add a photo"
+            accessibilityLabel={photoStaged ? "Photo attached" : "Add a photo"}
           >
-            <Ionicons name="camera-outline" size={16} color={colors.muted} />
-            <Text style={styles.escapeText}>Add photo</Text>
+            <Ionicons
+              name={photoStaged ? "checkmark-circle" : "camera-outline"}
+              size={16}
+              color={photoStaged ? colors.accent : colors.muted}
+            />
+            <Text
+              style={[styles.escapeText, photoStaged && { color: colors.accent }]}
+            >
+              {photoStaged ? "Photo attached" : "Add photo"}
+            </Text>
           </TouchableOpacity>
         )}
       </View>

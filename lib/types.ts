@@ -14,9 +14,26 @@ export interface VehicleInfo {
   mileage: string;
 }
 
+// A photo a technician attached to a user turn (Photo Evidence, Step 1).
+// `uri` is a durable local file (expo-file-system documentDirectory) used for
+// the thumbnail + resume; it may dangle after a reinstall/OS purge (render a
+// placeholder, never crash). `base64` is TRANSIENT — attached only to the
+// OUTGOING copy of the turn the photo is sent on (the attach turn), never
+// persisted to the case envelope and never re-sent on later turns. That is the
+// lean cost-in-history rule: the image bytes ride once; later turns carry the
+// brain's own textual read (see lib/photoEvidence.ts + server buildMessages).
+export interface ImageAttachment {
+  uri: string;
+  mediaType: "image/jpeg";
+  width?: number;
+  height?: number;
+  base64?: string;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  image?: ImageAttachment;
 }
 
 export interface FinalDiagnosis {
