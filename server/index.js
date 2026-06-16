@@ -53,7 +53,11 @@ import {
   buildSystemPrompt,
 } from "./assessPrompt.js";
 import { softValidateFindingOptions } from "./findingOptions.js";
-import { buildTurnContent, lastUserIndex } from "./diagnoseMessages.js";
+import {
+  buildTurnContent,
+  lastUserIndex,
+  messageHasImage,
+} from "./diagnoseMessages.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -580,6 +584,7 @@ Guidelines:
 - Talk freely and confidently about diagnosis, how systems work, where parts are, and how to do the job — that's what a good colleague brings. But a good colleague doesn't rattle off exact factory numbers from memory: when the answer is a specific spec (capacity, torque, viscosity, pressure, gap, voltage, or interval) and you weren't handed a verified value, say so straight and point to the OEM source rather than guessing — e.g. "I don't have the confirmed figure on that one — check it against the service manual." Hedge on the hard numbers, not on the conversation.
 - If the conversation naturally moves toward diagnosing a specific problem, follow it and offer diagnostic guidance, but do not force a formal final diagnosis unless the technician explicitly asks for one.
 - If a vehicle has been provided and the question touches on recalls or TSBs, reference any matching items from the recall/TSB context blocks by their campaign or item number. Do not invent recalls or TSBs beyond what is provided.
+- If the technician attaches a PHOTO, treat it as reference evidence to reason over: describe what you actually see, factor it into your answer, and be honest about what a photo can't show (it shows surface condition, not internal wear, torque, or pressure). A value read off a label, cap, or sticker in a photo is still a value to confirm against the OEM source unless it's a verified figure — the spec-hedge rule above still applies.
 - Respond in plain text. No tools, no JSON, no structured output. Just a helpful answer.`;
 
 app.post("/api/ask", async (req, res) => {
@@ -784,6 +789,13 @@ app.post("/api/ask", async (req, res) => {
     vehicle.make &&
     vehicle.model &&
     !isSpecShapedQuestion(lastUserText) &&
+    // Photo Evidence: an image-bearing ask is NEVER cached. The cache key is
+    // blind to the image, so a cached text answer must not be served for a
+    // photo, and a photo-specific answer must not be frozen for later text
+    // questions. cacheKey stays null → no read (below) AND no write (further
+    // below) — both halves gated by this one condition. (Mirrors the
+    // isSpecShapedQuestion exclusion.)
+    !messageHasImage(lastUserMsg) &&
     isCacheableQuestion(lastUserText);
 
   let cacheKey = null;
@@ -819,7 +831,19 @@ app.post("/api/ask", async (req, res) => {
         }),
       model: ASK_MODEL,
       systemBlocks,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      // Photo Evidence: a standard Opus vision image block on the FINAL user
+      // image-with-base64 turn (the attach turn); every other turn stays a
+      // string (text-only asks are byte-identical to before). Reuses the same
+      // buildTurnContent/lastUserIndex as /api/diagnose-turn.
+      messages: messages.map((m, i) => ({
+        role: m.role,
+        content: buildTurnContent(
+          m.role,
+          m.content,
+          m.image,
+          i === lastUserIndex(messages),
+        ),
+      })),
       tools: ASK_TOOLS,
       handlers: ASK_TOOL_HANDLERS,
       ctx: loopCtx,

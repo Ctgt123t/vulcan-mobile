@@ -19,6 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import DiagnosisActions from "../components/DiagnosisActions";
 import Navbar from "../components/Navbar";
+import PhotoThumb from "../components/PhotoThumb";
 import RecallList from "../components/RecallList";
 import Results from "../components/Results";
 import TsbList from "../components/TsbList";
@@ -2437,28 +2438,6 @@ function CaseRow({
   );
 }
 
-// Photo Evidence (Step 1): a user-bubble thumbnail. A dangling local URI
-// (reinstall / OS cache purge) degrades to a placeholder, never a crash.
-function PhotoThumb({ image }: { image: ImageAttachment }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return (
-      <View style={styles.photoMissing}>
-        <Text style={styles.photoMissingText}>📷 photo (not available)</Text>
-      </View>
-    );
-  }
-  return (
-    <Image
-      source={{ uri: image.uri }}
-      style={styles.photoThumb}
-      resizeMode="cover"
-      onError={() => setFailed(true)}
-      accessibilityLabel="Attached photo"
-    />
-  );
-}
-
 function MessageRow({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
@@ -3220,29 +3199,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.accent,
   },
-  // In-bubble photo thumbnail + missing-file placeholder
-  photoThumb: {
-    width: 200,
-    height: 150,
-    borderRadius: 8,
-    marginBottom: 6,
-    backgroundColor: colors.surface2,
-  },
-  photoMissing: {
-    width: 200,
-    height: 90,
-    borderRadius: 8,
-    marginBottom: 6,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  photoMissingText: {
-    fontSize: 12,
-    color: colors.muted,
-  },
+  // (in-bubble photo thumbnail styles moved to components/PhotoThumb.tsx)
   answerInput: {
     flex: 1,
     minHeight: HIT_TARGET,

@@ -12,6 +12,21 @@
 // the standard image content block — no header, no beta flag, no model change.
 // ============================================================================
 
+// True iff a message carries an image attachment (a non-null image object).
+// Used by Ask Vulcan to BYPASS the text-only response cache for image-bearing
+// asks (the cache key is blind to the image, so a photo question must never be
+// served from, or written to, the cache). A malformed/non-object image is
+// treated as no-image (it renders as text-only anyway, and is safe to cache).
+// Pure, never throws.
+export function messageHasImage(message) {
+  return !!(
+    message &&
+    typeof message === "object" &&
+    message.image &&
+    typeof message.image === "object"
+  );
+}
+
 // Index of the last user turn (the "final user turn"), or -1.
 export function lastUserIndex(messages) {
   if (!Array.isArray(messages)) return -1;

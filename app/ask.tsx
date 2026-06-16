@@ -5,7 +5,9 @@ import { useObd2 } from "../contexts/Obd2Context";
 import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -19,6 +21,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
+import PhotoThumb from "../components/PhotoThumb";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import {
@@ -30,9 +33,11 @@ import {
 } from "../lib/api";
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
+import { persistPhoto, pickAndResize, withoutBase64 } from "../lib/photoEvidence";
 import { HIT_TARGET, colors } from "../lib/theme";
 import type {
   ChatMessage,
+  ImageAttachment,
   VehicleInfo,
 } from "../lib/types";
 
@@ -56,6 +61,12 @@ export default function AskScreen() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Photo Evidence: a photo staged in the composer before Send, a flag while the
+  // picker is open, and the transient base64 of the most recently attached photo
+  // — injected into the ONE outgoing request, never re-uploaded (lean history).
+  const [pendingPhoto, setPendingPhoto] = useState<ImageAttachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const pendingPhotoBase64Ref = useRef<string | null>(null);
 
   const [vehicleModalOpen, setVehicleModalOpen] = useState(false);
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
@@ -116,20 +127,70 @@ export default function AskScreen() {
     return () => clearTimeout(id);
   }, [messages.length, loading]);
 
-  async function send(text: string) {
+  // Offer camera vs library → pick → resize → durable-persist. Returns an
+  // ImageAttachment (durable uri + transient base64) or null (all fail-soft).
+  // Reuses the mode-agnostic lib/photoEvidence.ts shipped with Diagnose.
+  function chooseSource(): Promise<"camera" | "library" | null> {
+    return new Promise((resolve) => {
+      Alert.alert("Add a photo", undefined, [
+        { text: "Take Photo", onPress: () => resolve("camera") },
+        { text: "Choose from Library", onPress: () => resolve("library") },
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+      ]);
+    });
+  }
+
+  async function attachPhoto(): Promise<ImageAttachment | null> {
+    const source = await chooseSource();
+    if (!source) return null;
+    setAttaching(true);
+    try {
+      const picked = await pickAndResize(source);
+      if (!picked) return null;
+      const uri = await persistPhoto(picked.uri);
+      return { ...picked, uri };
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  async function onComposerAttach() {
+    const photo = await attachPhoto();
+    if (photo) setPendingPhoto(photo);
+  }
+
+  async function send(text: string, image?: ImageAttachment | null) {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
-    const next: ChatMessage[] = [
-      ...messages,
-      { role: "user", content: trimmed },
-    ];
+    if ((!trimmed && !image) || loading) return;
+    const content = trimmed || (image ? "Photo attached" : "");
+    // Persist the message WITHOUT base64 (bytes are transient); the base64 is
+    // injected into the outgoing request's final image turn only.
+    const stored: ChatMessage = image
+      ? { role: "user", content, image: withoutBase64(image) }
+      : { role: "user", content };
+    const next: ChatMessage[] = [...messages, stored];
     setMessages(next);
     setDraft("");
+    setPendingPhoto(null);
+    pendingPhotoBase64Ref.current = image?.base64 ?? null;
     setLoading(true);
     setError(null);
+    // Inject the transient base64 into the LAST user turn (the attach turn) of
+    // a local clone — sent on THIS ask only. The server's buildTurnContent emits
+    // the image block for that turn and a text placeholder for any prior photo
+    // turn (no base64), so bytes ride exactly once across asks (lean history).
+    let outgoing = next;
+    if (pendingPhotoBase64Ref.current) {
+      const b64 = pendingPhotoBase64Ref.current;
+      outgoing = next.map((m, i) =>
+        i === next.length - 1 && m.image
+          ? { ...m, image: { ...m.image, base64: b64 } }
+          : m,
+      );
+    }
     try {
       const reply = await ask(
-        next,
+        outgoing,
         hasVehicle ? vehicle : undefined,
         recalls,
         tsbs,
@@ -282,33 +343,66 @@ export default function AskScreen() {
               </Text>
             </TouchableOpacity>
           )}
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.input}
-              multiline
-              placeholder={
-                hasVehicle
-                  ? "Ask anything about this vehicle…"
-                  : "Ask anything automotive…"
-              }
-              placeholderTextColor={colors.muted}
-              value={draft}
-              onChangeText={setDraft}
-              editable={!loading}
-              textAlignVertical="top"
-            />
-            <TouchableOpacity
-              style={[
-                styles.sendBtn,
-                (loading || draft.trim().length === 0) && styles.sendDisabled,
-              ]}
-              onPress={() => send(draft)}
-              disabled={loading || draft.trim().length === 0}
-              activeOpacity={0.85}
-              accessibilityLabel="Send"
-            >
-              <Text style={styles.sendBtnText}>Send</Text>
-            </TouchableOpacity>
+          <View style={styles.composerWrap}>
+            {pendingPhoto && (
+              <View style={styles.stagedChip}>
+                <Image
+                  source={{ uri: pendingPhoto.uri }}
+                  style={styles.stagedThumb}
+                  resizeMode="cover"
+                />
+                <Text style={styles.stagedText}>Photo attached</Text>
+                <TouchableOpacity
+                  onPress={() => setPendingPhoto(null)}
+                  accessibilityLabel="Remove photo"
+                  hitSlop={8}
+                >
+                  <Ionicons name="close-circle" size={18} color={colors.muted} />
+                </TouchableOpacity>
+              </View>
+            )}
+            <View style={styles.inputRow}>
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={onComposerAttach}
+                disabled={loading || attaching}
+                activeOpacity={0.7}
+                accessibilityLabel="Attach a photo"
+              >
+                <Ionicons
+                  name="camera-outline"
+                  size={22}
+                  color={loading || attaching ? colors.muted : colors.accent}
+                />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.input}
+                multiline
+                placeholder={
+                  hasVehicle
+                    ? "Ask anything about this vehicle…"
+                    : "Ask anything automotive…"
+                }
+                placeholderTextColor={colors.muted}
+                value={draft}
+                onChangeText={setDraft}
+                editable={!loading}
+                textAlignVertical="top"
+              />
+              <TouchableOpacity
+                style={[
+                  styles.sendBtn,
+                  (loading || (draft.trim().length === 0 && !pendingPhoto)) &&
+                    styles.sendDisabled,
+                ]}
+                onPress={() => send(draft, pendingPhoto)}
+                disabled={loading || (draft.trim().length === 0 && !pendingPhoto)}
+                activeOpacity={0.85}
+                accessibilityLabel="Send"
+              >
+                <Text style={styles.sendBtnText}>Send</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </SafeAreaView>
       </KeyboardAvoidingView>
@@ -332,9 +426,12 @@ function MessageRow({ message }: { message: ChatMessage }) {
     return (
       <View style={styles.userWrap}>
         <View style={[styles.bubble, styles.bubbleUser]}>
-          <Text style={[styles.bubbleText, styles.bubbleTextUser]}>
-            {message.content}
-          </Text>
+          {message.image && <PhotoThumb image={message.image} />}
+          {message.content.length > 0 && (
+            <Text style={[styles.bubbleText, styles.bubbleTextUser]}>
+              {message.content}
+            </Text>
+          )}
         </View>
       </View>
     );
@@ -751,12 +848,47 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.2,
   },
+  composerWrap: {
+    flexDirection: "column",
+  },
   inputRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
+  },
+  attachBtn: {
+    minHeight: HIT_TARGET,
+    minWidth: HIT_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+    backgroundColor: colors.surface2,
+  },
+  stagedChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.accentFade,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+    alignSelf: "flex-start",
+  },
+  stagedThumb: {
+    width: 32,
+    height: 32,
+    borderRadius: 4,
+  },
+  stagedText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.accent,
   },
   input: {
     flex: 1,
