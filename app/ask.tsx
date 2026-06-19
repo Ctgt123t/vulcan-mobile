@@ -284,9 +284,9 @@ export default function AskScreen() {
           Platform.OS === "android" && { paddingBottom: androidKbHeight },
         ]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={
-          Platform.OS === "ios" ? insets.top + headerHeight : 0
-        }
+        // Offset must be 0: the header is a sibling above this KAV, so a
+        // non-zero offset over-lifts the composer (dead gap above the keyboard).
+        keyboardVerticalOffset={0}
       >
         {messages.length === 0 ? (
           <View style={styles.emptyWrap}>
@@ -560,6 +560,10 @@ function AddVehicleModal({
         <ScrollView
           contentContainerStyle={styles.modalContent}
           keyboardShouldPersistTaps="handled"
+          // iOS: auto-inset for the keyboard + scroll the focused field above it
+          // (this pageSheet modal had NO keyboard avoidance, so Model was covered).
+          // No-op on Android, which uses adjustResize (app.json).
+          automaticallyAdjustKeyboardInsets
         >
           <Text style={styles.modalLabel}>VIN</Text>
           <View style={styles.vinRow}>

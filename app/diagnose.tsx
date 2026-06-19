@@ -1795,6 +1795,10 @@ export default function Screen() {
                 : null,
             ]}
             keyboardShouldPersistTaps="handled"
+            // iOS: scroll the focused field above the keyboard. Complementary to
+            // the KAV (which lifts the viewport above the keyboard, so the added
+            // inset is ~0 — no double-count) + adds scroll-to-focused.
+            automaticallyAdjustKeyboardInsets
           >
             <Text style={styles.h1}>Diagnose</Text>
             <Text style={styles.subtitle}>
@@ -2105,9 +2109,11 @@ export default function Screen() {
           Platform.OS === "android" && { paddingBottom: androidKbHeight },
         ]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={
-          Platform.OS === "ios" ? insets.top + headerHeight : 0
-        }
+        // The header is a sibling ABOVE this KAV, so the KAV frame already
+        // begins below it — RN's padding = keyboardHeight + offset, so any
+        // non-zero offset OVER-lifts the composer (the "dead gap above the
+        // keyboard" bug). Offset must be 0 (matches the working intake KAV).
+        keyboardVerticalOffset={0}
       >
         <FlatList
           ref={listRef}

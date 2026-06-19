@@ -42,7 +42,9 @@ export default function Navbar({
             </TouchableOpacity>
           )}
           <BrandMark size={28} />
-          <Text style={styles.brandName}>Vulcan</Text>
+          <Text style={styles.brandName} numberOfLines={1}>
+            Vulcan
+          </Text>
           <View style={styles.proBadge}>
             <Text style={styles.proBadgeText}>PRO</Text>
           </View>
@@ -93,6 +95,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+    // Let the brand group give way on narrow screens (RN default flexShrink is
+    // 0, so without this the brand + actions collide). minWidth:0 lets the name
+    // ellipsize rather than push the PRO badge into the logo.
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: 8,
   },
   backBtn: {
     minWidth: HIT_TARGET,
@@ -112,6 +120,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: -0.2,
+    flexShrink: 1, // the name is what ellipsizes; the badge/logo stay fixed
   },
   proBadge: {
     backgroundColor: colors.accentFade,
@@ -120,6 +129,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 4,
+    flexShrink: 0, // never compress the badge (keeps it off the logo)
   },
   proBadgeText: {
     color: colors.accent,
@@ -131,6 +141,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    flexShrink: 0, // Records / Sign out keep their size; the brand gives way
   },
   actionBtn: {
     minHeight: HIT_TARGET - 12,

@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { HIT_TARGET, colors } from "../lib/theme";
+import { extractVin, vinCheckDigitValid } from "../lib/vin";
 
 type Props = {
   visible: boolean;
@@ -22,8 +23,8 @@ type Props = {
 
 type ScanMode = "barcode" | "qr";
 
-const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i;
 const SUCCESS_COLOR = "#22C55E";
+const LOWCONF_COLOR = "#F59E0B"; // amber — VIN captured but check digit didn't match
 const SCRIM_COLOR = "rgba(0, 0, 0, 0.55)";
 
 // Most iPads ship without a usable torch; expo-camera's enableTorch silently
@@ -38,15 +39,13 @@ const WINDOW_GEOMETRY: Record<ScanMode, { widthPct: number; height: number }> = 
   qr: { widthPct: 0.65, height: 260 },
 };
 
-type Bounds = {
-  origin?: { x: number; y: number };
-  size?: { width: number; height: number };
-};
-
 export default function VinScanner({ visible, onClose, onScanned }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const [torchOn, setTorchOn] = useState(false);
   const [mode, setMode] = useState<ScanMode>("barcode");
+  // A VIN was captured but its ISO check digit didn't match — non-blocking
+  // low-confidence signal (amber flash + a verify hint); the scan still proceeds.
+  const [lowConfidence, setLowConfidence] = useState(false);
   const handledRef = useRef(false);
   const successAnim = useRef(new Animated.Value(0)).current;
   const dims = useWindowDimensions();
@@ -59,15 +58,12 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
   const geo = WINDOW_GEOMETRY[mode];
   const windowWidth = cameraSize.width * geo.widthPct;
   const windowHeight = geo.height;
-  const windowLeft = (cameraSize.width - windowWidth) / 2;
-  const windowTop = (cameraSize.height - windowHeight) / 2;
-  const windowRight = windowLeft + windowWidth;
-  const windowBottom = windowTop + windowHeight;
 
   // Reset on hide. Reset handledRef on mode change so a new scan can fire.
   useEffect(() => {
     if (!visible) {
       setTorchOn(false);
+      setLowConfidence(false);
       handledRef.current = false;
       successAnim.setValue(0);
     }
@@ -77,50 +73,38 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
     handledRef.current = false;
   }, [mode]);
 
-  function inScanWindow(bounds?: Bounds): boolean {
-    if (!bounds?.origin || !bounds.size) return true;
-    const cx = bounds.origin.x + bounds.size.width / 2;
-    const cy = bounds.origin.y + bounds.size.height / 2;
-    if (
-      cx < 0 ||
-      cx > cameraSize.width ||
-      cy < 0 ||
-      cy > cameraSize.height
-    ) {
-      return true;
-    }
-    return (
-      cx >= windowLeft &&
-      cx <= windowRight &&
-      cy >= windowTop &&
-      cy <= windowBottom
-    );
-  }
-
-  function handleBarcode(result: { data: string; bounds?: Bounds }) {
+  // Accept on a successful VIN PARSE — never on camera `bounds`. expo-camera
+  // gives unreliable/empty bounds for iOS code39 (the dominant VIN format), so
+  // the old spatial gate rejected ~90% of real detections. extractVin searches
+  // for a 17-char VIN (handling a leading `I` import flag, *…* start/stop, or a
+  // QR/URL payload); the reticle is now purely cosmetic guidance.
+  function handleBarcode(result: { data: string }) {
     if (handledRef.current) return;
-    if (!inScanWindow(result.bounds)) return;
-
-    const cleaned = result.data.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-    // Same VIN validation regardless of source format. QR codes on newer GM
-    // door stickers encode the VIN as the QR payload; the 17-char filter
-    // catches anything that wraps the VIN in extra data or isn't actually one.
-    if (!VIN_RE.test(cleaned)) return;
+    const vin = extractVin(result.data);
+    if (!vin) return;
 
     handledRef.current = true;
+    // Soft check digit: a mismatch does NOT block — it flashes amber + shows a
+    // verify hint and gives a slightly longer beat to read it before closing.
+    const low = !vinCheckDigitValid(vin);
+    setLowConfidence(low);
     Animated.timing(successAnim, {
       toValue: 1,
       duration: 180,
       useNativeDriver: false,
     }).start();
-    setTimeout(() => {
-      setTorchOn(false);
-      onScanned(cleaned);
-    }, 420);
+    setTimeout(
+      () => {
+        setTorchOn(false);
+        onScanned(vin);
+      },
+      low ? 900 : 420,
+    );
   }
 
   function handleClose() {
     setTorchOn(false);
+    setLowConfidence(false);
     handledRef.current = false;
     successAnim.setValue(0);
     onClose();
@@ -156,7 +140,7 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
 
     const borderColor = successAnim.interpolate({
       inputRange: [0, 1],
-      outputRange: ["#FFFFFF", SUCCESS_COLOR],
+      outputRange: ["#FFFFFF", lowConfidence ? LOWCONF_COLOR : SUCCESS_COLOR],
     });
 
     return (
@@ -178,7 +162,20 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
           // lock". For close-range door-jamb scanning we want continuous AF.
           autofocus="off"
           barcodeScannerSettings={{
-            barcodeTypes: mode === "qr" ? ["qr"] : ["code39", "code128"],
+            // VIN plates are overwhelmingly Code 39; the rest are cheap coverage
+            // for less-common sticker encodings. (QR mode is its own payload.)
+            barcodeTypes:
+              mode === "qr"
+                ? ["qr"]
+                : [
+                    "code39",
+                    "code128",
+                    "code93",
+                    "itf14",
+                    "pdf417",
+                    "datamatrix",
+                    "aztec",
+                  ],
           }}
           onBarcodeScanned={handleBarcode}
         />
@@ -217,10 +214,12 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
             <View style={styles.scrimSide} />
           </View>
           <View style={styles.bandBottom}>
-            <Text style={styles.subhint}>
-              {mode === "qr"
-                ? "QR Code · 17 characters"
-                : "Code 39 / Code 128 · 17 characters"}
+            <Text style={[styles.subhint, lowConfidence && styles.subhintWarn]}>
+              {lowConfidence
+                ? "VIN captured — double-check it (check digit didn't match)"
+                : mode === "qr"
+                  ? "Point at the VIN QR code"
+                  : "Point at the VIN barcode — hold steady"}
             </Text>
           </View>
         </View>
@@ -244,8 +243,20 @@ export default function VinScanner({ visible, onClose, onScanned }: Props) {
             },
           ]}
         >
-          <View style={styles.successCircle}>
-            <Ionicons name="checkmark" size={42} color="#FFFFFF" />
+          <View
+            style={[
+              styles.successCircle,
+              lowConfidence && {
+                backgroundColor: LOWCONF_COLOR,
+                shadowColor: LOWCONF_COLOR,
+              },
+            ]}
+          >
+            <Ionicons
+              name={lowConfidence ? "alert" : "checkmark"}
+              size={42}
+              color="#FFFFFF"
+            />
           </View>
         </Animated.View>
 
@@ -479,6 +490,11 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     textAlign: "center",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  subhintWarn: {
+    color: LOWCONF_COLOR,
+    letterSpacing: 0.3,
+    fontWeight: "700",
   },
 
   corner: {
