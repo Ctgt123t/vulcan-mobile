@@ -43,7 +43,7 @@ export default function Navbar({
               activeOpacity={0.7}
               accessibilityLabel="Back"
             >
-              <Text style={styles.backText}>‹</Text>
+              <Text style={[styles.backText, transparent && styles.backTextTransparent]}>‹</Text>
             </TouchableOpacity>
           )}
           <BrandMark size={28} />
@@ -130,6 +130,9 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "300",
     marginTop: -4,
+  },
+  backTextTransparent: {
+    color: "#AEB5BD", // steel (home/intake transparent header)
   },
   brandName: {
     color: colors.heading,

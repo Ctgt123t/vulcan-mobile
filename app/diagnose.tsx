@@ -25,6 +25,8 @@ import Results from "../components/Results";
 import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
+import Background from "../components/ui/Background";
+import GlassCard from "../components/ui/GlassCard";
 import { NextStepBlock } from "../components/assessment/parts";
 import CaptureCard from "../components/assessment/CaptureCard";
 import FindingCard from "../components/assessment/FindingCard";
@@ -107,7 +109,7 @@ import {
   makeRecordId,
   saveRecord,
 } from "../lib/records";
-import { HIT_TARGET, colors, fonts } from "../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import type {
   AssistantTurn,
   ChatMessage,
@@ -331,6 +333,9 @@ export default function Screen() {
   // Saved-cases list (intake) + lifecycle state.
   const [cases, setCases] = useState<CaseIndexEntry[]>([]);
   const [showAllCases, setShowAllCases] = useState(false);
+  // v2 intake: the saved-cases section is a collapsed glass disclosure (closed
+  // by default so the form is immediately visible).
+  const [casesOpen, setCasesOpen] = useState(false);
   // When the multi-match auto-prompt routes here with ?focusVin, the list filters
   // to that vehicle's cases (open + closed) until the tech taps "Show all".
   const [caseFilterVin, setCaseFilterVin] = useState<string | null>(null);
@@ -1891,8 +1896,9 @@ export default function Screen() {
 
   if (phase === "intake") {
     return (
-      <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+      <Background>
+        <SafeAreaView style={styles.safeTransparent} edges={["top", "left", "right"]}>
+        <Navbar transparent showBack />
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -1913,60 +1919,93 @@ export default function Screen() {
           >
             <Text style={styles.h1}>Diagnose</Text>
             <Text style={styles.subtitle}>
-              Scan the VIN on the driver door jamb sticker, or enter it
-              manually. Vehicle details auto-populate from NHTSA.
+              Scan the VIN on the driver&apos;s door jamb, connect an OBD2
+              adapter to read it automatically, or enter it manually.
             </Text>
 
             {cases.length > 0 && (
               <View style={styles.casesSection}>
-                <View style={styles.casesSectionHeader}>
-                  <Text style={styles.casesSectionLabel}>
-                    {caseFilterVin
-                      ? `CASES FOR THIS VEHICLE (${displayedCases.length})`
-                      : `SAVED CASES (${cases.length})`}
-                  </Text>
-                  {caseFilterVin && (
-                    <TouchableOpacity
-                      onPress={() => setCaseFilterVin(null)}
-                      activeOpacity={0.7}
-                      accessibilityLabel="Show all cases"
-                    >
-                      <Text style={styles.casesClearFilter}>Show all</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                {(showAllCases
-                  ? displayedCases
-                  : displayedCases.slice(0, 3)
-                ).map((c) => (
-                  <CaseRow
-                    key={c.id}
-                    entry={c}
-                    onOpen={() => attemptResume(c.id)}
-                    onCloseCase={() => onCloseCaseFromList(c)}
-                    onDeleteCase={() => onDeleteCaseFromList(c)}
-                  />
-                ))}
-                {displayedCases.length === 0 && (
-                  <Text style={styles.casesEmpty}>
-                    No saved cases for this vehicle.
-                  </Text>
-                )}
-                {!caseFilterVin && displayedCases.length > 3 && (
-                  <TouchableOpacity
-                    style={styles.casesToggle}
-                    onPress={() => setShowAllCases((s) => !s)}
-                    activeOpacity={0.7}
-                    accessibilityLabel={
-                      showAllCases ? "Show fewer cases" : "View all cases"
-                    }
-                  >
-                    <Text style={styles.disclosureText}>
-                      {showAllCases
-                        ? "Show fewer"
-                        : `View all (${displayedCases.length})`}
+                {/* Collapsed glass disclosure bar (closed by default so the form
+                    is immediately visible). All saved-case behavior — open,
+                    close/delete, view-all, vehicle filter — is preserved; only
+                    the presentation moved behind this bar. */}
+                <GlassCard
+                  onPress={() => setCasesOpen((o) => !o)}
+                  accessibilityLabel={
+                    casesOpen ? "Hide saved cases" : "Show saved cases"
+                  }
+                >
+                  <View style={styles.casesBar}>
+                    <Ionicons
+                      name="folder-open-outline"
+                      size={18}
+                      color={colors.steelGlyph}
+                    />
+                    <Text style={styles.casesBarLabel}>
+                      {caseFilterVin ? "Cases for this vehicle" : "Saved cases"}
                     </Text>
-                  </TouchableOpacity>
+                    <View style={styles.casesCountChip}>
+                      <Text style={styles.casesCountText}>
+                        {displayedCases.length}
+                      </Text>
+                    </View>
+                    <View style={styles.flex} />
+                    <Ionicons
+                      name={casesOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={colors.faint}
+                    />
+                  </View>
+                </GlassCard>
+
+                {casesOpen && (
+                  <View style={styles.casesExpanded}>
+                    {caseFilterVin && (
+                      <TouchableOpacity
+                        style={styles.casesToggle}
+                        onPress={() => setCaseFilterVin(null)}
+                        activeOpacity={0.7}
+                        accessibilityLabel="Show all cases"
+                      >
+                        <Text style={styles.casesClearFilter}>
+                          Show all cases
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {(showAllCases
+                      ? displayedCases
+                      : displayedCases.slice(0, 3)
+                    ).map((c) => (
+                      <CaseRow
+                        key={c.id}
+                        entry={c}
+                        onOpen={() => attemptResume(c.id)}
+                        onCloseCase={() => onCloseCaseFromList(c)}
+                        onDeleteCase={() => onDeleteCaseFromList(c)}
+                      />
+                    ))}
+                    {displayedCases.length === 0 && (
+                      <Text style={styles.casesEmpty}>
+                        No saved cases for this vehicle.
+                      </Text>
+                    )}
+                    {!caseFilterVin && displayedCases.length > 3 && (
+                      <TouchableOpacity
+                        style={styles.casesToggle}
+                        onPress={() => setShowAllCases((s) => !s)}
+                        activeOpacity={0.7}
+                        accessibilityLabel={
+                          showAllCases ? "Show fewer cases" : "View all cases"
+                        }
+                      >
+                        <Text style={styles.disclosureText}>
+                          {showAllCases
+                            ? "Show fewer"
+                            : `View all (${displayedCases.length})`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 )}
               </View>
             )}
@@ -1992,6 +2031,7 @@ export default function Screen() {
                   activeOpacity={0.85}
                   accessibilityLabel="Scan VIN with camera"
                 >
+                  <Ionicons name="camera-outline" size={16} color={colors.bg} />
                   <Text style={styles.scanBtnText}>Scan</Text>
                 </TouchableOpacity>
               </View>
@@ -2097,6 +2137,12 @@ export default function Screen() {
               {isConnected && (
                 <View style={styles.singleField}>
                   <Text style={styles.label}>LIVE OBD2 DATA</Text>
+                  <View style={styles.warmConnectedRow}>
+                    <View style={styles.warmDot} />
+                    <Text style={styles.warmConnectedText}>
+                      Adapter connected — live data will be included
+                    </Text>
+                  </View>
                   <View style={styles.dataStatusRow}>
                     <DataBadge
                       label={`${assessDescriptors.length} live signal${assessDescriptors.length === 1 ? "" : "s"}`}
@@ -2140,8 +2186,13 @@ export default function Screen() {
                         accessibilityRole="button"
                         accessibilityLabel="Connect an OBD2 adapter"
                       >
+                        <Ionicons
+                          name="bluetooth-outline"
+                          size={16}
+                          color={colors.accent}
+                        />
                         <Text style={styles.connectAdapterBtnText}>
-                          ⚲ Connect an OBD2 adapter
+                          Connect an OBD2 adapter
                         </Text>
                       </TouchableOpacity>
                     </>
@@ -2235,7 +2286,8 @@ export default function Screen() {
           onClose={() => setScannerOpen(false)}
           onScanned={handleVinScanned}
         />
-      </SafeAreaView>
+        </SafeAreaView>
+      </Background>
     );
   }
 
@@ -2865,6 +2917,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  // Intake: transparent so the v2 atmosphere (Background) shows through.
+  safeTransparent: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
   flex: {
     flex: 1,
   },
@@ -2875,7 +2932,7 @@ const styles = StyleSheet.create({
   },
   h1: {
     fontSize: 26,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     color: colors.heading,
     marginBottom: 6,
     letterSpacing: -0.3,
@@ -2883,15 +2940,15 @@ const styles = StyleSheet.create({
   subtitle: {
     color: colors.muted,
     fontSize: 14,
+    fontFamily: fonts.sans,
     marginBottom: 24,
     lineHeight: 21,
   },
+  // v2: the form is a stack of individual glass fields on the atmosphere — the
+  // old single opaque card wrapper is now a transparent passthrough.
   card: {
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
-    padding: 16,
+    backgroundColor: "transparent",
+    padding: 0,
   },
   row3: {
     flexDirection: "row",
@@ -2917,15 +2974,15 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 8,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface2,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     alignSelf: "flex-start",
   },
   intakeAttachText: {
     fontSize: 13,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     color: colors.accent,
   },
   intakePhotoRow: {
@@ -2947,21 +3004,23 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
-    fontWeight: "500",
+    fontFamily: fonts.sansSemibold,
     color: colors.muted,
-    letterSpacing: 0.7,
-    marginBottom: 6,
+    letterSpacing: 1.2,
+    marginBottom: 7,
   },
+  // v2 glass field — translucent steel tint + hairline rim, crisp corners.
   input: {
     minHeight: HIT_TARGET,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontFamily: fonts.sans,
     color: colors.text,
-    backgroundColor: colors.surface2,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 6,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
   },
   textarea: {
     minHeight: 120,
@@ -2978,17 +3037,19 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   scanBtn: {
+    flexDirection: "row",
+    gap: 6,
     minHeight: HIT_TARGET,
     minWidth: HIT_TARGET + 24,
     paddingHorizontal: 16,
-    backgroundColor: colors.accent,
-    borderRadius: 6,
+    backgroundColor: colors.accent, // solid light steel
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
   },
   scanBtnText: {
-    color: "#fff",
-    fontWeight: "600",
+    color: colors.bg, // dark text on steel
+    fontFamily: fonts.sansSemibold,
     fontSize: 14,
     letterSpacing: 0.3,
   },
@@ -3049,8 +3110,8 @@ const styles = StyleSheet.create({
   submit: {
     marginTop: 18,
     minHeight: HIT_TARGET,
-    backgroundColor: colors.accent,
-    borderRadius: 6,
+    backgroundColor: colors.accent, // solid light steel CTA
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -3059,9 +3120,9 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   submitText: {
-    color: "#fff",
+    color: colors.bg, // dark text on steel
     fontSize: 15,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.2,
   },
   errorBox: {
@@ -3143,13 +3204,47 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 2,
   },
+  // v2 collapsed saved-cases disclosure bar (inside a GlassCard).
+  casesBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minHeight: HIT_TARGET,
+  },
+  casesBarLabel: {
+    color: colors.heading,
+    fontSize: 14,
+    fontFamily: fonts.sansSemibold,
+  },
+  casesCountChip: {
+    backgroundColor: colors.steelChip,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.steelChipBorder,
+    borderRadius: 999,
+    minWidth: 22,
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  casesCountText: {
+    color: colors.steelGlyph,
+    fontSize: 11,
+    fontFamily: fonts.sansSemibold,
+  },
+  casesExpanded: {
+    gap: 8,
+    marginTop: 8,
+  },
   caseRow: {
     flexDirection: "row",
     alignItems: "stretch",
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     overflow: "hidden",
   },
   caseRowMain: {
@@ -3233,22 +3328,48 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 8,
   },
+  // v2: the screen's one warm accent — shown only when an adapter is connected.
+  warmConnectedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  warmDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.warm,
+    shadowColor: colors.warm,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  warmConnectedText: {
+    color: colors.warmText,
+    fontSize: 13,
+    fontFamily: fonts.sansSemibold,
+    letterSpacing: 0.2,
+  },
   // SB2-D: "Connect an OBD2 adapter" affordance (routes to the OBD2 picker).
   connectAdapterBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     marginTop: 10,
     alignSelf: "flex-start",
     minHeight: HIT_TARGET - 8,
     justifyContent: "center",
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
-    backgroundColor: colors.accentFade,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     paddingHorizontal: 16,
   },
   connectAdapterBtnText: {
     color: colors.accent,
     fontSize: 14,
-    fontWeight: "700",
+    fontFamily: fonts.sansSemibold,
   },
   conditionHelp: {
     fontSize: 12,
