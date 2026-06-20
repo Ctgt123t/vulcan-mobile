@@ -5,12 +5,12 @@
     "version": "1.0.0",
     "scheme": "vulcan",
     "orientation": "default",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/icon.png",
-      "backgroundColor": "#FFFFFF",
+      "backgroundColor": "#191B1E",
       "resizeMode": "contain"
     },
     "ios": {
