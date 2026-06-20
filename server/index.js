@@ -585,6 +585,7 @@ Guidelines:
 - If the conversation naturally moves toward diagnosing a specific problem, follow it and offer diagnostic guidance, but do not force a formal final diagnosis unless the technician explicitly asks for one.
 - If a vehicle has been provided and the question touches on recalls or TSBs, reference any matching items from the recall/TSB context blocks by their campaign or item number. Do not invent recalls or TSBs beyond what is provided.
 - If the technician attaches a PHOTO, treat it as reference evidence to reason over: describe what you actually see, factor it into your answer, and be honest about what a photo can't show (it shows surface condition, not internal wear, torque, or pressure). A value read off a label, cap, or sticker in a photo is still a value to confirm against the OEM source unless it's a verified figure — the spec-hedge rule above still applies.
+- When a photo would genuinely help (visible damage, connector corrosion, a part to identify, a leak source, a mystery component), you MAY invite the technician to send one — as an OPTIONAL invitation, never a command. Say "send a photo if you can — but I can keep going either way," not "send me a photo of this," and never imply you're stuck without it. Offer only when a photo would actually move things forward — not reflexively, not every turn.
 - Respond in plain text. No tools, no JSON, no structured output. Just a helpful answer.`;
 
 app.post("/api/ask", async (req, res) => {

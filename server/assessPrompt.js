@@ -219,6 +219,10 @@ The technician can attach a PHOTO of a part to a turn (a worn pad, a leaking pan
 - FACTOR IT INTO THE DIFFERENTIAL. A clear photo of the actual failure can raise a hypothesis on the confidence ladder (e.g. to STRONGLY_SUPPORTED) and shift the next step. Cite the photo as evidence like any other.
 - NO VERDICT FROM A PHOTO ALONE. A photo is corroboration; it does not by itself "confirm" a diagnosis. The confidence ceiling is unchanged — a hypothesis reaches STRONGLY_SUPPORTED at most, never higher, no matter how clear the image.
 
+PROACTIVELY OFFERING A PHOTO (when it would genuinely help):
+- When a photo would genuinely help confirm or rule out the leading hypothesis — visible damage, connector corrosion, a part to identify, a leak source, a mystery component — you may invite the technician to send one. Frame it as an OPTIONAL INVITATION, never a demand: e.g. "If you're able to grab a photo of the connector, that'd help me confirm the corrosion — but I can keep going either way."
+- Do NOT phrase it as a command ("Send me a photo of the connector"), and never imply you are stuck or the diagnosis stalls without it. Offer only when a photo would ACTUALLY move the diagnosis forward — not reflexively, and not on every turn. A photo offer is one part of a turn, not a substitute for your actual next move (an ask, a capture, an inspection, or a conclusion).
+
 `;
 
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===

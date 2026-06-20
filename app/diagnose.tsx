@@ -222,6 +222,10 @@ export default function Screen() {
   const [pendingPhoto, setPendingPhoto] = useState<ImageAttachment | null>(null);
   const [attaching, setAttaching] = useState(false);
   const pendingPhotoBase64Ref = useRef<string | null>(null);
+  // Photo-on-intake (Diagnose intake screen): a photo staged at intake that
+  // rides into the FIRST diagnose turn. Dedicated state (not the composer's
+  // pendingPhoto). base64 is injected via pendingPhotoBase64Ref in onSubmitIntake.
+  const [intakePhoto, setIntakePhoto] = useState<ImageAttachment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1464,7 +1468,15 @@ export default function Screen() {
     setUnsaved(false);
     const proceed = await ensureCaseForNewSession();
     if (!proceed) return; // tech cancelled at the all-25-open prompt → stay on intake
-    const first: ChatMessage = { role: "user", content: symptom.trim() };
+    // Photo-on-intake: attach the staged photo to the FIRST turn (persisted image
+    // WITHOUT base64) and prime the transient ref so runDiagnoseTurn's existing
+    // injection (:~1379) sends the bytes exactly once. Consume the staged photo.
+    const photo = intakePhoto;
+    setIntakePhoto(null);
+    const first: ChatMessage = photo
+      ? { role: "user", content: symptom.trim(), image: withoutBase64(photo) }
+      : { role: "user", content: symptom.trim() };
+    pendingPhotoBase64Ref.current = photo?.base64 ?? null;
     setMessages([first]);
     messagesRef.current = [first];
     setPhase("chat");
@@ -1596,6 +1608,12 @@ export default function Screen() {
     } finally {
       setAttaching(false);
     }
+  }
+
+  // Intake "Add a photo": stage a photo that rides into the first diagnose turn.
+  async function onIntakeAttach() {
+    const photo = await attachPhoto();
+    if (photo) setIntakePhoto(photo);
   }
 
   // A user turn = trimmed text and/or a photo. The persisted message carries the
@@ -1757,6 +1775,7 @@ export default function Screen() {
     setConfirmedDone(false);
     setUnsaved(false);
     setPendingPhoto(null);
+    setIntakePhoto(null);
     pendingPhotoBase64Ref.current = null;
     // Stage 2B: the previous case was already saved at its last completed turn
     // and stays OPEN + resumable from the list — reset does NOT touch its stored
@@ -2071,6 +2090,40 @@ export default function Screen() {
                   onChangeText={setSymptom}
                   textAlignVertical="top"
                 />
+                {/* Photo-on-intake (optional): a staged photo rides into the
+                    first diagnose turn. Reuses the shipped photo pipeline. */}
+                {intakePhoto ? (
+                  <View style={styles.intakePhotoRow}>
+                    <PhotoThumb image={intakePhoto} />
+                    <TouchableOpacity
+                      style={styles.intakePhotoRemove}
+                      onPress={() => setIntakePhoto(null)}
+                      activeOpacity={0.7}
+                      accessibilityLabel="Remove photo"
+                      hitSlop={8}
+                    >
+                      <Ionicons name="close-circle" size={18} color={colors.muted} />
+                      <Text style={styles.intakePhotoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.intakeAttachBtn}
+                    onPress={onIntakeAttach}
+                    disabled={attaching}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Add a photo"
+                  >
+                    <Ionicons
+                      name="camera-outline"
+                      size={18}
+                      color={attaching ? colors.muted : colors.accent}
+                    />
+                    <Text style={styles.intakeAttachText}>
+                      {attaching ? "Opening…" : "Add a photo (optional)"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               <TouchableOpacity
@@ -2711,6 +2764,42 @@ const styles = StyleSheet.create({
   singleField: {
     marginTop: 14,
     marginBottom: 0,
+  },
+  // Photo-on-intake affordance
+  intakeAttachBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface2,
+    alignSelf: "flex-start",
+  },
+  intakeAttachText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.accent,
+  },
+  intakePhotoRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginTop: 10,
+  },
+  intakePhotoRemove: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 6,
+  },
+  intakePhotoRemoveText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.muted,
   },
   label: {
     fontSize: 11,
