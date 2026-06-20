@@ -191,6 +191,17 @@ export interface UnverifiedSpec {
   purpose: string;
 }
 
+// The curated 2–3 most decisive factors behind the leading hypothesis — the
+// few a skeptic needs to judge the AI's direction, surfaced in the "Why this
+// step" drawer. Distinct from a hypothesis's full supporting/contradicting
+// lists (those stay complete). Optional + additive: the unified turn may emit
+// it; /api/assess never does; older saved cases won't have it (render falls
+// back to the leading-hypothesis evidence / rationale).
+export interface DecisiveReason {
+  point: string; // one short plain sentence
+  supports: boolean; // true = supports the leading hypothesis; false = doubt/caveat
+}
+
 // ---- API cost data (returned by /api/assess alongside the assessment) ----
 
 export interface ApiTokenCounts {
@@ -223,6 +234,7 @@ export interface DiagnosticAssessment {
   next_step: NextStep;
   data_ceiling_note: string; // empty string = no ceiling noted
   unverified_specs_needed: UnverifiedSpec[];
+  decisive_reasons?: DecisiveReason[]; // optional, max 3 — unified turn only
 }
 
 // ---- Stage 2C-3: evidence-update endpoint contract ----

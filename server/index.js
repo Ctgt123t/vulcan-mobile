@@ -1240,6 +1240,28 @@ const ASSESS_TOOL = {
           required: ["parameter", "purpose"],
         },
       },
+      decisive_reasons: {
+        type: "array",
+        description:
+          "OPTIONAL. The 2–3 MOST decisive factors behind your current leading hypothesis — the curated few a skeptical master technician would need to judge whether this direction is right — ranked most-decisive-first. Lead with the strongest supporting points; include the single most important doubt/caveat ONLY if one genuinely matters. NOT a restatement of the full supporting_evidence/contradicting_evidence lists (those stay complete and separate). Max 3 items, each one short plain sentence. Omit entirely if you have nothing decisive to distill.",
+        maxItems: 3,
+        items: {
+          type: "object",
+          properties: {
+            point: {
+              type: "string",
+              description:
+                "One short plain-language sentence stating the decisive factor.",
+            },
+            supports: {
+              type: "boolean",
+              description:
+                "true if this point SUPPORTS the leading hypothesis; false if it is a doubt/caveat that WEAKENS it.",
+            },
+          },
+          required: ["point", "supports"],
+        },
+      },
     },
     required: [
       "presenting_complaint",

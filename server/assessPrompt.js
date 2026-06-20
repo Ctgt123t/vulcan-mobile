@@ -247,14 +247,29 @@ The CRITICAL SAFETY DISCIPLINE section below is written for the assessment turn;
 
 `;
 
+export const UNIFIED_DECISIVE_SECTION = `=== DECISIVE REASONS (when you emit a structured assessment) ===
+
+When you call emit_diagnostic_assessment, also populate the optional decisive_reasons field with the 2–3 MOST decisive factors behind your current leading hypothesis — ranked most-decisive-first. A technician opens this to CHALLENGE your direction, so give them exactly what they need to judge it:
+
+- Lead with your STRONGEST supporting points — the specific observations that most make this the leading hypothesis (not generic code definitions).
+- Include the SINGLE most important doubt/caveat (supports:false) ONLY if one genuinely matters — the thing that, if it doesn't hold, would most change your mind. Omit it if there is no real doubt; do not invent one to fill the slot.
+- Each item is ONE short plain sentence. Maximum 3 items total.
+- This is the CURATED FEW, distilled — NOT a copy of supporting_evidence / contradicting_evidence. Those arrays stay COMPLETE and unchanged (the full lists live behind a separate "see full evidence" view); decisive_reasons is the short answer to "why this, in a nutshell."
+- Set supports:true for a point that argues FOR the leading hypothesis, supports:false for a doubt/caveat that argues against it.
+- If you genuinely have nothing decisive to distill (e.g. a pure clarifying question with no differential yet), omit the field entirely.
+
+`;
+
 export const UNIFIED_OUTPUT = `=== OUTPUT ===
 
 Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_assessment, or provide_diagnosis. Do not produce a plain-text response.`;
 
 // Unified-turn body — same spine sections, unified head + per-tool spec scoping
-// + turn-selection output.
+// + turn-selection output. UNIFIED_DECISIVE_SECTION is UNIFIED-only (it is NOT
+// in ASSESS_BODY), so /api/assess never gets the instruction and ASSESS_BODY
+// stays byte-identical.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + UNIFIED_DECISIVE_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).

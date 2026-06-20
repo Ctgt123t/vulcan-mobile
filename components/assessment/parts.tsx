@@ -3,6 +3,7 @@ import { useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import {
   type ConfidenceLevel,
+  type DecisiveReason,
   type DiagnosticAssessment,
   type Hypothesis,
   type RequestedDataItem,
@@ -275,6 +276,34 @@ export function VerifySpecs({
   );
 }
 
+// The curated 2–3 decisive reasons behind the leading hypothesis (step 2). Each
+// renders with a +/− marker (supports vs doubt), reusing the EvidenceList row
+// styling for visual consistency.
+function DecisiveReasons({ reasons }: { reasons: DecisiveReason[] }) {
+  return (
+    <View style={styles.whyLeading}>
+      <Text style={styles.whyLeadingLabel}>Most decisive</Text>
+      <View style={styles.evidenceSection}>
+        {reasons.map((r, i) => (
+          <View key={i} style={styles.evidenceRow}>
+            <Text style={r.supports ? styles.evidencePlus : styles.evidenceMinus}>
+              {r.supports ? "+" : "−"}
+            </Text>
+            <Text
+              style={[
+                styles.evidenceText,
+                !r.supports && { color: colors.muted },
+              ]}
+            >
+              {r.point}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // The slim in-thread bubble body for an assessment turn: the next step + type
 // chip + ONE reasoning entry point ("Why this step") with full evidence nested
 // inside it. This is the sole home for the reasoning now (the persistent panel
@@ -284,13 +313,12 @@ export function VerifySpecs({
 //    toggle row when there are unverified specs):
 //      • the verify-against-service-info flag at the TOP (when present) — a
 //        SAFETY warning, kept prominent within the drawer;
-//      • next_step.rationale + the LEADING hypothesis's evidence (deliberate
-//        stand-in; the curated "2–3 decisive reasons" is a separate step-2
-//        task and is intentionally NOT here);
+//      • next_step.rationale + the curated decisive_reasons (step 2). When the
+//        field is absent/empty (older saved cases, the /api/assess path, or a
+//        turn the brain omitted it) it FALLS BACK to the LEADING hypothesis's
+//        evidence stand-in (or just the rationale);
 //      • "See full evidence" — a deeper disclosure NESTED beneath, holding
 //        all-hypotheses supporting/against lists + the data_ceiling_note.
-//  - Drawer 2 ("See full evidence"): full supporting/against for ALL hypotheses
-//    + the OBD2 data_ceiling_note.
 export function NextStepBlock({
   assessment,
 }: {
@@ -300,6 +328,14 @@ export function NextStepBlock({
   const leading = assessment.hypotheses[0] ?? null;
   const specs = assessment.unverified_specs_needed ?? [];
   const hasSpecs = specs.length > 0;
+  // Step 2: the curated decisive reasons. Defensive read — older saved cases,
+  // the /api/assess path, and turns the brain omitted it all lack the field;
+  // drop any malformed/empty entries. When none remain, fall back to the prior
+  // leading-hypothesis evidence stand-in (or just the rationale).
+  const decisive = (assessment.decisive_reasons ?? []).filter(
+    (r) => r && typeof r.point === "string" && r.point.trim().length > 0,
+  );
+  const hasDecisive = decisive.length > 0;
   const hasFullEvidence =
     assessment.hypotheses.length > 0 || assessment.data_ceiling_note.length > 0;
 
@@ -323,14 +359,18 @@ export function NextStepBlock({
       <Drawer label="Why this step" cue={hasSpecs ? <VerifyCue /> : undefined}>
         {hasSpecs && <VerifySpecs specs={specs} />}
         <Text style={styles.nextStepRationale}>{ns.rationale}</Text>
-        {leading && (
-          <View style={styles.whyLeading}>
-            <Text style={styles.whyLeadingLabel}>{leading.name}</Text>
-            <EvidenceList
-              supporting={leading.supporting_evidence}
-              contradicting={leading.contradicting_evidence}
-            />
-          </View>
+        {hasDecisive ? (
+          <DecisiveReasons reasons={decisive} />
+        ) : (
+          leading && (
+            <View style={styles.whyLeading}>
+              <Text style={styles.whyLeadingLabel}>{leading.name}</Text>
+              <EvidenceList
+                supporting={leading.supporting_evidence}
+                contradicting={leading.contradicting_evidence}
+              />
+            </View>
+          )
         )}
 
         {hasFullEvidence && (
