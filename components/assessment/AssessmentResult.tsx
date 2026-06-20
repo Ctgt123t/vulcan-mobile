@@ -186,13 +186,17 @@ function NextStepTypeBadge({ type }: { type: string }) {
       ? "Data Capture"
       : type === "PHYSICAL_INSPECTION"
         ? "Physical Inspection"
-        : "Question";
+        : type === "PULL_CODES"
+          ? "Code Scan"
+          : "Question";
   const palette =
     type === "DATA_CAPTURE"
       ? { bg: colors.accentFade, text: colors.accent }
       : type === "PHYSICAL_INSPECTION"
         ? { bg: colors.warnBg, text: colors.warnText }
-        : { bg: colors.surface2, text: colors.muted };
+        : type === "PULL_CODES"
+          ? { bg: colors.accentFade, text: colors.accent }
+          : { bg: colors.surface2, text: colors.muted };
   return (
     <View style={[styles.typeBadge, { backgroundColor: palette.bg }]}>
       <Text style={[styles.typeBadgeText, { color: palette.text }]}>{label}</Text>

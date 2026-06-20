@@ -1073,7 +1073,7 @@ const ASSESS_TOOL = {
           },
           type: {
             type: "string",
-            enum: ["DATA_CAPTURE", "PHYSICAL_INSPECTION", "QUESTION"],
+            enum: ["DATA_CAPTURE", "PHYSICAL_INSPECTION", "QUESTION", "PULL_CODES"],
           },
           requested_data: {
             type: "array",

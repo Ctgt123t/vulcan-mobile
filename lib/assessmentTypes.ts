@@ -84,7 +84,15 @@ export type Stance = "AUTOPILOT" | "GUIDED";
 // Stage 2 hook: when next_step.type === DATA_CAPTURE, requested_data lists the
 // specific signals and conditions Claude wants captured. Stage 1 displays this
 // to the tech; Stage 2 will auto-execute it via the monitoring loop.
-export type NextStepType = "DATA_CAPTURE" | "PHYSICAL_INSPECTION" | "QUESTION";
+// PULL_CODES: Claude-requested mid-session re-read of the vehicle's trouble
+// codes (Mode 03/07/0A). No payload — just the type + action/rationale; the app
+// runs scanDtcs() on the connected vehicle and injects the fresh codes as the
+// next user turn (the on-demand pattern, like a capture/finding result).
+export type NextStepType =
+  | "DATA_CAPTURE"
+  | "PHYSICAL_INSPECTION"
+  | "QUESTION"
+  | "PULL_CODES";
 
 // ---- Stage 2C-1: executable monitoring plan ----
 //

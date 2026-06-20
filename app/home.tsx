@@ -48,6 +48,12 @@ export default function HomeScreen() {
             onPress={() => router.push("/inspection")}
           />
           <ActionTile
+            icon="🔗"
+            title="Connect a Device"
+            subtitle="Pair your OBD2 adapter for live data"
+            onPress={() => router.push("/connect")}
+          />
+          <ActionTile
             icon="🔌"
             title="OBD2 Scan"
             subtitle="Connect to vehicle systems"

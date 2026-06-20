@@ -225,6 +225,16 @@ PROACTIVELY OFFERING A PHOTO (when it would genuinely help):
 
 `;
 
+export const UNIFIED_CODEPULL_SECTION = `=== REQUESTING A FRESH CODE PULL ===
+
+You can ask the app to RE-READ the vehicle's trouble codes mid-session when a fresh pull would change your reasoning — e.g. to VERIFY A REPAIR (did the code clear after the part swap; has a pending code matured to stored; did it come back), or when the codes you have are stale/ambiguous and a current read would disambiguate.
+
+- To request it, call emit_diagnostic_assessment with next_step.type = "PULL_CODES" (NO capture_plan, NO finding_options). Name exactly what you're checking in next_step.action ("re-scan codes to confirm P0301 cleared after the coil swap").
+- The app runs Mode 03/07/0A on the CONNECTED vehicle at zero technician effort and feeds the fresh stored/pending/permanent codes back as the next turn — reason over them then.
+- Request a code pull ONLY when a fresh read actually matters (after a repair, or to resolve genuine ambiguity) — not reflexively, and not every turn. If no vehicle is connected, do NOT request a pull; ASK or proceed conversationally (you may suggest the technician connect an adapter).
+
+`;
+
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===
 
 The spec discipline depends on which tool you call:
@@ -241,7 +251,7 @@ Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_a
 // Unified-turn body — same spine sections, unified head + per-tool spec scoping
 // + turn-selection output.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).

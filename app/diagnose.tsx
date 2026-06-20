@@ -228,6 +228,10 @@ export default function Screen() {
   const [intakePhoto, setIntakePhoto] = useState<ImageAttachment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PULL_CODES (Item B): the assessment entry whose brain-requested code re-pull
+  // is in flight (adapter is being read). Drives the in-progress card state; null
+  // when no pull is running. One pull at a time.
+  const [pullingEntryId, setPullingEntryId] = useState<number | null>(null);
 
   // Structured-assessment state (merged Smart Diagnose path). When the
   // adapter is connected and scan data exists, an assessment runs
@@ -1024,6 +1028,50 @@ export default function Screen() {
     captureExecutorRef.current = executor;
     roundActiveRef.current = { entryId: entry.id, complete: false, priorSelection };
     executor.start();
+  }
+
+  // PULL_CODES (Item B): the brain asked for a fresh trouble-code re-read mid-
+  // session (e.g. confirm a code cleared after a repair). Runs Mode 03/07/0A on
+  // the connected vehicle at zero technician effort and injects the fresh codes
+  // as the next user turn — the SAME on-demand path as a capture/finding result
+  // (sendUserMessage → runDiagnoseTurn), NOT /api/evidence. Degrades gracefully:
+  // when no live connection passes the 2B guard we DON'T read codes off the wrong
+  // (or absent) vehicle — we route to /connect so the tech hooks up this case's
+  // vehicle first.
+  async function pullCodes(entry: AssessmentEntry): Promise<void> {
+    if (pullingEntryId != null) return; // one pull at a time
+    if (entry.slot.status !== "done") return;
+    if (entry.slot.assessment.next_step.type !== "PULL_CODES") return;
+    if (!captureConnectionOk) {
+      router.push("/connect");
+      return;
+    }
+    setPullingEntryId(entry.id);
+    try {
+      const res = await obd2.scanDtcs();
+      // Same dtcLine/permLine phrasing as the escalation handoff (above) so the
+      // brain reads fresh codes in a format it already understands.
+      const dtcLine =
+        res.dtcs.length > 0
+          ? `OBD2 scan — stored codes: ${res.dtcs.join(", ")}.`
+          : "OBD2 scan — no stored codes.";
+      const pendLine =
+        res.pending.length > 0 ? `Pending codes: ${res.pending.join(", ")}.` : "";
+      const permLine =
+        res.permanent.length > 0
+          ? `Permanent codes (survived last clear): ${res.permanent.join(", ")}.`
+          : "";
+      const combined = ["Re-scanned codes.", dtcLine, pendLine, permLine]
+        .filter((s) => s)
+        .join("\n\n");
+      await sendUserMessage(combined);
+    } catch {
+      await sendUserMessage(
+        "Re-scanned codes — the adapter didn't return a clean read (the connection may have dropped). Treat the codes as unchanged from the last scan.",
+      );
+    } finally {
+      setPullingEntryId(null);
+    }
   }
 
   // The capture fired (or was cancelled). One round → on a real capture, send to
@@ -2054,7 +2102,7 @@ export default function Screen() {
                       </Text>
                       <TouchableOpacity
                         style={styles.connectAdapterBtn}
-                        onPress={() => router.push("/obd2")}
+                        onPress={() => router.push("/connect")}
                         activeOpacity={0.85}
                         accessibilityRole="button"
                         accessibilityLabel="Connect an OBD2 adapter"
@@ -2254,6 +2302,17 @@ export default function Screen() {
                     : undefined
                 }
                 onPickPhoto={attachPhoto}
+                onPullCodes={
+                  item.entry.id === lastAssessmentId &&
+                  item.entry.slot.status === "done" &&
+                  item.entry.slot.assessment.next_step.type === "PULL_CODES" &&
+                  // not yet answered (same anchor test as onSubmitFinding): the
+                  // injected code-pull result appends a user turn, hiding the card.
+                  item.entry.afterMessageIndex >= messages.length - 1
+                    ? () => pullCodes(item.entry)
+                    : undefined
+                }
+                pullingCodes={pullingEntryId === item.entry.id}
               />
             )
           }
@@ -2567,6 +2626,8 @@ function AssessmentThreadCard({
   onCancelCapture,
   onSubmitFinding,
   onPickPhoto,
+  onPullCodes,
+  pullingCodes,
 }: {
   entry: AssessmentEntry;
   onRerun?: () => void;
@@ -2583,6 +2644,12 @@ function AssessmentThreadCard({
   onSubmitFinding?: (resultText: string, image?: ImageAttachment | null) => void;
   // Photo Evidence (Step 1): the shared picker so a finding + photo is ONE turn.
   onPickPhoto?: () => Promise<ImageAttachment | null>;
+  // PULL_CODES (Item B): present (from the parent) only when this is the latest
+  // done PULL_CODES assessment not yet answered. Re-reads the vehicle's codes and
+  // injects them as a user turn (or routes to /connect when disconnected). NO
+  // connection gate here — the handler branches. pullingCodes = read in flight.
+  onPullCodes?: () => void;
+  pullingCodes?: boolean;
 }) {
   const cap = entry.capture ?? null;
   // A photo staged against this finding card; sent with the next outcome tap.
@@ -2684,6 +2751,29 @@ function AssessmentThreadCard({
           onAttachPhoto={onPickPhoto ? handleFindingAttach : undefined}
           photoStaged={!!stagedFindingPhoto}
         />
+      )}
+
+      {/* PULL_CODES (Item B) — the brain asked for a fresh code re-read. Card
+          stays interactive whether or not connected; the handler runs scanDtcs()
+          on a live connection or routes to /connect when disconnected. */}
+      {onPullCodes && (
+        <TouchableOpacity
+          style={styles.startCaptureBtn}
+          onPress={onPullCodes}
+          disabled={pullingCodes}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Re-scan trouble codes"
+        >
+          {pullingCodes ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.startCaptureBtnText}>Re-scanning codes…</Text>
+            </View>
+          ) : (
+            <Text style={styles.startCaptureBtnText}>↻ Re-scan codes</Text>
+          )}
+        </TouchableOpacity>
       )}
 
       {/* Minimal Start affordance (SUB-BATCH 2 replaces with the driving UX). */}
