@@ -25,7 +25,7 @@ import Results from "../components/Results";
 import TsbList from "../components/TsbList";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
-import AssessmentResult from "../components/assessment/AssessmentResult";
+import { NextStepBlock } from "../components/assessment/parts";
 import CaptureCard from "../components/assessment/CaptureCard";
 import FindingCard from "../components/assessment/FindingCard";
 import ConditionSelector from "../components/assessment/ConditionSelector";
@@ -690,6 +690,15 @@ export default function Screen() {
   // Start gate must be available even with nothing pre-selected. canAutoAssess
   // remains only for the intake-screen "live data available" affordance.
   const captureConnectionOk = isConnected && liveVehicleMatchesCase();
+  // WHY a brain-requested capture can't run, for the affordance label/branch
+  // (investigation: never conflate "no adapter" with "wrong vehicle"). Mirrors
+  // captureConnectionOk's two factors: not connected at all vs connected to a
+  // vehicle that isn't this case's (resumed VIN-mismatch / resumed manual).
+  const captureGate: "ready" | "disconnected" | "wrong_vehicle" = !isConnected
+    ? "disconnected"
+    : !liveVehicleMatchesCase()
+      ? "wrong_vehicle"
+      : "ready";
   // When resumed + connected but the guard fails, explain why the live path is
   // off (two distinct reasons → two messages).
   const resumeBlockBanner =
@@ -891,6 +900,30 @@ export default function Screen() {
   }
 
   // Kick off ONE capture round from a DATA_CAPTURE assessment card.
+  // Press handler for the DATA_CAPTURE affordance. The affordance now renders
+  // even when a capture can't run (mirrors the PULL_CODES precedent: always show
+  // a button, branch in the handler) so the tech is never left with a dangling
+  // instruction. Branches on the REASON it can't run — disconnected routes to
+  // the Connect-a-Device surface; wrong/unprovable vehicle surfaces the existing
+  // resume-block messaging (NOT a connect prompt — the adapter is already on);
+  // ready runs the round exactly as before. The capture loop internals are
+  // untouched.
+  function handleStartCapturePress(entry: AssessmentEntry): void {
+    if (!isConnected) {
+      router.push("/connect");
+      return;
+    }
+    if (!liveVehicleMatchesCase()) {
+      Alert.alert(
+        "Connected to a different vehicle",
+        resumeBlockBanner ??
+          "Connected to a different vehicle than this case — live assessment is disabled. Connect to this case's vehicle to capture live data.",
+      );
+      return;
+    }
+    void startCaptureRound(entry);
+  }
+
   async function startCaptureRound(entry: AssessmentEntry): Promise<void> {
     if (roundActiveRef.current) return; // one round at a time
     if (entry.slot.status !== "done") return;
@@ -2273,14 +2306,18 @@ export default function Screen() {
                     : undefined
                 }
                 onStartCapture={
-                  captureConnectionOk &&
+                  // No captureConnectionOk gate — the affordance always renders
+                  // on the latest not-yet-acted DATA_CAPTURE card; the handler
+                  // branches (connect / wrong-vehicle / run). captureGate sets
+                  // the label.
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status === "done" &&
                   item.entry.slot.assessment.next_step.type === "DATA_CAPTURE" &&
                   !item.entry.capture
-                    ? () => startCaptureRound(item.entry)
+                    ? () => handleStartCapturePress(item.entry)
                     : undefined
                 }
+                captureGate={captureGate}
                 onCancelCapture={
                   item.entry.capture &&
                   (item.entry.capture.phase === "waiting" ||
@@ -2628,6 +2665,7 @@ function AssessmentThreadCard({
   onPickPhoto,
   onPullCodes,
   pullingCodes,
+  captureGate,
 }: {
   entry: AssessmentEntry;
   onRerun?: () => void;
@@ -2650,6 +2688,10 @@ function AssessmentThreadCard({
   // connection gate here — the handler branches. pullingCodes = read in flight.
   onPullCodes?: () => void;
   pullingCodes?: boolean;
+  // Why the capture can't run (drives the affordance label). Only meaningful when
+  // onStartCapture is present. "ready" = run; "disconnected" = route to /connect;
+  // "wrong_vehicle" = surface the resume-block messaging (adapter already on).
+  captureGate?: "ready" | "disconnected" | "wrong_vehicle";
 }) {
   const cap = entry.capture ?? null;
   // A photo staged against this finding card; sent with the next outcome tap.
@@ -2689,7 +2731,7 @@ function AssessmentThreadCard({
         </View>
       )}
       {entry.slot.status === "done" && (
-        <AssessmentResult assessment={entry.slot.assessment} />
+        <NextStepBlock assessment={entry.slot.assessment} />
       )}
       {entry.slot.status === "error" && (
         <View style={[styles.errorBox, styles.assessmentErrorBox]}>
@@ -2776,17 +2818,29 @@ function AssessmentThreadCard({
         </TouchableOpacity>
       )}
 
-      {/* Minimal Start affordance (SUB-BATCH 2 replaces with the driving UX). */}
+      {/* Start / connect affordance. Always renders on the latest not-yet-acted
+          DATA_CAPTURE card; the label reflects WHY it can't run yet so the tech
+          is never left a dangling instruction (SUB-BATCH 2 reworks the run UX). */}
       {isDataCapture && onStartCapture && !cap && (
         <TouchableOpacity
           style={styles.startCaptureBtn}
           onPress={onStartCapture}
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel="Start monitoring for the requested data"
+          accessibilityLabel={
+            captureGate === "disconnected"
+              ? "Connect an OBD2 adapter to capture this data"
+              : captureGate === "wrong_vehicle"
+                ? "Live capture unavailable — a different vehicle is connected"
+                : "Start monitoring for the requested data"
+          }
         >
           <Text style={styles.startCaptureBtnText}>
-            ◉ Start monitoring
+            {captureGate === "disconnected"
+              ? "⚲ Connect a device to capture"
+              : captureGate === "wrong_vehicle"
+                ? "⚠ Different vehicle — can't capture"
+                : "◉ Start monitoring"}
           </Text>
         </TouchableOpacity>
       )}

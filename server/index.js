@@ -1367,6 +1367,13 @@ async function buildAssessmentContextBlocks({
   extraDtcCodes = [],
   extraContextBlocks = [],
   logLabel,
+  // ADDITIVE (connection-state signal, default undefined): only /api/diagnose-turn
+  // passes this. When explicitly false, the brain gets an explicit "no adapter
+  // connected" line so it stops having to INFER connectivity from snapshot
+  // presence (which it got wrong — see the ask-first/pivot rule in UNIFIED_HEAD).
+  // /api/assess and /api/evidence-update don't pass it → no line → byte-identical
+  // context for those paths.
+  connected,
 }) {
   const systemBlocks = [
     {
@@ -1442,6 +1449,20 @@ async function buildAssessmentContextBlocks({
     systemBlocks.push({
       type: "text",
       text: formatSnapshotBlock(snapshot),
+    });
+  } else if (connected === false) {
+    // No snapshot AND explicitly disconnected (the unified turn with no adapter).
+    // State it in words so the brain doesn't mistake an absent snapshot for the
+    // connected-but-empty escalation case (which DOES carry a snapshot object and
+    // never hits this branch). The behavioral rule (ask-first / pivot) lives in
+    // UNIFIED_HEAD; this block is the factual signal that rule keys on.
+    systemBlocks.push({
+      type: "text",
+      text:
+        "=== CONNECTION STATUS ===\n" +
+        "No OBD2 adapter is currently connected to the vehicle. There is no live-data " +
+        "snapshot and no live-capture path available on this turn — you cannot run a " +
+        "DATA_CAPTURE right now.",
     });
   }
 
@@ -1854,6 +1875,10 @@ app.post("/api/diagnose-turn", async (req, res) => {
     extraDtcCodes,
     extraContextBlocks: [],
     logLabel: "diagnose-turn",
+    // isConnected = a usable live path exists (connected AND a snapshot rode in).
+    // Passing its negation as the explicit "no adapter" signal: when false, no
+    // snapshot block is emitted and the CONNECTION STATUS line is injected.
+    connected: isConnected,
   });
 
   try {
