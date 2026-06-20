@@ -38,7 +38,7 @@ import {
   saveSelectedKeys,
 } from "../lib/pidCatalog";
 import { signalKeyOf } from "../lib/obd2";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import type { PidDescriptor } from "../lib/obd2";
 
 // ----------------------------------------------------------------------------
@@ -638,7 +638,7 @@ const styles = StyleSheet.create({
   pidRowText: { flex: 1, gap: 2 },
   pidNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   pidName: { color: colors.heading, fontSize: 14, fontWeight: "600", flex: 1 },
-  pidMeta: { color: colors.muted, fontSize: 11, fontFamily: "Menlo" },
+  pidMeta: { color: colors.muted, fontSize: 11, fontFamily: fonts.mono },
   statusBadge: {
     paddingHorizontal: 5,
     paddingVertical: 2,
@@ -706,7 +706,7 @@ const styles = StyleSheet.create({
   },
   modalBg: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
+    backgroundColor: colors.scrim,
     justifyContent: "center",
     padding: 24,
   },

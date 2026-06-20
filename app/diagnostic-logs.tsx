@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import { diagnosticLogger, type DiagnosticLogEntry } from "../lib/diagnosticLogger";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 
 // ---- Types ----
 
@@ -553,7 +553,7 @@ const styles = StyleSheet.create({
   sessionVin: {
     fontSize: 10,
     color: colors.muted,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   protocolBadge: {
     paddingHorizontal: 6,
@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
   entryTime: {
     fontSize: 10,
     color: colors.muted,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   entrySummary: {
     fontSize: 13,
@@ -661,7 +661,7 @@ const styles = StyleSheet.create({
   detailMono: {
     fontSize: 11,
     color: colors.muted,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
     lineHeight: 16,
   },
   detailWarningMsg: {
@@ -683,7 +683,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: colors.text,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   hypothesisRow: {
     flexDirection: "row",

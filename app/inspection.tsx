@@ -38,7 +38,7 @@ import {
   saveRecord,
 } from "../lib/records";
 import { fetchTsbs } from "../lib/tsbs";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import type {
   InspectionItems,
   ItemStatus,
@@ -772,7 +772,7 @@ const styles = StyleSheet.create({
   },
   vinInput: {
     flex: 1,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: fonts.mono,
     letterSpacing: 1,
   },
   scanBtn: {
@@ -984,7 +984,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: "#16A34A",
+    backgroundColor: colors.successFill,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 4,

@@ -570,9 +570,9 @@ function statusReadable(status: ItemStatus): string {
 }
 
 function statusDotStyle(status: ItemStatus) {
-  if (status === "good") return { backgroundColor: "#16A34A" };
-  if (status === "attention") return { backgroundColor: "#F59E0B" };
-  if (status === "urgent") return { backgroundColor: "#DC2626" };
+  if (status === "good") return { backgroundColor: colors.successFill };
+  if (status === "attention") return { backgroundColor: colors.warnFill };
+  if (status === "urgent") return { backgroundColor: colors.dangerFill };
   return { backgroundColor: colors.borderStrong };
 }
 

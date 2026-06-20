@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import { extractVin, vinCheckDigitValid } from "../lib/vin";
 
 type Props = {
@@ -489,7 +489,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     letterSpacing: 1.2,
     textAlign: "center",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: fonts.mono,
   },
   subhintWarn: {
     color: LOWCONF_COLOR,

@@ -9,7 +9,7 @@ import {
   type RequestedDataItem,
   type Stance,
 } from "../../lib/assessmentTypes";
-import { colors } from "../../lib/theme";
+import { colors, fonts } from "../../lib/theme";
 
 // ============================================================================
 // Shared presentational primitives for the diagnostic card restructure.
@@ -649,7 +649,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: colors.heading,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   requestedDataDetail: {
     fontSize: 12,

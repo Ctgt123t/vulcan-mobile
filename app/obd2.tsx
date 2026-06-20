@@ -45,7 +45,7 @@ import {
   saveSelectedKeys,
 } from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import type { DtcDefinition } from "../lib/types";
 import {
@@ -1758,7 +1758,7 @@ const styles = StyleSheet.create({
   dtcCode: {
     fontSize: 15,
     fontWeight: "700",
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
     letterSpacing: 0.5,
   },
   dtcChevron: {
@@ -1819,7 +1819,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(0,0,0,0.08)",
+    borderTopColor: colors.hairline,
     gap: 8,
   },
   dtcDetailed: {
@@ -2023,7 +2023,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "700",
     letterSpacing: -0.4,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   gaugeUnit: {
     color: colors.muted,
@@ -2195,7 +2195,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 11,
     marginTop: 2,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   deviceChev: {
     color: colors.muted,

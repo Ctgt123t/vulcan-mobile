@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { NumericRange } from "../../lib/assessmentTypes";
 import type { ConditionReadout } from "../../lib/captureDetector";
-import { HIT_TARGET, colors } from "../../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../../lib/theme";
 
 // Stage 2 capture-card primitive — PLACEHOLDER, presentational only.
 // During Stage 2's auto-capture this card will show live state while the
@@ -237,14 +237,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: colors.text,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
     minWidth: 56,
   },
   conditionValue: {
     fontSize: 12,
     fontWeight: "700",
     color: colors.heading,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   conditionArrow: {
     fontSize: 12,
@@ -253,7 +253,7 @@ const styles = StyleSheet.create({
   conditionTarget: {
     fontSize: 12,
     color: colors.muted,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   signalRow: {
     flexDirection: "row",
@@ -272,7 +272,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     color: colors.text,
-    fontFamily: "Menlo",
+    fontFamily: fonts.mono,
   },
   cancelLink: {
     alignSelf: "flex-start",

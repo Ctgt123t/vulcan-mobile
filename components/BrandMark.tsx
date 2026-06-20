@@ -25,7 +25,7 @@ export default function BrandMark({ size = 28, style }: Props) {
 
 const styles = StyleSheet.create({
   base: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.brandBg,
     alignItems: "center",
     justifyContent: "center",
   },

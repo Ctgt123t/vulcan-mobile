@@ -34,7 +34,7 @@ import {
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import { persistPhoto, pickAndResize, withoutBase64 } from "../lib/photoEvidence";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import type {
   ChatMessage,
   ImageAttachment,
@@ -985,7 +985,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     borderRadius: 6,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: fonts.mono,
     letterSpacing: 1,
   },
   scanBtn: {

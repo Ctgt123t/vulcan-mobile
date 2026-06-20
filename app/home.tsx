@@ -48,12 +48,6 @@ export default function HomeScreen() {
             onPress={() => router.push("/inspection")}
           />
           <ActionTile
-            icon="🔗"
-            title="Connect a Device"
-            subtitle="Pair your OBD2 adapter for live data"
-            onPress={() => router.push("/connect")}
-          />
-          <ActionTile
             icon="🔌"
             title="OBD2 Scan"
             subtitle="Connect to vehicle systems"
@@ -61,12 +55,29 @@ export default function HomeScreen() {
           />
         </View>
 
-        <Pressable
-          style={styles.diagLogLink}
-          onPress={() => router.push("/diagnostic-logs")}
-        >
-          <Text style={styles.diagLogText}>Diagnostic Log</Text>
-        </Pressable>
+        {/* Secondary utilities — NOT primary workflows. "Connect a Device" is a
+            one-time setup (pair an adapter once), so it lives here as a quiet
+            footer entry rather than a main tile. Kept out of the Navbar header,
+            which is already at its action budget (Records + Sign out) after the
+            de-crowd fix. */}
+        <View style={styles.footerLinks}>
+          <Pressable
+            style={styles.utilityLink}
+            onPress={() => router.push("/connect")}
+            accessibilityRole="button"
+            accessibilityLabel="Connect a Device"
+          >
+            <Text style={styles.utilityText}>🔗  Connect a Device</Text>
+          </Pressable>
+          <Pressable
+            style={styles.utilityLink}
+            onPress={() => router.push("/diagnostic-logs")}
+            accessibilityRole="button"
+            accessibilityLabel="Diagnostic Log"
+          >
+            <Text style={styles.utilityText}>Diagnostic Log</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -221,7 +232,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1.2,
   },
-  diagLogLink: {
+  footerLinks: {
+    alignItems: "center",
+    gap: 2,
+  },
+  utilityLink: {
     alignSelf: "center",
     paddingVertical: 8,
     paddingHorizontal: 16,
@@ -229,7 +244,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  diagLogText: {
+  utilityText: {
     color: colors.muted,
     fontSize: 12,
     fontWeight: "500",

@@ -107,7 +107,7 @@ import {
   makeRecordId,
   saveRecord,
 } from "../lib/records";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts } from "../lib/theme";
 import type {
   AssistantTurn,
   ChatMessage,
@@ -2974,7 +2974,7 @@ const styles = StyleSheet.create({
   },
   vinInput: {
     flex: 1,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: fonts.mono,
     letterSpacing: 1,
   },
   scanBtn: {
