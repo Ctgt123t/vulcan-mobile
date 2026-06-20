@@ -1,85 +1,102 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import BrandMark from "../components/BrandMark";
 import Navbar from "../components/Navbar";
-import { HIT_TARGET, colors } from "../lib/theme";
+import Background from "../components/ui/Background";
+import GlassCard from "../components/ui/GlassCard";
+import { useObd2 } from "../contexts/Obd2Context";
+import { HIT_TARGET, colors, fonts, radii, space } from "../lib/theme";
+
+// v2 "steel glass" reference screen. The locked mock: atmospheric background;
+// translucent (NOT blurred) glass tiles with steel line-icon chips; the warm
+// brand mark + glow as the permanent anchor under a "DIAGNOSTIC SUITE" overline;
+// quiet footer utilities with a WARM connected-device indicator when an adapter
+// is live. Fonts are set EXPLICITLY via the Plex tokens (the global patch still
+// covers un-migrated screens).
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { isConnected } = useObd2();
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar />
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.hero}>
-          <View style={styles.wordmarkRow}>
-            <BrandMark size={44} />
-            <Text style={styles.wordmark}>Vulcan</Text>
+    <Background>
+      <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+        <Navbar />
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.hero}>
+            <Text style={styles.overline}>DIAGNOSTIC SUITE</Text>
+            <View style={styles.wordmarkRow}>
+              <BrandMark size={46} glow />
+              <Text style={styles.wordmark}>Vulcan</Text>
+            </View>
+            <Text style={styles.headline}>What are we diagnosing today?</Text>
           </View>
-          <Text style={styles.headline}>
-            What are we diagnosing today?
-          </Text>
-        </View>
 
-        <View style={styles.actions}>
-          <ActionTile
-            icon="⚡"
-            title="Ask Vulcan"
-            subtitle="Ask anything automotive"
-            onPress={() => router.push("/ask")}
-          />
-          <ActionTile
-            icon="🔍"
-            title="Diagnose"
-            subtitle="Guided diagnosis — uses live OBD2 data when connected"
-            onPress={() => router.push("/diagnose")}
-          />
-          <ActionTile
-            icon="📋"
-            title="Inspection Report"
-            subtitle="Multi-point vehicle inspection"
-            onPress={() => router.push("/inspection")}
-          />
-          <ActionTile
-            icon="🔌"
-            title="OBD2 Scan"
-            subtitle="Connect to vehicle systems"
-            onPress={() => router.push("/obd2")}
-          />
-        </View>
+          <View style={styles.actions}>
+            <ActionTile
+              icon="chatbubbles-outline"
+              title="Ask Vulcan"
+              subtitle="Ask anything automotive"
+              onPress={() => router.push("/ask")}
+            />
+            <ActionTile
+              icon="pulse-outline"
+              title="Diagnose"
+              subtitle="Guided diagnosis — uses live OBD2 data when connected"
+              onPress={() => router.push("/diagnose")}
+            />
+            <ActionTile
+              icon="clipboard-outline"
+              title="Inspection Report"
+              subtitle="Multi-point vehicle inspection"
+              onPress={() => router.push("/inspection")}
+            />
+            <ActionTile
+              icon="hardware-chip-outline"
+              title="OBD2 Scan"
+              subtitle="Connect to vehicle systems"
+              onPress={() => router.push("/obd2")}
+            />
+          </View>
 
-        {/* Secondary utilities — NOT primary workflows. "Connect a Device" is a
-            one-time setup (pair an adapter once), so it lives here as a quiet
-            footer entry rather than a main tile. Kept out of the Navbar header,
-            which is already at its action budget (Records + Sign out) after the
-            de-crowd fix. */}
-        <View style={styles.footerLinks}>
-          <Pressable
-            style={styles.utilityLink}
-            onPress={() => router.push("/connect")}
-            accessibilityRole="button"
-            accessibilityLabel="Connect a Device"
-          >
-            <Text style={styles.utilityText}>🔗  Connect a Device</Text>
-          </Pressable>
-          <Pressable
-            style={styles.utilityLink}
-            onPress={() => router.push("/diagnostic-logs")}
-            accessibilityRole="button"
-            accessibilityLabel="Diagnostic Log"
-          >
-            <Text style={styles.utilityText}>Diagnostic Log</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          {/* Quiet footer utilities. "Connect a Device" is one-time setup, so it
+              lives here, not as a primary tile. It shows the WARM live treatment
+              when an adapter is connected, plain otherwise. */}
+          <View style={styles.footerLinks}>
+            <Pressable
+              style={styles.utilityLink}
+              onPress={() => router.push("/connect")}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isConnected ? "Device connected" : "Connect a Device"
+              }
+            >
+              {isConnected ? (
+                <View style={styles.connectedRow}>
+                  <View style={styles.warmDot} />
+                  <Text style={styles.connectedText}>Device connected</Text>
+                </View>
+              ) : (
+                <Text style={styles.utilityText}>Connect a Device</Text>
+              )}
+            </Pressable>
+            <Pressable
+              style={styles.utilityLink}
+              onPress={() => router.push("/diagnostic-logs")}
+              accessibilityRole="button"
+              accessibilityLabel="Diagnostic Log"
+            >
+              <Text style={styles.utilityText}>Diagnostic Log</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </Background>
   );
 }
 
@@ -88,158 +105,114 @@ function ActionTile({
   title,
   subtitle,
   onPress,
-  comingSoon,
 }: {
-  icon: string;
+  icon: keyof typeof Ionicons.glyphMap;
   title: string;
   subtitle: string;
   onPress: () => void;
-  comingSoon?: boolean;
 }) {
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.tile,
-        pressed && styles.tilePressed,
-      ]}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={title}
-    >
-      <View style={styles.tileIconWrap}>
-        <Text style={styles.tileIcon}>{icon}</Text>
-      </View>
-      <View style={styles.tileBody}>
-        <View style={styles.tileTitleRow}>
-          <Text style={styles.tileTitle}>{title}</Text>
-          {comingSoon && (
-            <View style={styles.soonBadge}>
-              <Text style={styles.soonBadgeText}>SOON</Text>
-            </View>
-          )}
+    <GlassCard onPress={onPress} accessibilityLabel={title}>
+      <View style={styles.tileRow}>
+        <View style={styles.iconChip}>
+          <Ionicons name={icon} size={24} color={colors.steelGlyph} />
         </View>
-        <Text style={styles.tileSubtitle}>{subtitle}</Text>
+        <View style={styles.tileBody}>
+          <Text style={styles.tileTitle}>{title}</Text>
+          <Text style={styles.tileSubtitle}>{subtitle}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.faint} />
       </View>
-      <Text style={styles.tileChevron}>›</Text>
-    </Pressable>
+    </GlassCard>
   );
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent", // let the atmosphere show through
   },
   content: {
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingTop: 32,
-    paddingBottom: 32,
-    gap: 28,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    paddingBottom: space.xxl,
+    gap: space.xxl,
   },
   hero: {
     alignItems: "center",
-    gap: 14,
+    gap: space.md,
+  },
+  overline: {
+    color: colors.muted,
+    fontSize: 11,
+    fontFamily: fonts.sansSemibold,
+    letterSpacing: 2.5,
   },
   wordmarkRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: space.md,
   },
   wordmark: {
     color: colors.heading,
     fontSize: 30,
-    fontWeight: "700",
+    fontFamily: fonts.sansBold,
     letterSpacing: -0.4,
   },
   headline: {
     color: colors.muted,
     fontSize: 17,
-    fontWeight: "400",
+    fontFamily: fonts.sans,
     textAlign: "center",
     lineHeight: 24,
   },
   actions: {
-    gap: 12,
-    marginTop: 8,
+    gap: space.md,
+    marginTop: space.xs,
   },
-  tile: {
+  tileRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 18,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
     minHeight: HIT_TARGET + 40,
-    gap: 14,
+    gap: space.lg,
   },
-  tilePressed: {
-    backgroundColor: colors.surface2,
-    borderColor: colors.accent,
-  },
-  tileIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
-    backgroundColor: colors.accentFade,
+  iconChip: {
+    width: 52,
+    height: 52,
+    borderRadius: radii.md,
+    backgroundColor: colors.steelChip,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
+    borderColor: colors.steelChipBorder,
     alignItems: "center",
     justifyContent: "center",
   },
-  tileIcon: {
-    fontSize: 28,
-  },
   tileBody: {
     flex: 1,
-    gap: 4,
-  },
-  tileTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+    gap: 3,
   },
   tileTitle: {
     color: colors.heading,
     fontSize: 17,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.1,
   },
   tileSubtitle: {
     color: colors.muted,
     fontSize: 13,
+    fontFamily: fonts.sans,
     lineHeight: 19,
-  },
-  tileChevron: {
-    color: colors.muted,
-    fontSize: 28,
-    fontWeight: "300",
-    marginRight: 4,
-  },
-  soonBadge: {
-    backgroundColor: colors.accentFade,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  soonBadgeText: {
-    color: colors.accent,
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1.2,
   },
   footerLinks: {
     alignItems: "center",
-    gap: 2,
+    gap: space.xs,
   },
   utilityLink: {
     alignSelf: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
     minHeight: HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
@@ -247,6 +220,27 @@ const styles = StyleSheet.create({
   utilityText: {
     color: colors.muted,
     fontSize: 12,
-    fontWeight: "500",
+    fontFamily: fonts.sansMedium,
+  },
+  connectedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+  },
+  warmDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.warm,
+    shadowColor: colors.warm,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  connectedText: {
+    color: colors.warmText,
+    fontSize: 12,
+    fontFamily: fonts.sansSemibold,
+    letterSpacing: 0.2,
   },
 });

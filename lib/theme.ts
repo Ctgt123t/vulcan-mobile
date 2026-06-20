@@ -1,80 +1,103 @@
 // ============================================================================
-// Design tokens — DARK "technical instrument" language (redesign foundation,
-// step 1). `colors` keeps its export NAME and every key it had (all 26 styled
-// files import it), with values repointed to the dark palette; new keys were
-// added for the straggler sweep + future primitives. New axes (`fonts`, `type`,
-// `space`, `radii`) are additive — step 2 (component primitives + the home /
-// Diagnose-intake redesigns) consumes them. Layouts are unchanged in step 1.
+// Design tokens — v2 "STEEL GLASS" language (graphite base, steel structure,
+// warm-amber identity/life). `colors` keeps its export NAME and every key it
+// had (all styled files import it), so every screen auto-recolors to v2; screens
+// stay FLAT (no glass) until they adopt the v2 primitives in their own passes.
+//
+// Color rule: steel/silver = structure (surfaces, icons, UI); warm amber =
+// identity + life (the brand mark always; anything live/active — connected
+// adapter, running capture, live data).
 //
 // NOTE: the Inspection Report PDF (`lib/inspection.ts`) deliberately does NOT
-// import these tokens — it hardcodes its own light, print-appropriate palette
-// so the dark theme never bleeds into a customer-facing document. Leave it so.
+// import these tokens — it hardcodes its own light, print-appropriate palette.
+// Leave it so.
 // ============================================================================
 
 export const colors = {
-  // ---- Surfaces (deep slate) ----
-  bg: "#0A0F1A", // base background
-  surface: "#141C29", // elevated surface (cards, navbar)
-  surface2: "#1C2A3C", // raised element (chips, inputs, pressed)
+  // ---- Surfaces (graphite, lifted off black; neutral) ----
+  bg: "#191B1E", // base graphite
+  surface: "#212429", // flat card (un-migrated screens)
+  surface2: "#2A2E34", // raised element / pressed
 
-  // ---- Accent (steel-blue) ----
-  accent: "#7FB5E6", // primary accent — text/icon/active on dark
-  accentHover: "#A6CDF0", // brighter on press
-  accentFade: "rgba(127, 181, 230, 0.10)", // subtle accent wash
+  // ---- Accent = STEEL/SILVER (structure, UI) ----
+  accent: "#C8D6E4",
+  accentHover: "#E0E8F0",
+  accentFade: "rgba(200, 214, 228, 0.10)",
 
   // ---- Text ----
-  text: "#F1F5FA", // primary body
-  muted: "#8B97A8", // secondary
-  heading: "#F4F8FC", // brightest — headings
-  tertiary: "#5C6675", // tertiary / captions (new)
-  faint: "#4A5667", // muted chevrons / disabled (new)
-  dataText: "#9FB3CC", // mono / data readouts (new)
+  text: "#F0F2F5", // primary
+  muted: "#AAB2BA", // secondary
+  heading: "#F4F6F8", // headings (brightest)
+  tertiary: "#71777E", // tertiary / captions
+  faint: "#6A7178", // chevrons / disabled
+  dataText: "#9FB3CC", // mono / data readouts
 
-  // ---- Borders ----
-  border: "#182230", // hairline / divider
-  borderStrong: "#24364F", // input borders / stronger separators
-  hairline: "#182230", // explicit hairline alias (new)
+  // ---- Borders / hairline rims ----
+  border: "#2E3238",
+  borderStrong: "#3A3F47",
+  hairline: "#2E3238",
 
-  // ---- Brand mark ----
-  brandBg: "#143A63", // brand-mark backing (white bolt sits on this)
+  // ---- Brand mark backing (fallback; BrandMark uses the warm chip tokens) ----
+  brandBg: "#3A2A18",
 
-  // ---- Chat bubbles — user is a solid steel fill, so its text is white ----
-  userBg: "#185FA5", // primary-button / user-bubble fill
-  userBorder: "#185FA5",
-  userText: "#FFFFFF",
+  // ---- Chat bubbles — user is a steel fill with light text ----
+  userBg: "#283440",
+  userBorder: "#36444F",
+  userText: "#F4F6F8",
 
-  // ---- Status TINTS (re-tuned for dark: deep tinted fill + light text) ----
-  dangerBg: "#2A1212",
-  dangerBorder: "#6B2626",
-  dangerText: "#F08A8A",
-  warnBg: "#2A1F0A",
-  warnBorder: "#6B5114",
-  warnText: "#E8B95E",
-  okBg: "#10241A",
-  okBorder: "#1F6B3F",
-  okText: "#6FD79A",
-  infoBg: "#0E1F33",
-  infoBorder: "#2A5586",
-  infoText: "#8FC0F0",
+  // ---- Status TINTS (deep tinted fill + light text, tuned for graphite) ----
+  dangerBg: "#2E1616",
+  dangerBorder: "#6E2B2B",
+  dangerText: "#F0928E",
+  warnBg: "#2E2310", // verify/amber — aligns with the warm identity
+  warnBorder: "#6E5320",
+  warnText: "#E8B97A",
+  okBg: "#15291E",
+  okBorder: "#2A6B47",
+  okText: "#7BD9A2",
+  infoBg: "#182530", // steel-blue info (TSBs etc.)
+  infoBorder: "#335778",
+  infoText: "#9CC3E6",
 
-  // ---- Solid status fills (vivid; carry white text/icons — read on dark) ----
-  // Values preserved from the prior straggler literals so the inspection status
-  // system is unchanged in meaning; centralized here so they're theme-owned.
+  // ---- Solid status fills (vivid; carry white text/icons) ----
   successFill: "#16A34A",
   successFillBorder: "#15803D",
-  warnFill: "#F59E0B",
-  warnFillBorder: "#B45309",
+  warnFill: "#E8A24C", // shifted to the v2 identity amber
+  warnFillBorder: "#B4781E",
   dangerFill: "#DC2626",
   dangerFillBorder: "#991B1B",
 
   // ---- Overlays ----
-  scrim: "rgba(0, 0, 0, 0.5)", // modal backdrop (theme-independent)
+  scrim: "rgba(0, 0, 0, 0.5)",
+
+  // ---- v2 WARM (life / active) ----
+  warm: "#E8A24C", // connected adapter, running capture, live data
+  warmText: "#D9C3A0",
+  warmFade: "rgba(232, 162, 76, 0.14)",
+
+  // ---- v2 GLASS panel (flat approximations of the recipe's linear sheens;
+  // expo-linear-gradient is not installed and adding it would force a rebuild,
+  // so a flat tint + a top highlight stands in for the 180deg sheen. The tint
+  // is the LEGIBILITY FLOOR — opaque enough to read with blur OFF / bright sun)
+  glassFill: "rgba(244, 247, 250, 0.07)",
+  glassRim: "rgba(244, 247, 250, 0.18)",
+  glassHighlight: "rgba(244, 247, 250, 0.14)", // top sheen line
+
+  // ---- v2 STEEL icon chip (structure) ----
+  steelChip: "rgba(200, 214, 228, 0.14)",
+  steelChipBorder: "rgba(200, 214, 228, 0.32)",
+  steelGlyph: "#CBD6E0",
+
+  // ---- v2 WARM brand chip (identity) ----
+  brandChip: "rgba(232, 162, 76, 0.20)",
+  brandChipBorder: "rgba(232, 162, 76, 0.44)",
+  brandGlyph: "#F2BA6A",
 };
 
 // ---- Typography — IBM Plex (loaded at root via runtime useFonts) ----
-// Family-name tokens map to the @expo-google-fonts export names. A custom font
-// has no synthetic bolding, so weight is selected by FAMILY (see
-// lib/applyGlobalFont.ts, which maps fontWeight → the right Plex Sans face).
+// Family-name tokens map to the @expo-google-fonts export names. v2 screens set
+// these EXPLICITLY (proper handling); un-migrated screens still get Plex via the
+// weight-aware patch in lib/applyGlobalFont.ts (kept until all screens migrate).
 export const fonts = {
   sans: "IBMPlexSans_400Regular",
   sansMedium: "IBMPlexSans_500Medium",
@@ -84,7 +107,7 @@ export const fonts = {
   monoMedium: "IBMPlexMono_500Medium",
 };
 
-// Small size / lineHeight / weight scale (additive — primitives adopt it).
+// Small size / lineHeight / weight scale.
 export const type = {
   size: {
     xs: 11,
@@ -125,7 +148,7 @@ export const space = {
   xxxl: 40,
 };
 
-// Crisp / sharp corners (the new direction). Primitives adopt these in step 2.
+// Crisp / sharp corners (the v2 direction).
 export const radii = {
   none: 0,
   xs: 2,
