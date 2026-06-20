@@ -7,12 +7,17 @@ type Props = {
   showRecordsLink?: boolean;
   showBack?: boolean;
   showSignOut?: boolean;
+  // Home opt-in: flow over the atmospheric background (no fill/divider) and
+  // render the actions as plain text links instead of filled chips. Other
+  // screens omit this prop and keep the solid bar + chip buttons.
+  transparent?: boolean;
 };
 
 export default function Navbar({
   showRecordsLink = true,
   showBack = false,
   showSignOut = true,
+  transparent = false,
 }: Props) {
   const router = useRouter();
 
@@ -28,7 +33,7 @@ export default function Navbar({
   }
 
   return (
-    <View style={styles.navbar}>
+    <View style={[styles.navbar, transparent && styles.navbarTransparent]}>
       <View style={styles.inner}>
         <View style={styles.brand}>
           {showBack && (
@@ -45,29 +50,35 @@ export default function Navbar({
           <Text style={styles.brandName} numberOfLines={1}>
             Vulcan
           </Text>
-          <View style={styles.proBadge}>
-            <Text style={styles.proBadgeText}>PRO</Text>
-          </View>
         </View>
         <View style={styles.actions}>
           {showRecordsLink && (
             <TouchableOpacity
-              style={styles.actionBtn}
+              style={transparent ? styles.linkBtn : styles.actionBtn}
               onPress={() => router.push("/records")}
               activeOpacity={0.7}
               accessibilityLabel="View saved diagnostic records"
             >
-              <Text style={styles.actionText}>Records</Text>
+              <Text
+                style={[styles.actionText, transparent && styles.recordsLinkText]}
+              >
+                Records
+              </Text>
             </TouchableOpacity>
           )}
           {showSignOut && (
             <TouchableOpacity
-              style={styles.actionBtn}
+              style={transparent ? styles.linkBtn : styles.actionBtn}
               onPress={handleSignOut}
               activeOpacity={0.7}
               accessibilityLabel="Sign out"
             >
-              <Text style={[styles.actionText, styles.signOutText]}>
+              <Text
+                style={[
+                  styles.actionText,
+                  transparent ? styles.signOutLinkText : styles.signOutText,
+                ]}
+              >
                 Sign out
               </Text>
             </TouchableOpacity>
@@ -84,6 +95,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  // Home variant: flow over the atmosphere — no fill, no divider.
+  navbarTransparent: {
+    backgroundColor: "transparent",
+    borderBottomWidth: 0,
+  },
   inner: {
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -97,7 +113,7 @@ const styles = StyleSheet.create({
     gap: 10,
     // Let the brand group give way on narrow screens (RN default flexShrink is
     // 0, so without this the brand + actions collide). minWidth:0 lets the name
-    // ellipsize rather than push the PRO badge into the logo.
+    // ellipsize rather than push the actions off-screen.
     flexShrink: 1,
     minWidth: 0,
     marginRight: 8,
@@ -121,21 +137,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.2,
     flexShrink: 1, // the name is what ellipsizes; the badge/logo stay fixed
-  },
-  proBadge: {
-    backgroundColor: colors.accentFade,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 4,
-    flexShrink: 0, // never compress the badge (keeps it off the logo)
-  },
-  proBadgeText: {
-    color: colors.accent,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1,
   },
   actions: {
     flexDirection: "row",
@@ -162,5 +163,19 @@ const styles = StyleSheet.create({
   },
   signOutText: {
     color: colors.muted,
+  },
+  // Home variant: plain text links (no fill/border).
+  linkBtn: {
+    minHeight: HIT_TARGET - 12,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recordsLinkText: {
+    color: "#AEB5BD", // light steel (per v2 home mock)
+  },
+  signOutLinkText: {
+    color: "#71777E", // muted (per v2 home mock)
   },
 });

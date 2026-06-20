@@ -2,7 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import BrandMark from "../components/BrandMark";
 import Navbar from "../components/Navbar";
 import Background from "../components/ui/Background";
 import GlassCard from "../components/ui/GlassCard";
@@ -23,17 +22,12 @@ export default function HomeScreen() {
   return (
     <Background>
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar />
+        <Navbar transparent />
         <ScrollView
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.hero}>
-            <Text style={styles.overline}>DIAGNOSTIC SUITE</Text>
-            <View style={styles.wordmarkRow}>
-              <BrandMark size={46} glow />
-              <Text style={styles.wordmark}>Vulcan</Text>
-            </View>
             <Text style={styles.headline}>What are we diagnosing today?</Text>
           </View>
 
@@ -73,25 +67,39 @@ export default function HomeScreen() {
               onPress={() => router.push("/connect")}
               accessibilityRole="button"
               accessibilityLabel={
-                isConnected ? "Device connected" : "Connect a Device"
+                isConnected ? "Device connected" : "Connect a device"
               }
             >
               {isConnected ? (
-                <View style={styles.connectedRow}>
+                <View style={styles.utilityRow}>
                   <View style={styles.warmDot} />
                   <Text style={styles.connectedText}>Device connected</Text>
                 </View>
               ) : (
-                <Text style={styles.utilityText}>Connect a Device</Text>
+                <View style={styles.utilityRow}>
+                  <Ionicons
+                    name="bluetooth-outline"
+                    size={14}
+                    color={colors.muted}
+                  />
+                  <Text style={styles.utilityText}>Connect a device</Text>
+                </View>
               )}
             </Pressable>
             <Pressable
               style={styles.utilityLink}
               onPress={() => router.push("/diagnostic-logs")}
               accessibilityRole="button"
-              accessibilityLabel="Diagnostic Log"
+              accessibilityLabel="Diagnostic log"
             >
-              <Text style={styles.utilityText}>Diagnostic Log</Text>
+              <View style={styles.utilityRow}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={14}
+                  color={colors.muted}
+                />
+                <Text style={styles.utilityText}>Diagnostic log</Text>
+              </View>
             </Pressable>
           </View>
         </ScrollView>
@@ -141,31 +149,15 @@ const styles = StyleSheet.create({
   },
   hero: {
     alignItems: "center",
-    gap: space.md,
-  },
-  overline: {
-    color: colors.muted,
-    fontSize: 11,
-    fontFamily: fonts.sansSemibold,
-    letterSpacing: 2.5,
-  },
-  wordmarkRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.md,
-  },
-  wordmark: {
-    color: colors.heading,
-    fontSize: 30,
-    fontFamily: fonts.sansBold,
-    letterSpacing: -0.4,
+    paddingTop: space.sm,
+    paddingBottom: space.xs,
   },
   headline: {
-    color: colors.muted,
-    fontSize: 17,
-    fontFamily: fonts.sans,
+    color: colors.heading,
+    fontSize: 22,
+    fontFamily: fonts.sansSemibold,
     textAlign: "center",
-    lineHeight: 24,
+    lineHeight: 29,
   },
   actions: {
     gap: space.md,
@@ -206,26 +198,27 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   footerLinks: {
+    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
-    gap: space.xs,
+    gap: space.lg,
   },
   utilityLink: {
-    alignSelf: "center",
     paddingVertical: space.sm,
-    paddingHorizontal: space.lg,
+    paddingHorizontal: space.sm,
     minHeight: HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
+  },
+  utilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   utilityText: {
     color: colors.muted,
     fontSize: 12,
     fontFamily: fonts.sansMedium,
-  },
-  connectedRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
   },
   warmDot: {
     width: 8,
