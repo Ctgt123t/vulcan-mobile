@@ -85,8 +85,20 @@ export interface CapturedWindow {
   };
 }
 
+// Per-condition live readout (Fix 2 — WAITING legibility). For each gate + the
+// target: the current live value, its target range, and whether it's in-band
+// right now. Computed from the same readValue + inRange the hold uses, so it's a
+// free readout of the comparison already happening every tick. `current` is null
+// when the signal is missing/stale.
+export interface ConditionReadout {
+  label: string; // the requested signal id (e.g. "ECT", "RPM")
+  current: number | null;
+  range: NumericRange;
+  met: boolean;
+}
+
 export type DetectorEvent =
-  | { type: "card"; itemIndex: number; state: CardState; conditionLabel: string; signalIds: string[]; durationSeconds?: number; progress?: number }
+  | { type: "card"; itemIndex: number; state: CardState; conditionLabel: string; signalIds: string[]; conditions: ConditionReadout[]; durationSeconds?: number; progress?: number }
   | { type: "fire"; window: CapturedWindow }
   | { type: "budget_exhausted" }
   | { type: "paused" }
@@ -135,6 +147,10 @@ interface ItemState {
   cooldownUntilMs: number; // safeguard 2
   capturing: { startedAt: number; window: RingBufferEntry[]; trigger: CapturedWindow["trigger"] } | null;
   lastCardState: CardState | null;
+  // Signature of the last emitted condition readout — so a WAITING card can
+  // refresh its live values (ECT 74→75→…→80) instead of being suppressed, but
+  // an unchanged readout (idle) still doesn't spam the UI.
+  lastConditionsSig: string | null;
 }
 
 function conditionLabel(item: RunnableItem): string {
@@ -160,6 +176,18 @@ function planSignalIds(item: RunnableItem): string[] {
   return Array.from(new Set([item.target.requestedId, ...item.gate.map((g) => g.requestedId)]));
 }
 
+// Per-condition live readout for the card (Fix 2). Order matches conditionLabel:
+// gates first, then the measured target. `met` requires a present, non-stale,
+// in-band value.
+function conditionReadouts(item: RunnableItem, tick: MonitorTick): ConditionReadout[] {
+  const one = (sig: ResolvedSignal): ConditionReadout => {
+    const r = readValue(sig, tick);
+    const met = r.present && r.value != null && inRange(r.value, sig.range);
+    return { label: sig.requestedId, current: r.value, range: sig.range, met };
+  };
+  return [...item.gate.map(one), one(item.target)];
+}
+
 // ===========================================================================
 // The detector
 // ===========================================================================
@@ -183,6 +211,7 @@ export class CaptureDetector {
       cooldownUntilMs: 0,
       capturing: null,
       lastCardState: null,
+      lastConditionsSig: null,
     }));
   }
 
@@ -204,7 +233,7 @@ export class CaptureDetector {
         // hold tracking is suspended while paused
         st.holdStartMs = null;
         st.lastInRangeMs = null;
-        this.emitCard(st, "waiting", events);
+        this.emitCard(st, "waiting", tick, events);
         continue;
       }
       this.trackHold(st, tick, events);
@@ -264,7 +293,7 @@ export class CaptureDetector {
         }
       }
     }
-    this.emitCard(st, "waiting", events);
+    this.emitCard(st, "waiting", tick, events);
   }
 
   // G2 cooldown + G3 budget (G4 pause handled in ingestTick before trackHold).
@@ -300,7 +329,7 @@ export class CaptureDetector {
       sustainedHeldMs: heldMs,
     };
     st.capturing = { startedAt: tick.timestamp, window: [{ timestamp: tick.timestamp, values: tick.values }], trigger };
-    this.emitCard(st, "capturing", events, 0);
+    this.emitCard(st, "capturing", tick, events, 0);
   }
 
   private advanceCapture(st: ItemState, tick: MonitorTick, events: DetectorEvent[]): void {
@@ -314,10 +343,10 @@ export class CaptureDetector {
       // cooldown) before firing again.
       st.holdStartMs = null;
       st.lastInRangeMs = null;
-      this.emitCard(st, "waiting", events);
+      this.emitCard(st, "waiting", tick, events);
       return;
     }
-    this.emitCard(st, "capturing", events, Math.min(1, elapsed / windowMs));
+    this.emitCard(st, "capturing", tick, events, Math.min(1, elapsed / windowMs));
   }
 
   private finalize(st: ItemState, outcome: CapturedWindow["outcome"]): CapturedWindow {
@@ -332,17 +361,28 @@ export class CaptureDetector {
     };
   }
 
-  private emitCard(st: ItemState, state: CardState, events: DetectorEvent[], progress?: number): void {
-    // Coalesce: only emit a card event on a state change or while capturing
-    // (progress updates). Avoids spamming the UI every 250ms in "waiting".
-    if (state === "waiting" && st.lastCardState === "waiting") return;
+  private emitCard(st: ItemState, state: CardState, tick: MonitorTick, events: DetectorEvent[], progress?: number): void {
+    const conditions = conditionReadouts(st.item, tick);
+    const sig = conditions.map((c) => `${c.current}/${c.met}`).join("|");
+    // Coalesce: skip a repeat WAITING card only when the live readout is ALSO
+    // unchanged — so values refresh during warm-up (ECT 74→…→80), while a truly
+    // idle/steady stream still doesn't spam the UI every 250ms.
+    if (
+      state === "waiting" &&
+      st.lastCardState === "waiting" &&
+      st.lastConditionsSig === sig
+    ) {
+      return;
+    }
     st.lastCardState = state;
+    st.lastConditionsSig = sig;
     events.push({
       type: "card",
       itemIndex: st.item.itemIndex,
       state,
       conditionLabel: conditionLabel(st.item),
       signalIds: planSignalIds(st.item),
+      conditions,
       durationSeconds: st.item.captureWindowSeconds,
       progress,
     });

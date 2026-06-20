@@ -46,6 +46,7 @@ import {
   isLikelyVin,
 } from "../lib/api";
 import { CaptureExecutor } from "../lib/captureExecutor";
+import type { ConditionReadout } from "../lib/captureDetector";
 import { resolvePlan, type ResolveContext } from "../lib/captureResolver";
 import {
   buildSelectedDescriptors,
@@ -138,6 +139,9 @@ interface CaptureUiState {
     | "error";
   conditionLabel: string;
   signalIds: string[];
+  // Fix 2: per-condition live readout (current value vs target + met) so the
+  // WAITING card reads as "warming up, almost there" instead of a dead spinner.
+  conditions?: ConditionReadout[];
   durationSeconds?: number;
   progress?: number;
   note?: string;
@@ -995,6 +999,7 @@ export default function Screen() {
             phase: u.state,
             conditionLabel: u.conditionLabel,
             signalIds: u.signalIds,
+            conditions: u.conditions,
             durationSeconds: u.durationSeconds,
             progress: u.progress,
             note: undefined,
@@ -1323,17 +1328,23 @@ export default function Screen() {
     // fails (resumed + different / unprovable car) we send connected:false + no
     // snapshot so the brain can never reason over or capture the wrong car's
     // live data — preserving the Stage 2B guarantee.
+    // Escalation/diagnose turn carries CODES + VEHICLE ONLY — never the passive
+    // OBD2 readings. A key-on-engine-off ring buffer (idle/default values) misled
+    // the brain into reasoning over garbage and skipping the live-capture offer.
+    // We send an EMPTY-SIGNALS snapshot (empty buffer + empty descriptors →
+    // signals:[]) that STILL carries the DTCs + freeze frame. Never snapshot:null
+    // — that would drop the codes AND flip the server to "disconnected". The
+    // object-present path keeps hasSnapshot/isConnected true; formatSnapshotBlock
+    // renders "No live signal data captured" + the codes → the DB-3 "connected +
+    // empty → request a capture" branch fires. Live data reaches the brain ONLY
+    // via a Claude-requested capture (startCaptureRound), which is independent of
+    // this snapshot.
     let snapshot: DiagnosticSnapshot | null = null;
     if (captureConnectionOk) {
       const handoff = getObd2DiagnoseHandoff();
-      const descriptors =
-        handoff.selectedDescriptors.length > 0
-          ? handoff.selectedDescriptors
-          : obd2.getSelectedPids();
-      const ringBuffer = obd2.captureSnapshot(5000);
       snapshot = buildDiagnosticSnapshot(
-        ringBuffer,
-        descriptors,
+        [],
+        [],
         condition,
         handoff.dtcs,
         handoff.pendingDtcs,

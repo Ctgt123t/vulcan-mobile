@@ -1,5 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import type { NumericRange } from "../../lib/assessmentTypes";
+import type { ConditionReadout } from "../../lib/captureDetector";
 import { HIT_TARGET, colors } from "../../lib/theme";
 
 // Stage 2 capture-card primitive — PLACEHOLDER, presentational only.
@@ -12,10 +14,21 @@ import { HIT_TARGET, colors } from "../../lib/theme";
 
 export type CaptureCardState = "waiting" | "capturing" | "complete";
 
+// Format a target range for the WAITING readout: "600–900 rpm", "≥ 80 degC",
+// "≤ 5 kPa" (Fix 2 — legible warm-up).
+function formatRange(r: NumericRange): string {
+  const u = r.unit ? ` ${r.unit}` : "";
+  if (r.min != null && r.max != null) return `${r.min}–${r.max}${u}`;
+  if (r.min != null) return `≥ ${r.min}${u}`;
+  if (r.max != null) return `≤ ${r.max}${u}`;
+  return "any";
+}
+
 export default function CaptureCard({
   state,
   conditionLabel,
   signalIds,
+  conditions,
   durationSeconds,
   progress,
   onCancel,
@@ -23,6 +36,9 @@ export default function CaptureCard({
   state: CaptureCardState;
   conditionLabel: string;
   signalIds: string[];
+  // Fix 2: per-condition live readout (current vs target + met). When present,
+  // the WAITING card shows it instead of bare signal chips.
+  conditions?: ConditionReadout[];
   durationSeconds?: number;
   // 0–1, only meaningful while capturing.
   progress?: number;
@@ -81,14 +97,42 @@ export default function CaptureCard({
         </View>
       )}
 
-      {signalIds.length > 0 && (
-        <View style={styles.signalRow}>
-          {signalIds.map((id) => (
-            <View key={id} style={styles.signalChip}>
-              <Text style={styles.signalChipText}>{id}</Text>
+      {/* Fix 2: live per-condition readout while waiting/capturing — current
+          value → target with a met (✓) state, so a warm-up wait reads as
+          "almost there" rather than a dead spinner. Falls back to bare chips. */}
+      {state !== "complete" && conditions && conditions.length > 0 ? (
+        <View style={styles.conditionList}>
+          {conditions.map((c, i) => (
+            <View key={`${c.label}-${i}`} style={styles.conditionRow}>
+              <Ionicons
+                name={c.met ? "checkmark-circle" : "ellipse-outline"}
+                size={14}
+                color={c.met ? colors.okText : colors.muted}
+              />
+              <Text style={styles.conditionLabel}>{c.label}</Text>
+              <Text
+                style={[
+                  styles.conditionValue,
+                  c.met && { color: colors.okText },
+                ]}
+              >
+                {c.current == null ? "—" : c.current}
+              </Text>
+              <Text style={styles.conditionArrow}>→</Text>
+              <Text style={styles.conditionTarget}>{formatRange(c.range)}</Text>
             </View>
           ))}
         </View>
+      ) : (
+        signalIds.length > 0 && (
+          <View style={styles.signalRow}>
+            {signalIds.map((id) => (
+              <View key={id} style={styles.signalChip}>
+                <Text style={styles.signalChipText}>{id}</Text>
+              </View>
+            ))}
+          </View>
+        )
       )}
 
       {onCancel && state !== "complete" && (
@@ -179,6 +223,37 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 3,
     backgroundColor: colors.accent,
+  },
+  // Fix 2 — per-condition readout rows
+  conditionList: {
+    gap: 6,
+  },
+  conditionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  conditionLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text,
+    fontFamily: "Menlo",
+    minWidth: 56,
+  },
+  conditionValue: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.heading,
+    fontFamily: "Menlo",
+  },
+  conditionArrow: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  conditionTarget: {
+    fontSize: 12,
+    color: colors.muted,
+    fontFamily: "Menlo",
   },
   signalRow: {
     flexDirection: "row",

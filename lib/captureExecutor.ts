@@ -19,7 +19,11 @@
 
 import type { CaptureCardState } from "../components/assessment/CaptureCard";
 import type { RequestedDataItem } from "./assessmentTypes";
-import { CaptureDetector, type DetectorEvent } from "./captureDetector";
+import {
+  CaptureDetector,
+  type ConditionReadout,
+  type DetectorEvent,
+} from "./captureDetector";
 import { buildEvidenceEntry, type EvidenceBuildContext } from "./captureEvidence";
 import { collectUnavailable, resolvePlan, type ResolveContext, type ResolvedPlanItem } from "./captureResolver";
 import type { EvidenceCaptureEntry } from "./diagnosticCasesCore";
@@ -30,6 +34,7 @@ export interface CaptureCardUpdate {
   state: CaptureCardState;
   conditionLabel: string;
   signalIds: string[];
+  conditions: ConditionReadout[]; // Fix 2: per-condition live readout for WAITING
   durationSeconds?: number;
   progress?: number;
 }
@@ -113,6 +118,7 @@ export class CaptureExecutor {
             state: ev.state,
             conditionLabel: ev.conditionLabel,
             signalIds: ev.signalIds,
+            conditions: ev.conditions,
             durationSeconds: ev.durationSeconds,
             progress: ev.progress,
           });

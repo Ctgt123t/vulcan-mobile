@@ -572,6 +572,51 @@ section("evidence — cancelled window yields a cancelled entry");
   ok(entry.observed.signals.length >= 1, "partial window still summarized");
 }
 
+section("Fix 2 — WAITING per-condition readout (current vs target + met)");
+{
+  // Gate RPM in-range (720 ∈ 600-900 → met), target SHRTFT1 out-of-range
+  // (2 < 10 → not met) → stays WAITING; the card carries the live readout.
+  const det = new CaptureDetector(runnableFor(leanPlan(2, 1)));
+  const ev = run(det, 0, 1000, () => ({ [RPMKEY]: 720, [FTKEY]: 2 }));
+  const waiting = ev
+    .map((e) => e.ev)
+    .filter(
+      (e): e is Extract<DetectorEvent, { type: "card" }> =>
+        e.type === "card" && e.state === "waiting",
+    );
+  ok(waiting.length > 0, "a WAITING card is emitted");
+  const conds = waiting[0]?.conditions ?? [];
+  eq(conds.length, 2, "readout has both conditions (gate + target)");
+  // Order: gates first, then the measured target.
+  const rpm = conds.find((c) => c.label === "RPM");
+  const ft = conds.find((c) => c.label === "SHRTFT1");
+  ok(!!rpm && rpm.current === 720 && rpm.met === true, "gate RPM: current 720, met ✓");
+  eq(rpm?.range.min, 600, "gate carries its target range (min 600)");
+  ok(!!ft && ft.current === 2 && ft.met === false, "target SHRTFT1: current 2, NOT met");
+  eq(ft?.range.min, 10, "target carries its range (>= 10)");
+}
+
+section("Fix 2 — readout refreshes as the value warms toward target");
+{
+  // SHRTFT1 climbs 2 → 6 → 9 (still < 10): each is a distinct readout, so the
+  // coalesce-on-change lets the WAITING card update instead of being suppressed.
+  const det = new CaptureDetector(runnableFor(leanPlan(2, 1)));
+  const climb: Record<number, number> = { 0: 2, 250: 6, 500: 9 };
+  const ev = run(det, 0, 500, (t) => ({ [RPMKEY]: 720, [FTKEY]: climb[t] ?? 9 }));
+  const targetCurrents = ev
+    .map((e) => e.ev)
+    .filter(
+      (e): e is Extract<DetectorEvent, { type: "card" }> =>
+        e.type === "card" && e.state === "waiting",
+    )
+    .map((e) => e.conditions.find((c) => c.label === "SHRTFT1")?.current);
+  // Distinct changing values appear across the waiting cards (not one frozen card).
+  ok(
+    targetCurrents.includes(2) && targetCurrents.includes(6) && targetCurrents.includes(9),
+    `WAITING readout tracks the climbing value (saw ${JSON.stringify(targetCurrents)})`,
+  );
+}
+
 // ===========================================================================
 // SUMMARY
 // ===========================================================================
