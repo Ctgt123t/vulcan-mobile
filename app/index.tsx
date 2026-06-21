@@ -16,7 +16,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import BrandMark from "../components/BrandMark";
-import { HIT_TARGET, colors } from "../lib/theme";
+import Background from "../components/ui/Background";
+import GlassCard from "../components/ui/GlassCard";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 
 export default function SignInScreen() {
   const router = useRouter();
@@ -34,93 +36,95 @@ export default function SignInScreen() {
   }
 
   return (
-    <SafeAreaView
-      style={styles.safe}
-      edges={["top", "bottom", "left", "right"]}
-    >
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <Background>
+      <SafeAreaView
+        style={styles.safe}
+        edges={["top", "bottom", "left", "right"]}
       >
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <View style={styles.brand}>
-            <BrandMark size={52} />
-            <Text style={styles.brandName}>Vulcan</Text>
-            <View style={styles.proBadge}>
-              <Text style={styles.proBadgeText}>PRO</Text>
-            </View>
-          </View>
-          <Text style={styles.tagline}>
-            Technician-side diagnostic assistant.
-          </Text>
-
-          <View style={styles.card}>
-            <View style={styles.field}>
-              <Text style={styles.label}>EMAIL</Text>
-              <TextInput
-                style={styles.input}
-                value={email}
-                onChangeText={setEmail}
-                placeholder="tech@shop.com"
-                placeholderTextColor={colors.muted}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+          <ScrollView
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Stacked warm brand hero */}
+            <View style={styles.brand}>
+              <BrandMark size={64} glow />
+              <Text style={styles.brandName}>Vulcan</Text>
+              <Text style={styles.tagline}>Diagnostic Assistant</Text>
             </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>PASSWORD</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor={colors.muted}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+            {/* Frosted-glass auth card — the reserved real-blur surface (fixed,
+                non-scrolling). The steel tint carries legibility with blur OFF
+                (Android < 12 fallback). */}
+            <GlassCard frosted style={styles.card}>
+              <View style={styles.field}>
+                <Text style={styles.label}>EMAIL</Text>
+                <TextInput
+                  style={styles.input}
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="tech@shop.com"
+                  placeholderTextColor={colors.muted}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              <View style={styles.field}>
+                <Text style={styles.label}>PASSWORD</Text>
+                <TextInput
+                  style={styles.input}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={colors.muted}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.submit}
+                onPress={onSignIn}
+                activeOpacity={0.85}
+                accessibilityLabel="Sign in"
+              >
+                <Text style={styles.submitText}>Sign in</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.placeholderNote}>
+                Placeholder — real authentication coming soon.
+              </Text>
+            </GlassCard>
+
+            <View style={styles.signupRow}>
+              <Text style={styles.signupText}>No account yet? </Text>
+              <TouchableOpacity
+                onPress={onSignUp}
+                activeOpacity={0.6}
+                accessibilityLabel="Sign up"
+                hitSlop={12}
+              >
+                <Text style={styles.signupLink}>Sign up</Text>
+              </TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={styles.submit}
-              onPress={onSignIn}
-              activeOpacity={0.85}
-              accessibilityLabel="Sign in"
-            >
-              <Text style={styles.submitText}>Sign in</Text>
-            </TouchableOpacity>
-
-            <Text style={styles.placeholderNote}>
-              Placeholder — real authentication coming soon.
-            </Text>
-          </View>
-
-          <View style={styles.signupRow}>
-            <Text style={styles.signupText}>No account yet? </Text>
-            <TouchableOpacity
-              onPress={onSignUp}
-              activeOpacity={0.6}
-              accessibilityLabel="Sign up"
-              hitSlop={12}
-            >
-              <Text style={styles.signupLink}>Sign up</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Background>
   );
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent", // the atmosphere (Background) shows through
   },
   flex: {
     flex: 1,
@@ -132,43 +136,26 @@ const styles = StyleSheet.create({
     paddingVertical: 32,
   },
   brand: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    marginBottom: 8,
+    gap: 12,
+    marginBottom: 28,
   },
   brandName: {
     color: colors.heading,
     fontSize: 32,
-    fontWeight: "700",
+    fontFamily: fonts.sansBold,
     letterSpacing: -0.5,
-  },
-  proBadge: {
-    backgroundColor: colors.accentFade,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-  },
-  proBadgeText: {
-    color: colors.accent,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.2,
   },
   tagline: {
     color: colors.muted,
     fontSize: 14,
+    fontFamily: fonts.sans,
     textAlign: "center",
-    marginBottom: 32,
   },
   card: {
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    width: "100%",
+    maxWidth: 440,
+    alignSelf: "center",
     padding: 18,
   },
   field: {
@@ -176,35 +163,38 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
-    fontWeight: "500",
+    fontFamily: fonts.sansSemibold,
     color: colors.muted,
-    letterSpacing: 0.7,
-    marginBottom: 6,
+    letterSpacing: 1.2,
+    marginBottom: 7,
   },
+  // Recessed well inside the glass card — a slightly darker translucent fill so
+  // the field reads as inset against the frosted surface.
   input: {
     minHeight: HIT_TARGET,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontFamily: fonts.sans,
     color: colors.text,
-    backgroundColor: colors.surface2,
+    backgroundColor: "rgba(12, 15, 18, 0.30)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 6,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
   },
   submit: {
     marginTop: 6,
     minHeight: HIT_TARGET,
-    backgroundColor: colors.accent,
-    borderRadius: 6,
+    backgroundColor: colors.accent, // solid light steel
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
   },
   submitText: {
-    color: "#fff",
+    color: colors.bg, // dark text on steel
     fontSize: 15,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.3,
   },
   placeholderNote: {
@@ -213,6 +203,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: "center",
     fontStyle: "italic",
+    fontFamily: fonts.sans,
   },
   signupRow: {
     flexDirection: "row",
@@ -224,10 +215,11 @@ const styles = StyleSheet.create({
   signupText: {
     color: colors.muted,
     fontSize: 14,
+    fontFamily: fonts.sans,
   },
   signupLink: {
-    color: colors.accent,
+    color: colors.accent, // steel accent #C8D6E4
     fontSize: 14,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
   },
 });
