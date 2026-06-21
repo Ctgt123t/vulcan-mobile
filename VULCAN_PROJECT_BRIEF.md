@@ -3,7 +3,7 @@
 ## Purpose of this document
 Strategic/contextual brief for a fresh chat about Vulcan. Captures product vision, decisions, architecture, roadmap, and working preferences so a new conversation can pick up without re-reading the full history. Code-level context lives in the repo's **CLAUDE.md**; the data-layer plan lives in **VULCAN_DATA_LAYER_STRATEGY.md** (both in the repo / Project knowledge — read those for full detail).
 
-> **Last updated: 2026-06-20.** This session cleared the **entire near-term diagnostic-flow queue** (escalation handoff, photo bundle, OBD2/code-pull bundle, and a mobile bug batch), got **iOS testing running on a new iPhone**, and banked several product decisions (video dropped, stance-UI-switch scrapped, Confirmed gate tabled, recall-relevance found already-built). The diagnostic engine was already complete + hardware-validated; the flow has now been refined against real shop testing. **The two remaining major tracks are the UI redesign (next) and Phase-4 pre-launch infrastructure (the real bulk).** See "Recently shipped" and the phase tracker.
+> **Last updated: 2026-06-21.** Since the 06-20 flow refinement, the **entire v2 "steel glass" UI redesign shipped** — a dark, glass, "technical instrument" look rolled out across **every screen** (the previously-"next" track is now DONE). The diagnostic engine was already complete + hardware-validated, and the flow refined against real shop testing. **The one remaining major track is Phase-4 pre-launch infrastructure (the real bulk).** See "Recently shipped" and the phase tracker.
 
 ## What Vulcan is
 An AI-powered automotive diagnostic mobile app for professional technicians. Core value: an AI diagnostic assistant (powered by Claude) that connects to vehicles via OBD2 Bluetooth adapters, reads live data and trouble codes, and reasons about them like a master technician — guiding diagnosis rather than displaying raw numbers. Signature feature is "autopilot" diagnosis: plug in, and Vulcan reasons to a confirmed root cause with minimal manual input, shifting between leading the diagnosis itself (data-driven faults) and directing the tech's physical inspection (mechanical faults).
@@ -18,12 +18,12 @@ Founder (Cole, Manchester NH) is a non-coder with automotive knowledge. The app 
 - Key risk: API costs scaling with usage. Cost control is a recurring design priority.
 
 ## Tech stack & architecture
-- **Frontend:** Expo SDK 54, React Native, TypeScript, Expo Router
+- **Frontend:** Expo SDK 54, React Native, TypeScript, Expo Router. **Design: v2 "steel glass" dark** — single token source `lib/theme.ts` (colors incl. `glassFill`/`glassRim`/`steelChip`/`warm`/status, `radii`, `fonts`); primitives `components/ui/Background` (baked atmosphere via `expo-image`) + `components/ui/GlassCard` (translucent default everywhere; frosted/BlurView reserved for fixed non-scrolling surfaces — only the sign-in card); warm-amber `BrandMark` anchor; transparent `Navbar` variant. IBM Plex Sans (UI) + IBM Plex Mono (data). Native deps added for this and now in the binary: `expo-blur`, `expo-image`.
 - **Backend:** Node.js/Express on Railway (auto-deploys from GitHub main)
 - **Data layer:** Supabase/Postgres stood up for the unified vehicle-data layer. Existing legacy caches (DTC/PID/VIN/specs) still JSON on a Railway Volume — migration of those into Postgres is deferred and deliberate.
 - **AI:** **Opus 4.6** for Diagnose AND Ask Vulcan; Assess on Opus. Prompt caching (ephemeral) for cost control; 20-message history cap. (Opus 4.8 vs 4.6 per-workload is still an open decision — see Decisions to revisit.)
 - **OBD2:** Dual Bluetooth transport — react-native-ble-plx (BLE), react-native-bluetooth-classic (Classic). Unified layer in lib/obd2.ts. DTC parsing isolated in pure, tested lib/dtcParser.ts. VIN parsing/validation isolated in pure, tested lib/vin.ts. **iOS now excludes the Classic pod from its build via a `react-native.config.js` autolinking override (shipped this session)** — iOS uses BLE only; Android keeps Classic.
-- **Builds:** EAS Build. Dev (needs dev server), preview (standalone, this is the shop-test build), production. **Deploy rule: mobile changes ship via `eas update` (OTA, to the PREVIEW channel for shop testing); server changes only reach Railway via `git push` to main. A task touching both needs BOTH.** .env is local-dev only; OTA/Railway use eas.json env blocks / Railway dashboard vars.
+- **Builds:** EAS Build. Dev (needs dev server), preview (standalone, this is the shop-test build), production. **Deploy rules:** mobile JS/styling → **`eas update --branch preview`, run NON-INTERACTIVELY then VERIFIED with `eas update:list`**; server → `git push` to main → Railway auto-deploy → verify healthy; a **native dep/config change → `eas build`**, and **bump the app version on a rebuild that adds native capability** so an OTA can't land on an old binary; **commit always, separate from deploy**; a task touching both mobile + server needs BOTH. .env is local-dev only; OTA/Railway use eas.json env blocks / Railway dashboard vars. **`ASSESS_BODY` is byte-frozen by `verifyAssessPrompt.js`** (prompt edits go in `UNIFIED`-only sections); standard gates: typecheck (~9 known "Handoff" errors, add none), node gates (`captureDetector`/`vin`/`findingOptions`/`turnHistory`), `verifyAssessPrompt.js`.
 - **iOS build status:** Founder is enrolled in the Apple Developer Program; preview (ad-hoc/internal) builds run on a **new iPhone** (the previous device was replaced — its UDID was registered via `eas device:create` so ad-hoc builds install). BLE/OBD2 validated on iOS via the Veepeak. Background BLE is deliberately NOT pursued (needs entitlements + rebuild + App-Review scrutiny, and a generic adapter can't reliably wake a closed app); on-app-open/foreground auto-reconnect is the target and works.
 - **Repo:** GitHub. CLAUDE.md and VULCAN_DATA_LAYER_STRATEGY.md both committed.
 - **Railway CLI:** authenticated (Claude Code can read deploy logs/status directly).
@@ -31,12 +31,12 @@ Founder (Cole, Manchester NH) is a non-coder with automotive knowledge. The app 
 ## The app modes
 1. **Ask Vulcan** — open-ended Q&A, no VIN required, conversational. Pulls TSBs/recalls/specs. **Supports photo evidence** (attach a photo to a question; image-bearing asks bypass the response cache).
 2. **Diagnose** — structured diagnostic flow, VIN-based, ends in a structured, confidence-rated diagnosis with relevant recalls/TSBs. Verified DTC defs injected server-side. **Supports photo evidence**, including **photo-on-intake** (attach a photo on the intake screen that rides into the first turn). (Note: an early-vision "diagnosis PDF" was never built — the Inspection Report is the only PDF deliverable today; build-or-drop is a parked decision.)
-3. **Inspection Report** — multi-point inspection w/ PDF. **KEEP (decided 2026-06-10)** — the app's only customer-facing PDF deliverable, zero cost in the current nav; revisit at the premium UI redesign.
+3. **Inspection Report** — multi-point inspection w/ PDF. **KEEP (decided 2026-06-10)** — the app's only customer-facing PDF deliverable. Screen UI is on v2; the **generated PDF stays light/print** (never routed through the dark theme).
 4. **OBD2 Scan** — Bluetooth connection, DTC reading (stored/pending/permanent), live data, status panel. A simple instrument with one door into diagnosis: "Escalate to Diagnosis."
 - **Connect a Device (NEW this session)** — a dedicated front-door screen (reached from the home tiles) for one-time adapter setup: connection status, connect/pick adapter, reconnect, forget. It's a thin surface over the already-existing app-wide connection / saved-adapter / auto-reconnect machinery, so the tech no longer has to enter the OBD2 Scan screen just to connect. "Not connected" nudges now route here.
 - The former **Smart Diagnose** (the AI diagnostic engine) was **folded into Diagnose** — no longer a separate mode.
 
-Branding: navy blue (#004B87), white/light theme, lightning-bolt icon. Premium UI redesign planned later.
+Branding: the app is on the **v2 "steel glass" dark theme** — graphite base (`#191B1E`), steel/silver structure, warm-amber (`#E8A24C`) for identity/live state, lightning-bolt brand mark (now warm amber). (The old navy `#004B87` light theme is retired; a light-theme pivot was explored and abandoned. The app/adaptive launcher icon still carries the old navy and is a deferred pre-launch rebrand item.)
 
 NOTE: The **mode restructure** that merged Diagnose + Smart Diagnose into one mode (with OBD2 as a simple "escalate to diagnosis" instrument) is **DONE** — the Diagnose thread runs on the unified `/api/diagnose-turn` brain.
 
@@ -101,8 +101,11 @@ Sourcing tiers: Tier 1 = open/gov/manufacturer-published docs (start here). Tier
 
 ---
 
-## RECENTLY SHIPPED (this session, 2026-06)
-All OTA unless noted. The entire near-term diagnostic-flow queue was cleared:
+## RECENTLY SHIPPED (2026-06)
+
+**v2 "steel glass" UI redesign — COMPLETE (2026-06-20/21).** A dark, glass, "technical instrument" look across the whole app. Foundation: dark theme + IBM Plex (OTA) → one native rebuild (`expo-blur` + `expo-image`; dark OS chrome; BT lib held on its RC) → the look proven on home → then rolled out to every screen (sign-in [the one frosted/real-blur surface], Diagnose intake + chat, Records + detail, Connect, Diagnostic Log, Ask Vulcan, OBD2 Scan + live gauges, Inspection screen, the assessment/capture cards, the final diagnosis card + actions, shared VehicleBar). The atmosphere is a baked PNG from a dev-only generator (`scripts/genAtmosphere.mjs`); the Inspection PDF was fenced light throughout; capture/diagnosis logic untouched (styling only). Deferred stragglers: PID-picker body, OBD2 detail modal, font-patch retirement.
+
+**Diagnostic-flow refinement (this session, all OTA unless noted) — the entire near-term diagnostic-flow queue was cleared:**
 - **Guided result-capture** (Stage 3 step 1) — brain-authored inspection-outcome tap buttons.
 - **Photo evidence** in both Diagnose and Ask Vulcan; **photo-on-intake**; **proactive (invitational) photo offer**. (Diagnose photo forced one native rebuild; the rest OTA.)
 - **Escalation handoff → codes-only** + proactive live-capture offer + a **WAITING-state per-condition readout** (live values vs targets, so "warming up" no longer reads as "broken").
@@ -123,11 +126,12 @@ All OTA unless noted. The entire near-term diagnostic-flow queue was cleared:
 | 3b. Stage 2 (iterative loop + mode restructure) | ✅ COMPLETE & hardware-validated (2016 F-350, 2026-06-14) |
 | 3c. Stage 3 (guided inspection + stance) | ✅ guided result-capture SHIPPED; ⛔ stance-UI-switch SCRAPPED (decoration) |
 | 3d. Stages 4–5 (confirmed-fix priors; voice) | NOT STARTED (voice queued behind iPhone work) |
-| 3e. Near-term diagnostic-flow refinement | ✅ COMPLETE this session (escalation handoff, photo bundle, OBD2/code-pull, bug batch) |
+| 3e. Near-term diagnostic-flow refinement | ✅ COMPLETE (escalation handoff, photo bundle, OBD2/code-pull, bug batch) |
+| 3f. v2 "steel glass" UI redesign | ✅ COMPLETE (2026-06-20/21) — dark glass design across every screen; one native rebuild for expo-blur/expo-image |
 | 4. Pre-launch infrastructure | 🔄 IN PROGRESS (data layer paused known-good; iOS Classic-pod cleanup ✅ done) |
 | 5. Testing & launch | NOT STARTED |
 
-**Where things stand right now:** the **diagnostic engine is complete and hardware-validated**, and this session **refined the flow against real shop testing and cleared the entire near-term queue**. The **two remaining major tracks** are: **(1) the UI redesign** — the "cleaner, less clutter, easier to understand" pass, deliberately saved for LAST so it builds on a flow that already behaves; and **(2) Phase-4 pre-launch infrastructure** — the real bulk of the road to launch (auth, billing, analytics, error tracking, the data-layer real feed, self-hosted vPIC, the OBD2 trust gate, etc.). **Deferred engine polish** (not blocking): **baseline-poll-on-connect** (a light passive poll on connect so a Diagnose-first session has a live snapshot immediately); and **offline resilience** (a VIN-decode failure bit live during F-350 testing — graceful handling + local buffering, with the self-hosted NHTSA vPIC decoder as the durable fix).
+**Where things stand right now:** the **diagnostic engine is complete and hardware-validated**, the flow has been **refined against real shop testing**, and the **v2 UI redesign is COMPLETE across every screen**. The **one remaining major track** is **Phase-4 pre-launch infrastructure** — the real bulk of the road to launch (auth, billing, analytics, error tracking, the data-layer real feed, self-hosted vPIC, the OBD2 trust gate, etc.). **Deferred engine polish** (not blocking): **baseline-poll-on-connect** (a light passive poll on connect so a Diagnose-first session has a live snapshot immediately); and **offline resilience** (a VIN-decode failure bit live during F-350 testing — graceful handling + local buffering, with the self-hosted NHTSA vPIC decoder as the durable fix).
 
 ### Phase 4 — Pre-launch infrastructure
 - **Unified data layer** (in progress — replaces Vehicle Finder). Supabase foundation ✅; real feed deferred to near-launch.
@@ -143,7 +147,7 @@ All OTA unless noted. The entire near-term diagnostic-flow queue was cleared:
 - Form LLC (NH) + EIN before revenue; CPA/attorney. Switch Apple/Google to Organization after LLC. Consolidate Supabase under a business account. Trademark "Vulcan" (Class 9 & 42); "VulcanDX" backup; TESS search first.
 
 ### Phase 5 — Testing & launch
-TestFlight + Google Play internal testing. **Hard release gate: strip `EXPO_PUBLIC_DEBUG_OBD2` / `EXPO_PUBLIC_DEBUG_UI` before any customer-facing build.** PrivacyInfo.xcprivacy manifest; tighten NSAllowsArbitraryLoads; remove the now-unused NSMicrophoneUsageDescription (voice dropped for now); populate submit.production.ios; App Store Connect record. Finalize tiered pricing. App Store listing. Premium UI redesign (after core locked).
+TestFlight + Google Play internal testing. **Hard release gate: strip `EXPO_PUBLIC_DEBUG_OBD2` / `EXPO_PUBLIC_DEBUG_UI` before any customer-facing build.** PrivacyInfo.xcprivacy manifest; tighten NSAllowsArbitraryLoads; remove the now-unused NSMicrophoneUsageDescription (voice dropped for now); populate submit.production.ios; App Store Connect record. Finalize tiered pricing. App Store listing. (Premium UI redesign — DONE; v2 shipped 2026-06-20/21.) Remaining UI-adjacent pre-launch: rebrand the launcher/app icon off the old navy; finish the deferred design stragglers (PID-picker body, OBD2 detail modal, font-patch retirement).
 
 ### Decisions to revisit
 - **Opus 4.8 vs 4.6 per-workload** — same headline rate, but a new tokenizer can inflate input tokens up to ~35%; extraction is 94% input, so MEASURE on extraction before switching. Likely worth it for reasoning modes.
@@ -156,7 +160,7 @@ TestFlight + Google Play internal testing. **Hard release gate: strip `EXPO_PUBL
 - ~~VIN scan inconsistent capture + check-digit rejection~~ — **FIXED this session** (iOS bounds-gate removed; pure `lib/vin.ts` extract + soft check digit; widened barcode types).
 - ~~Keyboard fields hidden behind the keyboard~~ — **FIXED this session** (chat + forms).
 - **Recall coverage gap (new)** — recall relevance filtering works, but recalls attach only on the `provide_diagnosis` conclusion path, not the `emit_diagnostic_assessment` conclusion path; depending on how the brain concludes, relevant recalls can silently not show. Small additive fix.
-- **Classic-Bluetooth lib RC→stable pin (new)** — `react-native-bluetooth-classic` is on `^1.73.0-rc.17`; pin to stable eventually (touches Android, needs Android retest).
+- **Classic-Bluetooth lib held on RC (decided, not a TODO)** — `react-native-bluetooth-classic` is on `^1.73.0-rc.17`; **there is no `1.x` stable release to pin to** (the whole 1.x line is RCs; only ancient 0.10.x stables exist), so we deliberately stay on the RC. Re-validate Android Classic after any native rebuild; revisit only if a real 1.x stable ships.
 - **Ask→Diagnose photo handoff (new)** — a photo attached in Ask doesn't carry when switching to Diagnose (text-only handoff). Mitigated by photo-on-intake (re-attach on the Diagnose intake).
 - **Records heading redundancy (new)** — "FINAL DIAGNOSIS" above "DIAGNOSIS" in the records view.
 - **Confidence-on-card (new)** — optionally show "Strongly Supported" on the conclusion card (needs a saved field for records).
