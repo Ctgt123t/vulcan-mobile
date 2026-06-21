@@ -1967,10 +1967,13 @@ const styles = StyleSheet.create({
     width: "31%",
     minWidth: 100,
     flexGrow: 1,
-    backgroundColor: colors.surface2,
+    // Steel-chip translucent fill (a touch more present than the section's
+    // glassFill) so each tile reads as a distinct sub-card, not muddy
+    // glass-on-glass. Translucent only — NO BlurView (live-updating + scrolled).
+    backgroundColor: colors.steelChip,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.steelChipBorder,
+    borderRadius: radii.sm,
     paddingHorizontal: 10,
     paddingVertical: 10,
     gap: 4,
