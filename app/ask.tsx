@@ -34,7 +34,8 @@ import {
 import { consumeHandoff, setHandoff } from "../lib/handoff";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import { persistPhoto, pickAndResize, withoutBase64 } from "../lib/photoEvidence";
-import { HIT_TARGET, colors, fonts } from "../lib/theme";
+import Background from "../components/ui/Background";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import type {
   ChatMessage,
   ImageAttachment,
@@ -242,11 +243,12 @@ export default function AskScreen() {
   const canSwitchToDiagnose = messages.some((m) => m.role === "assistant");
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
       >
-        <Navbar showBack />
+        <Navbar transparent showBack />
 
         {obdConnected && (
           <View style={styles.obdBanner}>
@@ -416,6 +418,7 @@ export default function AskScreen() {
         }}
       />
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -708,31 +711,32 @@ function ManualField({
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent",
   },
   flex: {
     flex: 1,
   },
+  // Connected = live → the screen's warm accent.
   obdBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: colors.okBg,
+    backgroundColor: colors.warmFade,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.okBorder,
+    borderBottomColor: colors.warmFade,
   },
   obdDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: colors.okText,
+    backgroundColor: colors.warm,
   },
   obdBannerText: {
-    color: colors.okText,
+    color: colors.warmText,
     fontSize: 12,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.3,
   },
   addVehicleBtn: {
@@ -741,9 +745,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: colors.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    backgroundColor: "transparent",
     minHeight: HIT_TARGET,
   },
   addVehicleText: {
@@ -762,7 +764,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     color: colors.heading,
     fontSize: 26,
-    fontWeight: "700",
+    fontFamily: fonts.sansBold,
     letterSpacing: -0.3,
   },
   emptyBody: {
@@ -792,8 +794,8 @@ const styles = StyleSheet.create({
   },
   bubbleAssistant: {
     width: "100%",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
+    backgroundColor: colors.glassFill,
+    borderColor: colors.glassRim,
     borderBottomLeftRadius: 4,
   },
   bubbleText: {
@@ -834,9 +836,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   footerBar: {
-    backgroundColor: colors.surface,
+    backgroundColor: "transparent",
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.glassRim,
   },
   switchLink: {
     minHeight: HIT_TARGET - 12,
@@ -867,8 +869,10 @@ const styles = StyleSheet.create({
     minWidth: HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 8,
-    backgroundColor: colors.surface2,
+    borderRadius: radii.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
   },
   stagedChip: {
     flexDirection: "row",
@@ -901,17 +905,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontFamily: fonts.sans,
     color: colors.text,
-    backgroundColor: colors.surface2,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
   },
   sendBtn: {
     minHeight: HIT_TARGET,
     minWidth: HIT_TARGET + 24,
-    backgroundColor: colors.accent,
-    borderRadius: 8,
+    backgroundColor: colors.accent, // solid light steel
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
@@ -920,8 +925,8 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   sendBtnText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
+    color: colors.bg, // dark text on steel
+    fontFamily: fonts.sansSemibold,
     fontSize: 14,
     letterSpacing: 0.3,
   },
