@@ -12,7 +12,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import { diagnosticLogger, type DiagnosticLogEntry } from "../lib/diagnosticLogger";
-import { HIT_TARGET, colors, fonts } from "../lib/theme";
+import Background from "../components/ui/Background";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 
 // ---- Types ----
 
@@ -79,8 +80,9 @@ export default function DiagnosticLogsScreen() {
   }
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showBack />
+      <Navbar transparent showBack />
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.headerTitle}>Diagnostic Log</Text>
@@ -135,6 +137,7 @@ export default function DiagnosticLogsScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -456,16 +459,14 @@ function EntryDetail({ entry }: { entry: DiagnosticLogEntry }) {
 // ---- Styles ----
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
+  safe: { flex: 1, backgroundColor: "transparent" },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: colors.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    backgroundColor: "transparent",
   },
   headerLeft: { gap: 2 },
   headerTitle: {
@@ -487,10 +488,10 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface2,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     minHeight: HIT_TARGET - 12,
   },
   headerBtnText: {
@@ -522,10 +523,10 @@ const styles = StyleSheet.create({
   },
   // Session card
   sessionCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     overflow: "hidden",
   },
   sessionHeader: {

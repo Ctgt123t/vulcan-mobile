@@ -11,10 +11,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
+import Background from "../components/ui/Background";
 import { useObd2 } from "../contexts/Obd2Context";
 import { type DiscoveredDevice, obd2 } from "../lib/obd2";
 import type { SavedAdapter } from "../lib/savedAdapter";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 
 // Connect-a-Device — a THIN surface over the obd2 singleton + Obd2Context. It
 // renders existing connection state (status / connectedVin / saved adapter) and
@@ -89,8 +90,9 @@ export default function ConnectScreen() {
   const busy = scanning || status === "scanning";
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar />
+      <Navbar transparent showBack />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.h1}>Connect a Device</Text>
         <Text style={styles.subtitle}>
@@ -171,7 +173,7 @@ export default function ConnectScreen() {
             >
               {busy ? (
                 <View style={styles.btnRow}>
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color={colors.bg} />
                   <Text style={styles.primaryBtnText}>Scanning…</Text>
                 </View>
               ) : (
@@ -227,6 +229,7 @@ export default function ConnectScreen() {
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -266,7 +269,7 @@ function DeviceRow({
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent",
   },
   content: {
     flexGrow: 1,
@@ -277,23 +280,24 @@ const styles = StyleSheet.create({
   },
   h1: {
     fontSize: 26,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     color: colors.heading,
     letterSpacing: -0.3,
   },
   subtitle: {
     color: colors.muted,
     fontSize: 14,
+    fontFamily: fonts.sans,
     lineHeight: 21,
     marginTop: -8,
   },
   statusCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 16,
     gap: 12,
   },
@@ -303,7 +307,11 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   dotConnected: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.warm, // amber = live (the connect-status accent)
+    shadowColor: colors.warm,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
   },
   dotIdle: {
     backgroundColor: colors.muted,
@@ -315,7 +323,7 @@ const styles = StyleSheet.create({
   statusTitle: {
     color: colors.heading,
     fontSize: 16,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
   },
   statusMsg: {
     color: colors.muted,
@@ -323,10 +331,10 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   savedRow: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 16,
     gap: 12,
   },
@@ -341,8 +349,9 @@ const styles = StyleSheet.create({
   },
   secondaryBtn: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accent,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
+    borderRadius: radii.sm,
     paddingHorizontal: 18,
     paddingVertical: 10,
     minHeight: HIT_TARGET,
@@ -352,7 +361,7 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     color: colors.accent,
     fontSize: 14,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
   },
   linkBtn: {
     paddingVertical: 10,
@@ -365,17 +374,17 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   primaryBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: 10,
+    backgroundColor: colors.accent, // solid light steel
+    borderRadius: radii.sm,
     paddingVertical: 16,
     minHeight: HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
   },
   primaryBtnText: {
-    color: "#FFFFFF",
+    color: colors.bg, // dark text on steel
     fontSize: 16,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
   },
   btnRow: {
     flexDirection: "row",
@@ -396,10 +405,10 @@ const styles = StyleSheet.create({
   deviceRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     paddingHorizontal: 16,
     paddingVertical: 14,
     minHeight: HIT_TARGET,

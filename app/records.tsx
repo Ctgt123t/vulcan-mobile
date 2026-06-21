@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import Results from "../components/Results";
+import Background from "../components/ui/Background";
 import {
   INSPECTION_TEMPLATE,
   SHOP_PLACEHOLDER,
@@ -29,7 +30,7 @@ import {
   type SavedRecord,
   loadRecords,
 } from "../lib/records";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import type {
   AssistantTurn,
   ChatMessage,
@@ -105,8 +106,9 @@ export default function RecordsScreen() {
         : "No inspection reports yet. Run a multi-point inspection report from the home screen.";
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showRecordsLink={false} showBack />
+      <Navbar showRecordsLink={false} showBack transparent />
 
       <View style={styles.tabs}>
         <TabBtn
@@ -169,6 +171,7 @@ export default function RecordsScreen() {
         )}
       </Modal>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -353,6 +356,7 @@ function DiagnosisDetail({
   onClose: () => void;
 }) {
   return (
+    <Background>
     <SafeAreaView
       style={styles.safe}
       edges={["top", "bottom", "left", "right"]}
@@ -407,6 +411,7 @@ function DiagnosisDetail({
         <Results data={record.diagnosis} />
       </ScrollView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -454,6 +459,7 @@ function InspectionDetail({
   }
 
   return (
+    <Background>
     <SafeAreaView
       style={styles.safe}
       edges={["top", "bottom", "left", "right"]}
@@ -559,6 +565,7 @@ function InspectionDetail({
         ))}
       </ScrollView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -640,23 +647,21 @@ function ConvoRow({ message }: { message: ChatMessage }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent",
   },
   tabs: {
     flexDirection: "row",
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
   },
   tab: {
     flex: 1,
     minHeight: HIT_TARGET,
-    borderRadius: 6,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 6,
@@ -668,7 +673,7 @@ const styles = StyleSheet.create({
   tabText: {
     color: colors.muted,
     fontSize: 12,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.2,
   },
   tabTextActive: {
@@ -691,10 +696,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 14,
     marginBottom: 10,
   },
@@ -735,7 +740,7 @@ const styles = StyleSheet.create({
   cardVehicle: {
     color: colors.heading,
     fontSize: 16,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     marginBottom: 2,
   },
   cardSub: {
@@ -785,9 +790,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: "transparent",
   },
   closeBtn: {
     minWidth: HIT_TARGET + 24,
@@ -824,10 +827,10 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   metaCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     paddingHorizontal: 14,
     paddingVertical: 6,
     marginBottom: 18,
@@ -868,10 +871,10 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   detailSectionCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     paddingHorizontal: 14,
   },
   detailItemRow: {
@@ -911,10 +914,10 @@ const styles = StyleSheet.create({
     borderLeftColor: colors.border,
   },
   symptomBox: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 14,
     marginBottom: 18,
   },
@@ -941,8 +944,8 @@ const styles = StyleSheet.create({
   },
   bubbleAssistant: {
     width: "100%",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
+    backgroundColor: colors.glassFill,
+    borderColor: colors.glassRim,
     borderBottomLeftRadius: 4,
   },
   bubbleText: {
