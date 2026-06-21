@@ -1,6 +1,6 @@
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { VehicleInfo } from "../lib/types";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 
 export default function VehicleBar({
   vehicle,
@@ -13,11 +13,7 @@ export default function VehicleBar({
     .filter((s) => s && s.length > 0)
     .join(" ");
 
-  const metaParts: string[] = [];
-  if (vehicle.engineType && vehicle.engineType.length > 0) {
-    metaParts.push(vehicle.engineType);
-  }
-  metaParts.push(`${vehicle.mileage} mi`);
+  const hasEngine = !!vehicle.engineType && vehicle.engineType.length > 0;
 
   return (
     <View style={styles.bar}>
@@ -26,9 +22,18 @@ export default function VehicleBar({
           <Text style={styles.name} numberOfLines={1}>
             {name}
           </Text>
+          {hasEngine ? (
+            <>
+              <Text style={styles.sep}>·</Text>
+              <Text style={styles.meta} numberOfLines={1}>
+                {vehicle.engineType}
+              </Text>
+            </>
+          ) : null}
           <Text style={styles.sep}>·</Text>
-          <Text style={styles.meta} numberOfLines={1}>
-            {metaParts.join(" · ")}
+          {/* Mileage is data → IBM Plex Mono. */}
+          <Text style={styles.metaMono} numberOfLines={1}>
+            {vehicle.mileage} mi
           </Text>
         </View>
         <TouchableOpacity
@@ -45,10 +50,11 @@ export default function VehicleBar({
 }
 
 const styles = StyleSheet.create({
+  // v2: flows over the atmosphere (no fill), with a subtle hairline divider.
   bar: {
-    backgroundColor: colors.surface,
+    backgroundColor: "transparent",
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    borderBottomColor: colors.glassRim,
   },
   inner: {
     paddingHorizontal: 20,
@@ -69,7 +75,7 @@ const styles = StyleSheet.create({
   name: {
     color: colors.heading,
     fontSize: 14,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.1,
   },
   sep: {
@@ -78,20 +84,30 @@ const styles = StyleSheet.create({
   meta: {
     color: colors.muted,
     fontSize: 12,
+    fontFamily: fonts.sans,
     flexShrink: 1,
   },
+  metaMono: {
+    color: colors.muted,
+    fontSize: 12,
+    fontFamily: fonts.mono,
+    flexShrink: 1,
+  },
+  // v2 ghost/steel button.
   reset: {
     minHeight: HIT_TARGET,
     paddingHorizontal: 12,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderStrong,
-    borderRadius: 6,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
+    borderRadius: radii.sm,
   },
   resetText: {
-    color: colors.text,
+    color: colors.accent,
     fontSize: 12,
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.2,
   },
 });

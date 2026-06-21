@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { NumericRange } from "../../lib/assessmentTypes";
 import type { ConditionReadout } from "../../lib/captureDetector";
-import { HIT_TARGET, colors, fonts } from "../../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../../lib/theme";
 
 // Stage 2 capture-card primitive — PLACEHOLDER, presentational only.
 // During Stage 2's auto-capture this card will show live state while the
@@ -168,11 +168,12 @@ function StatePill({ state }: { state: CaptureCardState }) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 12,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassRim,
     padding: 14,
     gap: 10,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
   },
   cardActive: {
     borderColor: colors.accent,
@@ -263,10 +264,10 @@ const styles = StyleSheet.create({
   signalChip: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: colors.surface2,
+    borderRadius: radii.sm,
+    backgroundColor: colors.steelChip,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
+    borderColor: colors.steelChipBorder,
   },
   signalChipText: {
     fontSize: 11,

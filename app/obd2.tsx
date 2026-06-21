@@ -1116,9 +1116,18 @@ function DynamicGauge({
         {descriptor.name}
       </Text>
       <View style={styles.gaugeValueRow}>
-        <Text style={styles.gaugeValue}>{formatted.text}</Text>
+        <Text
+          style={styles.gaugeValue}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.5}
+        >
+          {formatted.text}
+        </Text>
         {formatted.unit ? (
-          <Text style={styles.gaugeUnit}>{formatted.unit}</Text>
+          <Text style={styles.gaugeUnit} numberOfLines={1}>
+            {formatted.unit}
+          </Text>
         ) : null}
       </View>
     </View>
@@ -2020,6 +2029,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "baseline",
     gap: 4,
+    width: "100%",
   },
   gaugeValue: {
     color: colors.heading,
@@ -2027,11 +2037,13 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.4,
     fontFamily: fonts.mono,
+    flexShrink: 1, // shrink-to-fit so value + unit never clip the tile
   },
   gaugeUnit: {
     color: colors.muted,
     fontSize: 12,
     fontWeight: "500",
+    flexShrink: 0,
   },
   // Modal device picker
   modalSafe: {

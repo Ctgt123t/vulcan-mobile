@@ -8,7 +8,7 @@ import {
   View,
 } from "react-native";
 import { COULDNT_CHECK_LABEL } from "../../lib/findingOptions";
-import { HIT_TARGET, colors } from "../../lib/theme";
+import { HIT_TARGET, colors, radii } from "../../lib/theme";
 
 // Stage 3 (Step 1) guided result-capture card — PRESENTATIONAL ONLY. Renders
 // the brain-authored inspection outcomes as big, glove-friendly tap buttons,
@@ -152,10 +152,10 @@ export default function FindingCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 12,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.accent,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     padding: 14,
     gap: 12,
   },
@@ -181,7 +181,7 @@ const styles = StyleSheet.create({
   outcomeBtn: {
     minHeight: HIT_TARGET,
     justifyContent: "center",
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.accent,
     backgroundColor: colors.accentFade,
@@ -207,10 +207,10 @@ const styles = StyleSheet.create({
     minHeight: HIT_TARGET - 12,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface2,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
   },
   escapeText: {
     fontSize: 12,
@@ -223,10 +223,10 @@ const styles = StyleSheet.create({
   },
   freeTextInput: {
     minHeight: HIT_TARGET,
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surface,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     minHeight: HIT_TARGET - 8,
     justifyContent: "center",
-    borderRadius: 10,
+    borderRadius: radii.sm,
     backgroundColor: colors.accent,
     paddingHorizontal: 24,
   },
@@ -245,7 +245,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.borderStrong,
   },
   sendBtnText: {
-    color: colors.userText,
+    color: colors.bg,
     fontSize: 14,
     fontWeight: "700",
   },

@@ -9,7 +9,7 @@ import {
   type RequestedDataItem,
   type Stance,
 } from "../../lib/assessmentTypes";
-import { colors, fonts } from "../../lib/theme";
+import { colors, fonts, radii } from "../../lib/theme";
 
 // ============================================================================
 // Shared presentational primitives for the diagnostic card restructure.
@@ -416,10 +416,10 @@ export function NextStepBlock({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 12,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 14,
     gap: 10,
   },
@@ -530,7 +530,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 2,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.glassRim,
     gap: 0,
   },
   hypothesisHeader: {
@@ -598,10 +598,10 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingLeft: 2,
   },
-  // Next-step card
+  // Next-step card — glass with a steel accent rim for emphasis.
   nextStepCard: {
     borderColor: colors.accent,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
   },
   nextStepHeader: {
     flexDirection: "row",
@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.glassRim,
     gap: 6,
   },
   requestedDataLabel: {

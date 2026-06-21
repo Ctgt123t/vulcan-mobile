@@ -3420,10 +3420,10 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   captureNoteBox: {
-    borderRadius: 10,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     padding: 12,
   },
   captureNoteText: {
