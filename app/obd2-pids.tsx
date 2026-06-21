@@ -274,7 +274,7 @@ export default function PidSelectionScreen() {
   if (!vehicleReady) {
     return (
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <View style={styles.emptyWrap}>
           <Ionicons name="car-outline" size={32} color={colors.muted} />
           <Text style={styles.emptyTitle}>No vehicle connected</Text>
@@ -290,7 +290,7 @@ export default function PidSelectionScreen() {
   if (loading && !catalog) {
     return (
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <View style={styles.emptyWrap}>
           <ActivityIndicator size="small" color={colors.accent} />
           <Text style={styles.emptyTitle}>Loading PIDs…</Text>
@@ -304,7 +304,7 @@ export default function PidSelectionScreen() {
     const list = signalsByCategory[drillCategory] ?? [];
     return (
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <View style={styles.subhead}>
           <TouchableOpacity
             style={styles.backBtn}

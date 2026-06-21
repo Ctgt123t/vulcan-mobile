@@ -45,7 +45,8 @@ import {
   saveSelectedKeys,
 } from "../lib/pidCatalog";
 import type { SavedAdapter } from "../lib/savedAdapter";
-import { HIT_TARGET, colors, fonts } from "../lib/theme";
+import Background from "../components/ui/Background";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import type { DtcDefinition } from "../lib/types";
 import {
@@ -603,8 +604,9 @@ export default function Obd2Screen() {
   const visibleOther = devices.filter((d) => !d.likelyObd);
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showBack />
+      <Navbar transparent showBack />
 
       {vehicleLabel ? (
         <View style={styles.vehicleBanner}>
@@ -1010,6 +1012,7 @@ export default function Obd2Screen() {
         }}
       />
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -1540,7 +1543,7 @@ function signalLabel(rssi: number | null): string {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent",
   },
   vehicleBanner: {
     flexDirection: "row",
@@ -1608,10 +1611,10 @@ const styles = StyleSheet.create({
     paddingLeft: 2,
   },
   sectionCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 14,
     gap: 12,
   },
@@ -1634,7 +1637,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   primaryBtnText: {
-    color: "#FFFFFF",
+    color: colors.bg,
     fontSize: 15,
     fontWeight: "600",
     letterSpacing: 0.3,
@@ -1664,10 +1667,10 @@ const styles = StyleSheet.create({
     minHeight: HIT_TARGET - 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 6,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface2,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1746,7 +1749,7 @@ const styles = StyleSheet.create({
   dtcCard: {
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 8,
+    borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
     gap: 6,
   },
@@ -1852,10 +1855,10 @@ const styles = StyleSheet.create({
   // Freeze frame
   freezeBox: {
     padding: 12,
-    backgroundColor: colors.surface2,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     gap: 8,
   },
   freezeLabel: {
