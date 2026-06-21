@@ -38,7 +38,8 @@ import {
   saveRecord,
 } from "../lib/records";
 import { fetchTsbs } from "../lib/tsbs";
-import { HIT_TARGET, colors, fonts } from "../lib/theme";
+import Background from "../components/ui/Background";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import type {
   InspectionItems,
   ItemStatus,
@@ -342,8 +343,9 @@ export default function Screen() {
   // ---------- Intake phase ----------
   if (phase === "intake") {
     return (
+      <Background>
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -501,14 +503,16 @@ export default function Screen() {
           onScanned={handleVinScanned}
         />
       </SafeAreaView>
+      </Background>
     );
   }
 
   // ---------- Done phase ----------
   if (phase === "done") {
     return (
+      <Background>
       <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <View style={styles.doneWrap}>
           <View style={styles.doneIconWrap}>
             <Ionicons name="checkmark" size={48} color="#FFFFFF" />
@@ -542,6 +546,7 @@ export default function Screen() {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+      </Background>
     );
   }
 
@@ -550,8 +555,9 @@ export default function Screen() {
     total > 0 ? Math.round((counts.completed / total) * 100) : 0;
 
   return (
+    <Background>
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
-      <Navbar showBack />
+      <Navbar transparent showBack />
       <VehicleBar vehicle={vehicle} onReset={resetSession} />
 
       <View style={styles.progressBlock}>
@@ -628,6 +634,7 @@ export default function Screen() {
         </SafeAreaView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -699,7 +706,7 @@ function CountChip({
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "transparent",
   },
   flex: {
     flex: 1,
@@ -725,10 +732,10 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 16,
   },
   row3: {
@@ -947,18 +954,18 @@ const styles = StyleSheet.create({
     paddingLeft: 2,
   },
   sectionCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 10,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     paddingHorizontal: 14,
   },
 
   // footer
   footerBar: {
-    backgroundColor: colors.surface,
+    backgroundColor: "transparent",
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.glassRim,
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 8,

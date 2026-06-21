@@ -2292,11 +2292,12 @@ export default function Screen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+    <Background>
+    <SafeAreaView style={styles.safeTransparent} edges={["top", "left", "right"]}>
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
       >
-        <Navbar showBack />
+        <Navbar transparent showBack />
         <VehicleBar vehicle={vehicle} onReset={resetSession} />
       </View>
 
@@ -2539,6 +2540,7 @@ export default function Screen() {
         </SafeAreaView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </Background>
   );
 }
 
@@ -3454,8 +3456,8 @@ const styles = StyleSheet.create({
   },
   bubbleAssistant: {
     width: "100%",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
+    backgroundColor: colors.glassFill,
+    borderColor: colors.glassRim,
     borderBottomLeftRadius: 4,
   },
   bubbleText: {
@@ -3477,9 +3479,9 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   footerBar: {
-    backgroundColor: colors.surface,
+    backgroundColor: "transparent",
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.glassRim,
   },
   confirmedBox: {
     paddingHorizontal: 16,
@@ -3508,7 +3510,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   newDiagBtnText: {
-    color: "#fff",
+    color: colors.bg,
     fontWeight: "600",
     fontSize: 15,
     letterSpacing: 0.3,
@@ -3542,8 +3544,10 @@ const styles = StyleSheet.create({
     minWidth: HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 8,
-    backgroundColor: colors.surface2,
+    borderRadius: radii.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassRim,
+    backgroundColor: colors.glassFill,
   },
   // Staged-photo chip above the input
   stagedChip: {
@@ -3578,23 +3582,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontFamily: fonts.sans,
     color: colors.text,
-    backgroundColor: colors.surface2,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
   },
   sendBtn: {
     minHeight: HIT_TARGET,
     minWidth: HIT_TARGET + 24,
     backgroundColor: colors.accent,
-    borderRadius: 8,
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
   },
   sendBtnText: {
-    color: "#fff",
+    color: colors.bg,
     fontWeight: "600",
     fontSize: 14,
     letterSpacing: 0.3,
