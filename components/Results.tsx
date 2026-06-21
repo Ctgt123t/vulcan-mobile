@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 import type { FinalDiagnosis } from "../lib/types";
-import { colors } from "../lib/theme";
+import { colors, fonts, radii } from "../lib/theme";
 
 const URGENCY_STYLES: Record<
   FinalDiagnosis["urgency"],
@@ -65,19 +65,20 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.glassFill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.glassRim,
+    borderRadius: radii.sm,
     padding: 16,
   },
+  // Keep the semantic danger tint; crisp corners inherited from `card`.
   safetyCard: {
     backgroundColor: colors.dangerBg,
     borderColor: colors.dangerBorder,
   },
   sectionTitle: {
     fontSize: 11,
-    fontWeight: "700",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 1.5,
     color: colors.accent,
     marginBottom: 10,
@@ -88,12 +89,13 @@ const styles = StyleSheet.create({
   h2: {
     fontSize: 18,
     color: colors.heading,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     marginBottom: 8,
   },
   summary: {
     fontSize: 14,
     color: colors.text,
+    fontFamily: fonts.sans,
     marginBottom: 16,
     lineHeight: 21,
   },
@@ -110,7 +112,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontSize: 11,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.5,
     textTransform: "uppercase",
   },

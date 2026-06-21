@@ -1,5 +1,5 @@
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { HIT_TARGET, colors } from "../lib/theme";
+import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 
 type Props = {
   onConfirm: () => void;
@@ -47,21 +47,21 @@ const styles = StyleSheet.create({
   btn: {
     flex: 1,
     minHeight: HIT_TARGET,
-    borderRadius: 10,
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
   },
   confirm: {
-    backgroundColor: colors.successFill,
+    backgroundColor: colors.successFill, // semantic green (confirmed fix)
   },
   reject: {
-    backgroundColor: colors.dangerFill,
+    backgroundColor: colors.dangerFill, // semantic red (rejected)
   },
   solidText: {
     color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "600",
+    fontFamily: fonts.sansSemibold,
     letterSpacing: 0.3,
   },
   disabled: {
