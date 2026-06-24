@@ -37,6 +37,12 @@
 // (the ±margin + fail-safe floor still apply in the caller). Under-selection is
 // the failure mode being killed; mild over-selection only costs a little extra
 // trimming, never a dropped spec.
+//
+// BATCH C extension: added fuse + bulb section signals (fuse box/panel, bulb
+// chart, replacing bulbs, amperage, …) so the scanner also selects the
+// fuse-assignment and bulb-replacement chapters the new component_fact captures
+// live in. Adding signals only RAISES scores, so the selected set grows
+// monotonically — prior coverage cannot regress (re-validated with trimPreflight).
 // ----------------------------------------------------------------------------
 
 // Tunables — named, not buried magic numbers. Kept conservative (over-include).
@@ -62,6 +68,14 @@ export const SPEC_SIGNALS = [
   ["coolant", 1], ["antifreeze", 1], ["lubricant", 1], ["fluid", 1],
   ["refrigerant", 1], ["torque", 1], ["idle speed", 1], [" axle", 1],
   ["dot 3", 1], ["dot 4", 1],
+  // Batch C — fuse + bulb sections (manufacturer-agnostic; previously NOT
+  // selected — fuse/bulb chapters were deferred scope). A real fuse-assignment
+  // or bulb-replacement page is dense with these; an incidental mention isn't,
+  // and the ±margin rescues a thin neighbor of a hot page.
+  ["fuse box", 3], ["fuse panel", 3], ["bulb chart", 3],
+  ["replacing light bulbs", 3], ["replacing bulbs", 3], ["bulb replacement", 3],
+  ["fuse", 2], ["amperage", 2], ["amp rating", 2], ["bulb", 2],
+  ["headlight bulb", 2], ["relay", 1],
   // GM/brand BONUSES — no longer load-bearing (help on a GM manual only)
   ["dexos", 1], ["dex-cool", 1], ["dexron", 1],
   ["gawr", 1], ["gvwr", 1], ["r-134a", 1],

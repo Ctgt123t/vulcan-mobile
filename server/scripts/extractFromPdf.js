@@ -116,8 +116,9 @@ const SOURCE_META = {
   url: argVal("url", "server/extraction_test/2011-sierra-owner-manual.pdf"),
 };
 
-// Controlled vocab — must match the spec_type CHECK constraint, now widened by
-// 0002_widen_specs_and_audit_columns.sql. Keep these in lock-step with the SQL.
+// Controlled vocab — must match the spec_type CHECK constraint, widened by
+// 0002_widen_specs_and_audit_columns.sql + 0003_batch_c_spec_types.sql. Keep
+// these in lock-step with the SQL.
 const SPEC_TYPES = [
   "oil_capacity", "oil_viscosity", "oil_type",
   "coolant_capacity", "coolant_type",
@@ -131,6 +132,9 @@ const SPEC_TYPES = [
   "axle_fluid_type", "axle_fluid_capacity",
   "transfer_case_fluid_type", "transfer_case_fluid_capacity",
   "gvwr", "gawr", "idle_speed",
+  // Batch C additions (0003) — richer manual data that previously fell into `other`.
+  "towing_capacity", "fuel_octane", "compression_ratio",
+  "displacement", "def_type", "def_capacity",
   "other",
 ];
 
@@ -148,13 +152,18 @@ Engine association:
 - Leave engine empty only for values that apply to the whole vehicle.
 
 Spec typing:
-- Use the spec_type that best matches. Prefer a specific type over "other" whenever one fits — the vocabulary now includes fuel_capacity, axle_fluid_type, axle_fluid_capacity, transfer_case_fluid_type, transfer_case_fluid_capacity, gvwr, gawr, and idle_speed (fast-idle / curb-idle RPM), in addition to the oil/coolant/transmission/brake/torque/tire/spark-plug/battery/maintenance/refrigerant types.
+- Use the spec_type that best matches. Prefer a specific type over "other" whenever one fits — the vocabulary includes fuel_capacity, axle_fluid_type, axle_fluid_capacity, transfer_case_fluid_type, transfer_case_fluid_capacity, gvwr, gawr, idle_speed (fast-idle / curb-idle RPM), towing_capacity (max trailer / towing weight rating), fuel_octane (required fuel grade / octane), compression_ratio, displacement (engine displacement), def_type and def_capacity (diesel exhaust fluid / AdBlue), in addition to the oil/coolant/transmission/brake/torque/tire/spark-plug/battery/maintenance/refrigerant types.
 - Only use "other" when NOTHING fits. When you do, value_text is REQUIRED and must be a short descriptive label of WHAT the value is (e.g. "front GAWR", "fast-idle RPM", "wheel-nut starting torque") — never leave it empty. A bare "340 kg" with no subject is useless and will be rejected.
-- Numeric specs: provide value_numeric + value_unit. Textual specs (fluid types, viscosities/grades): provide value_text.
-- Weights (gvwr, gawr): report value_numeric in whichever unit the document prints (kg or lb) and set value_unit to match — do NOT convert it yourself; the pipeline canonicalizes weights downstream.
-- qualifier captures conditions like "with filter", "severe service", "cold", or "front"/"rear" for per-axle ratings.
+- Numeric specs (capacities, weights, towing, displacement, def_capacity): provide value_numeric + value_unit. Textual specs (fluid types, viscosities/grades, fuel_octane, compression_ratio like "10.5:1", def_type): provide value_text.
+- Weights (gvwr, gawr): report value_numeric in whichever unit the document prints (kg or lb) and set value_unit to match — do NOT convert it yourself; the pipeline canonicalizes weights downstream. towing_capacity: same — report the printed unit (lb or kg), do not convert.
+- qualifier captures conditions like "with filter", "severe service", "cold", or "front"/"rear" for per-axle ratings, or the engine/configuration a towing rating applies to.
 
-Also populate other_data_types_present with the CATEGORIES of other extractable data you observed in this manual but did NOT extract (e.g. fuse assignments, bulb part numbers, warning-light meanings) — names only, for planning. Do not extract those.`;
+Component facts — fuses and bulbs (put these in component_facts, NOT specs):
+- FUSE assignment tables (a fuse number/identifier mapped to its amperage and/or the circuit it protects): emit one component_fact per fact, with component set to the fuse identifier as printed (e.g. "fuse F12" / "fuse #27"), fact_type "amperage" or "circuit", and value_text the printed value (e.g. "15 A", "Headlamps"). Only the TEXT/TABLE form — do NOT try to read a fuse-box layout DIAGRAM.
+- BULB tables (a lamp location mapped to its bulb type / number / wattage): emit one component_fact per location, component the location as printed (e.g. "low beam headlight", "rear turn signal"), fact_type "bulb_type", value_text the printed bulb spec (e.g. "H11", "9005", "55 W"). If the manual only says "LED — see dealer" with no bulb number, OMIT it (nothing to quote).
+- The verbatim_quote + page rule applies to fuses and bulbs exactly as to specs: no quotable text in the document → do not emit it.
+
+Also populate other_data_types_present with the CATEGORIES of other extractable data you observed in this manual but did NOT extract (e.g. warning-light meanings, fuse-box layout diagrams) — names only, for planning. Do not extract those.`;
 
 const TOOL = {
   name: "emit_extracted_specs",
@@ -228,6 +237,10 @@ const GAP_UNITS = ["in", "inch", "inches", "\"", "mm"];
 const INTERVAL_UNITS = ["mi", "mile", "miles", "km", "kilometer", "kilometers", "mo", "month", "months", "yr", "year", "years"];
 const WEIGHT_UNITS = ["kg", "kgs", "kilogram", "kilograms", "lb", "lbs", "pound", "pounds"];
 const RPM_UNITS = ["rpm", "r/min", "min-1"];
+// Engine displacement (Batch C). After normUnitForMatch, "cu. in." -> "cu-in",
+// "cm³"/"cm3" stay, "L"/liter stay. Owner manuals print displacement mostly as
+// "L" (e.g. 3.5L); cc / cu-in are included for completeness.
+const DISPLACEMENT_UNITS = ["l", "liter", "liters", "litre", "litres", "cc", "ccm", "cm3", "cm³", "cu-in", "cuin", "ci", "cid", "cubic-inch", "cubic-inches"];
 
 const NUMERIC_TYPES = new Set([
   "oil_capacity", "coolant_capacity", "transmission_fluid_capacity",
@@ -236,6 +249,8 @@ const NUMERIC_TYPES = new Set([
   // Batch A numeric additions.
   "fuel_capacity", "axle_fluid_capacity", "transfer_case_fluid_capacity",
   "gvwr", "gawr", "idle_speed",
+  // Batch C numeric additions (towing weight, engine displacement, DEF tank).
+  "towing_capacity", "displacement", "def_capacity",
 ]);
 
 // Weights are canonicalized to a single unit so one manual can't store lb while
@@ -387,6 +402,29 @@ function validateSpec(s) {
       case "idle_speed": {
         if (!RPM_UNITS.includes(u)) { ok = false; why = `unit "${u}" not an rpm unit`; break; }
         if (v < 300 || v > 3000) { ok = false; why = `idle speed ${v}${u} out of range`; }
+        break;
+      }
+      // ---- Batch C numeric types ----
+      case "towing_capacity": {
+        // A weight; NOT canonicalized (left in the printed unit, per the prompt).
+        if (!WEIGHT_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a weight unit`; break; }
+        if (/kg|kilogram/.test(u)) { if (v < 100 || v > 18000) { ok = false; why = `towing ${v}${u} out of range`; } }
+        else { if (v < 200 || v > 40000) { ok = false; why = `towing ${v}${u} out of range`; } } // lb
+        break;
+      }
+      case "displacement": {
+        if (!DISPLACEMENT_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a displacement unit`; break; }
+        if (/^(l|liter|liters|litre|litres)$/.test(u)) { if (v < 0.5 || v > 10) { ok = false; why = `displacement ${v}${u} out of range`; } }
+        else if (/cu|cid|cubic|^ci$/.test(u)) { if (v < 30 || v > 700) { ok = false; why = `displacement ${v}${u} out of range`; } } // cubic inches
+        else { if (v < 500 || v > 10000) { ok = false; why = `displacement ${v}${u} out of range`; } } // cc / cm3
+        break;
+      }
+      case "def_capacity": {
+        // Diesel exhaust fluid tank — small. gal/L (qt fallback).
+        if (!CAP_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a capacity unit`; break; }
+        if (/gal/.test(u)) { if (v < 1 || v > 30) { ok = false; why = `DEF capacity ${v}${u} out of range`; } }
+        else if (/l|liter|litre/.test(u)) { if (v < 3 || v > 120) { ok = false; why = `DEF capacity ${v}${u} out of range`; } }
+        else { if (v < 1 || v > 130) { ok = false; why = `DEF capacity ${v}${u} out of range`; } } // qt
         break;
       }
     }
@@ -1084,5 +1122,14 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 }
 
 // Exported for zero-cost node checks (no DB, no Claude). The validation gate is
-// the boundary the #16 fuel-capacity fix lives in.
-export { validateSpec, validateComponentFact, normalizeSpec, normUnitForMatch };
+// the boundary the #16 fuel-capacity fix lives in. verifyIdentity (text scan)
+// and verifyIdentityVision (#17 cover-page vision pass) are exported so the
+// identity path can be exercised by a focused harness without a full run.
+export {
+  validateSpec,
+  validateComponentFact,
+  normalizeSpec,
+  normUnitForMatch,
+  verifyIdentity,
+  verifyIdentityVision,
+};
