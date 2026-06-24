@@ -13,9 +13,13 @@ export default function RecallList({ recalls }: Props) {
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
         <Text style={styles.headerText}>
-          ACTIVE RECALLS · {recalls.length}
+          RECALLS FOR THIS MODEL-YEAR · {recalls.length}
         </Text>
       </View>
+      <Text style={styles.caption}>
+        Reported for this year/make/model — check whether this VIN is included
+        (NHTSA lists by model-year, not VIN).
+      </Text>
       {recalls.map((r, i) => (
         <RecallCard key={r.campaignNumber || `recall-${i}`} recall={r} />
       ))}
@@ -99,6 +103,13 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.8,
+  },
+  caption: {
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    paddingHorizontal: 2,
+    marginBottom: 4,
   },
   card: {
     minHeight: HIT_TARGET,

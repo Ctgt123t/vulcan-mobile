@@ -252,6 +252,30 @@ In short: gate on the condition (context_gate), then RECORD your signals (measur
 
 `;
 
+export const UNIFIED_RECALL_ADVISORY_SECTION = `=== RECALLS & TSBs — POST-DIAGNOSIS ADVISORY, NOT EVIDENCE ===
+
+A recall/TSB list may be injected into your context. It is fetched by YEAR/MAKE/MODEL, not by VIN — so it tells you the MODEL-YEAR had a campaign, never that THIS vehicle (VIN) was included or still affected. Treat it accordingly:
+
+- A recall is NEVER diagnostic evidence. Do NOT let recalls appear in your hypotheses, your decisive_reasons, your stance, or your next step, and never make a recall a leading hypothesis or a reason for one. Diagnose from the actual complaint, symptoms, codes, and live/captured data — reason as if the recall list weren't there.
+- A recall that matches neither the complaint nor the data is irrelevant to the diagnosis. Do not reach for it.
+- Surface a recall ONLY at your final conclusion, and ONLY if its component or failure mode directly matches your concluded root cause — as a neutral "you may also want to check this" heads-up, never as proof of the fault.
+- Phrase it at the precision the data supports: "this MODEL-YEAR had a recall campaign — check whether this VIN is included." NEVER say a recall "applies to this exact vehicle."
+- POPULATING THE FIELDS: relevant_recall_campaigns / relevant_tsb_numbers (on emit_diagnostic_assessment) and the same fields on provide_diagnosis are filled ONLY when THIS turn is your conclusion. On every non-concluding turn leave them empty/omitted. The advisory rides the conclusion regardless of which tool you conclude with.
+- TSBs follow the same "not evidence" rule, with ONE allowance: if a TSB documents a known fix for the technician's PRESENTING COMPLAINT, you may mention it by number as a lead to verify early — never as the conclusion itself.
+
+`;
+
+export const UNIFIED_FREEZEFRAME_SECTION = `=== DEFAULT / ENGINE-OFF FREEZE-FRAME VALUES ARE NOT EVIDENCE ===
+
+A freeze frame captured with the engine OFF (or from an uninitialized/unpowered ECU) reports DEFAULT/SENTINEL values, not real operating data. Recognize the signature and do not reason from it:
+
+- Tell-tale pattern: sensors pinned at their floor/ceiling and dead-engine values together — e.g. coolant (ECT) or intake-air (IAT) ≈ -40 °C (sensor floor) or ≈ 215 °C (ceiling), RPM ≈ 0 (or a near-zero garbage value), MAF ≈ 0, vehicle speed ≈ 0, multiple sensors simultaneously at min/max. That combination means NO VALID OPERATING DATA WAS CAPTURED at that moment — almost certainly key-on-engine-off or an uninitialized ECU.
+- When you see that pattern, treat the freeze frame as an ABSENCE of evidence, not a reading. Do NOT cite those values as supporting or decisive evidence for ANY fault — in particular, do not build a harness/ground/power/electrical conclusion on "-40 °C coolant and ~0 RPM." Default values are the expected output of an engine-off capture, not a symptom.
+- At most, note that the freeze frame looks engine-off / uninitialized and is therefore uninformative, then diagnose from the live/captured data and the codes instead.
+- DO NOT over-correct: a freeze frame with plausible engine-running values (a real RPM, a warm coolant temp, a sensible load/speed) is legitimate diagnostic evidence — reason from it normally. This rule targets ONLY the default/sentinel/engine-off pattern.
+
+`;
+
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===
 
 The spec discipline depends on which tool you call:
@@ -283,7 +307,7 @@ Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_a
 // in ASSESS_BODY), so /api/assess never gets the instruction and ASSESS_BODY
 // stays byte-identical.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + UNIFIED_DECISIVE_SECTION + MONITORING_SECTION + UNIFIED_MONITORING_TARGETS_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + UNIFIED_DECISIVE_SECTION + MONITORING_SECTION + UNIFIED_MONITORING_TARGETS_SECTION + UNIFIED_RECALL_ADVISORY_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_FREEZEFRAME_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).

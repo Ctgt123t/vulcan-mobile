@@ -393,7 +393,12 @@ app.get("/api/dtc/:code", async (req, res) => {
 });
 
 function buildRecallBlock(recalls) {
-  const lines = ["Active NHTSA recalls for this vehicle (year/make/model):", ""];
+  const lines = [
+    "ADVISORY CONTEXT — NHTSA recall campaigns for this MODEL-YEAR (NOT diagnostic evidence):",
+    "",
+    "These campaigns were issued for this year/make/model. This list is fetched by year/make/model, NOT by VIN — so it tells you the MODEL-YEAR had a campaign; it does NOT tell you whether THIS specific vehicle (VIN) was included or already remedied. Treat it as a post-diagnosis advisory only.",
+    "",
+  ];
   recalls.forEach((r, i) => {
     const header = `${i + 1}. ${r.component || "(component unspecified)"}${
       r.campaignNumber ? ` — campaign ${r.campaignNumber}` : ""
@@ -405,14 +410,20 @@ function buildRecallBlock(recalls) {
     lines.push("");
   });
   lines.push(
-    "When you commit to a final diagnosis via provide_diagnosis, populate relevant_recall_campaigns with the NHTSA campaign numbers (taken verbatim from the list above) of recalls that are DIRECTLY related to your diagnosed root cause — same component or same failure mode. Be conservative: when in doubt, exclude. Return an empty array if none are directly related. Do not invent recalls beyond this list.",
+    "HOW TO USE THIS LIST:",
+    "- A recall is NOT diagnostic evidence. Do NOT let it influence your hypotheses, your decisive reasons, your stance, or your next step. Never make a recall a leading hypothesis or a reason for a hypothesis. Diagnose from the actual symptoms and data; ignore these campaigns while reasoning.",
+    "- Surface a recall ONLY at your final conclusion, and ONLY if its component or failure mode directly matches your diagnosed root cause — as a neutral heads-up, never as proof of the fault.",
+    "- Phrase it at the precision the data supports: say this MODEL-YEAR had a recall campaign and the tech should check whether this VIN is included — NEVER assert that a recall 'applies to this exact vehicle.'",
+    "- When (and only when) you commit to a conclusion, populate relevant_recall_campaigns with the NHTSA campaign numbers (verbatim from the list above) that directly match your diagnosed root cause. Be conservative: when in doubt, exclude. Empty array if none directly related. Do not invent recalls beyond this list.",
   );
   return lines.join("\n");
 }
 
 function buildTsbBlock(tsbs) {
   const lines = [
-    "NHTSA Technical Service Bulletins (TSBs) on file for this vehicle:",
+    "ADVISORY CONTEXT — NHTSA Technical Service Bulletins on file for this model-year (NOT diagnostic evidence):",
+    "",
+    "On file for this year/make/model. A TSB is documentation of a known issue/fix, not proof of what is wrong with THIS vehicle.",
     "",
   ];
   tsbs.forEach((t, i) => {
@@ -425,7 +436,10 @@ function buildTsbBlock(tsbs) {
     lines.push("");
   });
   lines.push(
-    "If any of these TSBs match the technician's presenting complaint, mention the TSB by number in your question or reasoning so the documented manufacturer fix can be checked early. When you commit to a final diagnosis, populate relevant_tsb_numbers with the item numbers (taken verbatim from the list above) of TSBs whose component or symptom matches your diagnosed root cause. Be conservative — when in doubt, exclude. Return an empty array if none are directly related. Do not invent TSBs beyond this list.",
+    "HOW TO USE THIS LIST:",
+    "- A TSB is NOT diagnostic evidence and must not become a hypothesis or a decisive reason on its own. Diagnose from the actual symptoms and data.",
+    "- EXCEPTION (allowed): if a TSB documents a known fix for the technician's PRESENTING COMPLAINT, you MAY mention it by number in your question or reasoning so the documented manufacturer fix gets checked early — as a lead to verify, never as the conclusion itself.",
+    "- When (and only when) you commit to a conclusion, populate relevant_tsb_numbers with the item numbers (verbatim from the list above) whose component or symptom matches your diagnosed root cause. Be conservative — when in doubt, exclude. Empty array if none directly related. Do not invent TSBs beyond this list.",
   );
   return lines.join("\n");
 }
@@ -1300,6 +1314,18 @@ const ASSESS_TOOL = {
           },
           required: ["point", "supports"],
         },
+      },
+      relevant_recall_campaigns: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "OPTIONAL — populate ONLY when THIS assessment IS your final conclusion (a STRONGLY_SUPPORTED leading hypothesis presented as the conclusion). NHTSA campaign numbers, verbatim from the recall advisory list in the system context, whose component or failure mode directly matches your concluded root cause — a post-diagnosis heads-up, NOT diagnostic evidence. Be conservative; empty array / omit when this is not a conclusion or none directly match. Never include a recall you used to reason toward the diagnosis.",
+      },
+      relevant_tsb_numbers: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "OPTIONAL — populate ONLY when THIS assessment IS your final conclusion. NHTSA TSB item numbers, verbatim from the TSB advisory list in the system context, whose component or symptom directly matches your concluded root cause. Be conservative; empty array / omit when this is not a conclusion or none directly match.",
       },
     },
     required: [

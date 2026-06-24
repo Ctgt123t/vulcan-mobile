@@ -250,6 +250,13 @@ export interface DiagnosticAssessment {
   data_ceiling_note: string; // empty string = no ceiling noted
   unverified_specs_needed: UnverifiedSpec[];
   decisive_reasons?: DecisiveReason[]; // optional, max 3 — unified turn only
+  // Post-diagnosis advisory (NOT evidence): populated by the unified brain ONLY
+  // when this assessment IS the conclusion, so a conclusion reached via the
+  // assessment path can still surface relevant recalls/TSBs (parity with
+  // provide_diagnosis). Empty/absent on every non-concluding turn. Rides the
+  // saved envelope wholesale like decisive_reasons (no schemaVersion bump).
+  relevant_recall_campaigns?: string[];
+  relevant_tsb_numbers?: string[];
 }
 
 // ---- Stage 2C-3: evidence-update endpoint contract ----

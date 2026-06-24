@@ -1384,16 +1384,43 @@ export default function Screen() {
     return null;
   }, [messages]);
   const isFinal = latestTurn?.kind === "diagnosis";
+  // The conclusion can arrive on EITHER path: provide_diagnosis (a "diagnosis"
+  // message turn) OR a STRONGLY_SUPPORTED emit_diagnostic_assessment (an
+  // AssessmentEntry card, never a message). Pull the advisory ids from whichever
+  // delivered the conclusion. For the assessment path we only read the LATEST
+  // done assessment AND only when it's the current thread tail (no later user/
+  // assistant turn) — the same not-yet-superseded anchor test used elsewhere — so
+  // a recall heads-up can't linger after the tech continues past the conclusion.
+  // The brain populates these fields ONLY at conclusion, so mid-diagnosis
+  // assessments carry empty arrays and never surface an advisory.
+  const concludingAdvisory = useMemo<{ recalls: string[]; tsbs: string[] }>(() => {
+    if (latestTurn?.kind === "diagnosis") {
+      return {
+        recalls: latestTurn.diagnosis.relevant_recall_campaigns ?? [],
+        tsbs: latestTurn.diagnosis.relevant_tsb_numbers ?? [],
+      };
+    }
+    const last = assessments[assessments.length - 1];
+    if (
+      last &&
+      last.slot.status === "done" &&
+      last.afterMessageIndex >= messages.length - 1
+    ) {
+      return {
+        recalls: last.slot.assessment.relevant_recall_campaigns ?? [],
+        tsbs: last.slot.assessment.relevant_tsb_numbers ?? [],
+      };
+    }
+    return { recalls: [], tsbs: [] };
+  }, [latestTurn, assessments, messages.length]);
   const relevantRecalls = useMemo(() => {
-    if (latestTurn?.kind !== "diagnosis") return [];
-    const ids = new Set(latestTurn.diagnosis.relevant_recall_campaigns ?? []);
+    const ids = new Set(concludingAdvisory.recalls);
     return recalls.filter((r) => ids.has(r.campaignNumber));
-  }, [latestTurn, recalls]);
+  }, [concludingAdvisory, recalls]);
   const relevantTsbs = useMemo(() => {
-    if (latestTurn?.kind !== "diagnosis") return [];
-    const ids = new Set(latestTurn.diagnosis.relevant_tsb_numbers ?? []);
+    const ids = new Set(concludingAdvisory.tsbs);
     return tsbs.filter((t) => ids.has(t.number));
-  }, [latestTurn, tsbs]);
+  }, [concludingAdvisory, tsbs]);
 
   // Interleave assessment cards into the message thread at their anchored
   // positions. Keys are stable (message index / assessment id) so a slot's
