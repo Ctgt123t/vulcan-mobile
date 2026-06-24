@@ -1142,7 +1142,7 @@ const ASSESS_TOOL = {
                     measured_target: {
                       type: "object",
                       description:
-                        "The single signal + threshold band that IS the actual evidence you want to capture — the 'what'.",
+                        "The PRIMARY signal to record + its range — the 'what'. ALSO list it (and any other signals to record at this same condition) in measured_targets. For a baseline measurement use an OPEN range {min:null,max:null,unit} so it records whatever the signal reads once the gate holds; reserve a bounded range for a deliberate 'wait until this signal enters this band' event capture.",
                       properties: {
                         signal_id: {
                           type: "string",
@@ -1152,7 +1152,7 @@ const ASSESS_TOOL = {
                         range: {
                           type: "object",
                           description:
-                            "Inclusive numeric band in the signal's raw OBDb unit that defines the evidence event (e.g. STFT sustained >= +10% is {min:10, max:null, unit:'%'}).",
+                            "Inclusive numeric band in the signal's raw OBDb unit. OPEN ({min:null,max:null}) = record-only (the default for a baseline measurement); bounded = a 'wait for this event' trigger (e.g. STFT sustained >= +10% is {min:10, max:null, unit:'%'}).",
                           properties: {
                             min: {
                               type: ["number", "null"],
@@ -1174,6 +1174,45 @@ const ASSESS_TOOL = {
                         },
                       },
                       required: ["signal_id", "range"],
+                    },
+                    measured_targets: {
+                      type: "array",
+                      description:
+                        "ALL signals to RECORD at this one operating condition — the multi-signal form of measured_target. List EVERY signal you want to read at this gate (do NOT split them into separate requested_data items unless the operating CONDITIONS genuinely differ). Each entry is {signal_id, range}; use an OPEN range {min:null,max:null,unit} for a record-only baseline (the usual case — record whatever it reads once the gate holds), and a bounded range only for a deliberate 'wait until this signal enters this band' event. The phone arms on context_gate (plus any bounded target) and records every signal here. Include the primary measured_target signal here too.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          signal_id: {
+                            type: "string",
+                            description:
+                              "OBDb signal id exactly as it appears in the snapshot (e.g. MAF, SHRTFT11, RPM).",
+                          },
+                          range: {
+                            type: "object",
+                            description:
+                              "Inclusive numeric band in the signal's raw OBDb unit. OPEN {min:null,max:null} = record-only (default for a baseline); bounded = a 'wait for this event' trigger.",
+                            properties: {
+                              min: {
+                                type: ["number", "null"],
+                                description:
+                                  "Inclusive lower bound in the signal's snapshot unit; null = unbounded below.",
+                              },
+                              max: {
+                                type: ["number", "null"],
+                                description:
+                                  "Inclusive upper bound in the signal's snapshot unit; null = unbounded above.",
+                              },
+                              unit: {
+                                type: "string",
+                                description:
+                                  "The raw OBDb unit the bounds are in. Must match the snapshot's unit for this signal.",
+                              },
+                            },
+                            required: ["min", "max", "unit"],
+                          },
+                        },
+                        required: ["signal_id", "range"],
+                      },
                     },
                     sustained_seconds: {
                       type: "number",
@@ -1309,7 +1348,14 @@ function validateCapturePlan(plan) {
   if (plan == null || typeof plan !== "object") return null;
   if (!Array.isArray(plan.context_gate)) return null;
   if (!plan.context_gate.every(isValidSignalCondition)) return null;
+  // measured_target stays required (legacy single + byte-frozen prompt). The
+  // additive multi-signal form is optional: when present it must be a non-empty
+  // array of valid conditions (the phone prefers it over measured_target).
   if (!isValidSignalCondition(plan.measured_target)) return null;
+  if (plan.measured_targets !== undefined) {
+    if (!Array.isArray(plan.measured_targets) || plan.measured_targets.length === 0) return null;
+    if (!plan.measured_targets.every(isValidSignalCondition)) return null;
+  }
   if (typeof plan.sustained_seconds !== "number") return null;
   if (typeof plan.capture_window_seconds !== "number") return null;
   return plan;

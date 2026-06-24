@@ -238,6 +238,20 @@ You can ask the app to RE-READ the vehicle's trouble codes mid-session when a fr
 
 `;
 
+export const UNIFIED_MONITORING_TARGETS_SECTION = `=== RECORDING SIGNALS — MEASURE BY DEFAULT, GATE ONLY WHEN YOU MEAN TO ===
+
+This REFINES the MONITORING PLAN section above for this unified flow. Read it carefully — getting the target ranges wrong makes a capture that can NEVER start.
+
+The context_gate is the WHEN (the situation that must hold to arm). The measured signals are the WHAT — the data you record once the gate holds. These are different jobs and a measured signal must NOT accidentally become a gate.
+
+- A measured signal is RECORD-ONLY by default. When you just want to read what a signal IS under the gated condition (e.g. "measure MAF and short-term fuel trim at warm idle"), give it an OPEN range: {min:null, max:null, unit:"…"}. An open range records whatever the signal reads the instant the gate holds — it never blocks the capture from starting.
+- Do NOT put a bounded band on a measured signal unless you specifically intend to WAIT until that signal enters the band before capturing (a deliberate event trigger, e.g. "wait until SHRTFT11 >= +10%, then grab the window"). A bounded measured range is an additional arming condition. If you put a fault-state band (e.g. MAF 0-1 g/s, or SHRTFT1 >= 20%) on a signal you only meant to MEASURE at a healthy idle, the condition can never be met and the capture sits waiting forever. That is a bug — use an open range.
+- Record MULTIPLE signals in ONE request. Put every signal you want to read at the same operating condition into measured_targets (a list of {signal_id, range}), each with an open range unless it is a deliberate event trigger. Do NOT split one operating condition into several requested_data items just to record several signals — that is one capture with several measured_targets. Use separate items only when the operating CONDITIONS themselves differ (e.g. idle vs. 2500 rpm). Include your primary measured_target signal in measured_targets too.
+
+In short: gate on the condition (context_gate), then RECORD your signals (measured_targets, open ranges). Reserve a bounded target range for the rare "wait for this event" capture, and say so to yourself before you write it.
+
+`;
+
 export const UNIFIED_SPEC_SCOPING = `=== FACTORY SPECS — WHICH RULE APPLIES THIS TURN ===
 
 The spec discipline depends on which tool you call:
@@ -269,7 +283,7 @@ Respond by calling EXACTLY ONE tool — ask_followup_question, emit_diagnostic_a
 // in ASSESS_BODY), so /api/assess never gets the instruction and ASSESS_BODY
 // stays byte-identical.
 export const UNIFIED_BODY =
-  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + UNIFIED_DECISIVE_SECTION + MONITORING_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
+  UNIFIED_HEAD + UNIFIED_INSPECTION_SECTION + UNIFIED_PHOTO_SECTION + UNIFIED_CODEPULL_SECTION + REASONING_SECTION + UNIFIED_DECISIVE_SECTION + MONITORING_SECTION + UNIFIED_MONITORING_TARGETS_SECTION + UNIFIED_SPEC_SCOPING + SAFETY_SECTION + FREEZE_SECTION + UNIFIED_OUTPUT;
 
 // Compose a full system prompt: APP_CONTEXT + blank line + body. Matches the
 // original literal exactly (`${APP_CONTEXT}\n\n` + body).

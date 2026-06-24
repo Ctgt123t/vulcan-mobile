@@ -618,6 +618,121 @@ section("Fix 2 — readout refreshes as the value warms toward target");
 }
 
 // ===========================================================================
+// MULTI-SIGNAL RECORD + ARM-ON-GATE (the warm-idle fix)
+// ===========================================================================
+
+section("multi-signal — open targets record-only, gate-only label (warm-idle fix)");
+{
+  // The exact warm-idle bug: the gate IS satisfiable (warm idle), and the
+  // signals to record (MAF, SHRTFT1) carry OPEN ranges. A fault-band on the
+  // target would never be met at a healthy idle; an open range must arm on the
+  // GATE alone and record whatever the signals read.
+  const MAF = mk("MAF", "01", "10", { unit: "g/s" });
+  const MAFKEY = "01 10@MAF";
+  const ECTKEY = "01 05@ECT";
+  const SFTKEY = "01 06@SHRTFT1";
+  const plan = {
+    context_gate: [
+      { signal_id: "RPM", range: { min: 600, max: 900, unit: "rpm" } },
+      { signal_id: "ECT", range: { min: 70, max: null, unit: "degC" } },
+    ],
+    measured_target: { signal_id: "MAF", range: { min: null, max: null, unit: "g/s" } },
+    measured_targets: [
+      { signal_id: "MAF", range: { min: null, max: null, unit: "g/s" } },
+      { signal_id: "SHRTFT1", range: { min: null, max: null, unit: "%" } },
+    ],
+    sustained_seconds: 2,
+    capture_window_seconds: 1,
+  };
+  const runnable = resolvePlan([item(plan)], ctx({ catalog: [RPM, ECT, SHRTFT1, MAF] })).filter(
+    (r): r is Extract<typeof r, { runnable: true }> => r.runnable,
+  );
+  eq(runnable.length, 1, "multi-target plan resolves runnable");
+  if (runnable[0].runnable) eq(runnable[0].targets.length, 2, "two recorded targets");
+
+  const det = new CaptureDetector(runnable);
+  // Warm idle: RPM 720, ECT 85degC, MAF ~5 g/s (NOT 0-1), SHRTFT1 ~0% (NOT >=20).
+  const ev = run(det, 0, 4000, () => ({ [RPMKEY]: 720, [ECTKEY]: 85, [MAFKEY]: 5, [SFTKEY]: 0 }));
+  const f = fires(ev);
+  eq(f.length, 1, "open-range targets DO NOT block the start — capture fires on the gate");
+
+  const card = ev
+    .map((e) => e.ev)
+    .find((e): e is Extract<DetectorEvent, { type: "card" }> => e.type === "card");
+  ok(!!card, "a card is emitted");
+  if (card) {
+    ok(
+      !card.conditionLabel.includes("MAF") && !card.conditionLabel.includes("SHRTFT1"),
+      `arming label is gate-only (got "${card.conditionLabel}")`,
+    );
+    ok(
+      card.conditionLabel.includes("RPM") && card.conditionLabel.includes("ECT"),
+      "arming label shows the gates",
+    );
+    ok(
+      card.recordedSignalIds.includes("MAF") && card.recordedSignalIds.includes("SHRTFT1"),
+      "recorded signals listed separately from the gate",
+    );
+    eq(card.conditions.length, 2, "readout shows only the 2 arming gates (open targets excluded)");
+  }
+  if (f[0])
+    ok(
+      f[0].window.signalKeys.includes(MAFKEY) && f[0].window.signalKeys.includes(SFTKEY),
+      "captured window records both measured signals",
+    );
+}
+
+section("multi-signal — open target absent still arms (presence not required)");
+{
+  const MAF = mk("MAF", "01", "10", { unit: "g/s" });
+  const plan = {
+    context_gate: [{ signal_id: "RPM", range: { min: 600, max: 900, unit: "rpm" } }],
+    measured_target: { signal_id: "MAF", range: { min: null, max: null, unit: "g/s" } },
+    sustained_seconds: 2,
+    capture_window_seconds: 1,
+  };
+  const runnable = resolvePlan([item(plan)], ctx({ catalog: [RPM, MAF] })).filter(
+    (r): r is Extract<typeof r, { runnable: true }> => r.runnable,
+  );
+  const det = new CaptureDetector(runnable);
+  // RPM in band; MAF NEVER reported (absent). An open record-only target must
+  // not require presence to arm — the capture still fires on the gate.
+  const ev = run(det, 0, 4000, () => ({ [RPMKEY]: 720 }));
+  eq(fires(ev).length, 1, "open record-only target absent → still arms+fires on the gate");
+}
+
+section("multi-signal — a BOUNDED measured target still gates (wait-for-event preserved)");
+{
+  const plan = {
+    context_gate: [{ signal_id: "RPM", range: { min: 600, max: 900, unit: "rpm" } }],
+    measured_target: { signal_id: "SHRTFT1", range: { min: 10, max: null, unit: "%" } },
+    measured_targets: [{ signal_id: "SHRTFT1", range: { min: 10, max: null, unit: "%" } }],
+    sustained_seconds: 2,
+    capture_window_seconds: 1,
+  };
+  const runnable = resolvePlan([item(plan)], ctx({ catalog: [RPM, SHRTFT1] })).filter(
+    (r): r is Extract<typeof r, { runnable: true }> => r.runnable,
+  );
+  // SHRTFT1 stays at 2 (< 10) with the gate satisfied → a bounded target must
+  // still block the capture (it is a deliberate wait condition).
+  const det = new CaptureDetector(runnable);
+  eq(fires(run(det, 0, 4000, () => ({ [RPMKEY]: 720, [FTKEY]: 2 }))).length, 0,
+    "bounded target out of band blocks the capture");
+  // Enters the band → arms + fires, and shows in the arming label.
+  const det2 = new CaptureDetector(runnable);
+  const above = run(det2, 0, 4000, () => ({ [RPMKEY]: 720, [FTKEY]: 16 }));
+  eq(fires(above).length, 1, "bounded target in band → capture fires");
+  const card = above
+    .map((e) => e.ev)
+    .find((e): e is Extract<DetectorEvent, { type: "card" }> => e.type === "card");
+  if (card)
+    ok(
+      card.conditionLabel.includes("SHRTFT1"),
+      "a bounded target IS shown in the arming label (it's a wait condition)",
+    );
+}
+
+// ===========================================================================
 // SUMMARY
 // ===========================================================================
 

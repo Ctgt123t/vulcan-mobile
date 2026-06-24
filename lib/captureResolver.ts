@@ -78,7 +78,8 @@ export type ResolvedPlanItem =
       itemIndex: number;
       sustainedSeconds: number;
       captureWindowSeconds: number;
-      target: ResolvedSignal; // availability.status === "resolved"
+      targets: ResolvedSignal[]; // resolved measured targets to RECORD (>= 1)
+      degradedTargets: ResolvedSignal[]; // measured targets that couldn't bind (recorded as gaps)
       gate: ResolvedSignal[]; // resolved gate signals only
       degraded: ResolvedSignal[]; // gate signals that couldn't be resolved (runs without them)
     }
@@ -86,8 +87,8 @@ export type ResolvedPlanItem =
       runnable: false;
       itemIndex: number;
       reason: "target_unavailable";
-      targetSignalId: string;
-      detail: SignalAvailability; // why the target couldn't bind
+      targetSignalId: string; // the first requested target id (representative)
+      detail: SignalAvailability; // why no target could bind
     };
 
 // ---- ID normalization + alias table (the flagged extension) ---------------
@@ -230,16 +231,32 @@ export function resolvePlanItem(
   const plan: CapturePlan | undefined = item.capture_plan;
   if (!plan) return null;
 
-  const target = resolveCondition(plan.measured_target, ctx);
-  if (target.availability.status !== "resolved") {
-    // No measured target → the item cannot run at all (distinct from a
-    // degraded-but-runnable item missing only a gate signal).
+  // Multi-signal form is the source of truth when present; otherwise fall back
+  // to the legacy single measured_target. Back-compatible with both shapes.
+  const requestedTargets: SignalCondition[] =
+    plan.measured_targets && plan.measured_targets.length > 0
+      ? plan.measured_targets
+      : [plan.measured_target];
+
+  const resolvedTargets: ResolvedSignal[] = [];
+  const degradedTargets: ResolvedSignal[] = [];
+  for (const t of requestedTargets) {
+    const r = resolveCondition(t, ctx);
+    if (r.availability.status === "resolved") resolvedTargets.push(r);
+    else degradedTargets.push(r);
+  }
+
+  if (resolvedTargets.length === 0) {
+    // NOT ONE measured target could bind → the item cannot run at all (distinct
+    // from a degraded-but-runnable item missing only a gate signal or one of
+    // several targets).
+    const first = requestedTargets[0];
     return {
       runnable: false,
       itemIndex,
       reason: "target_unavailable",
-      targetSignalId: plan.measured_target.signal_id,
-      detail: target.availability,
+      targetSignalId: first ? first.signal_id : "?",
+      detail: degradedTargets[0]?.availability ?? { status: "unavailable", reason: "no_match" },
     };
   }
 
@@ -256,7 +273,8 @@ export function resolvePlanItem(
     itemIndex,
     sustainedSeconds: plan.sustained_seconds,
     captureWindowSeconds: plan.capture_window_seconds,
-    target,
+    targets: resolvedTargets,
+    degradedTargets,
     gate: gateResolved,
     degraded,
   };
@@ -295,6 +313,9 @@ export function collectUnavailable(
       continue;
     }
     for (const d of it.degraded) {
+      if (d.availability.status === "unavailable") add(d.requestedId, d.availability.reason);
+    }
+    for (const d of it.degradedTargets) {
       if (d.availability.status === "unavailable") add(d.requestedId, d.availability.reason);
     }
   }

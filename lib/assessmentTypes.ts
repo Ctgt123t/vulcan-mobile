@@ -139,9 +139,24 @@ export interface CapturePlan {
   // The "when": every condition must hold SIMULTANEOUSLY (logical AND).
   // [] means "no gate — capture whenever the target is observed".
   context_gate: SignalCondition[];
-  // The "what": the single signal + threshold band that IS the evidence.
+  // The "what" (legacy single-target form): one signal + band. Still REQUIRED in
+  // the server tool schema and still emitted by the brain, so the byte-frozen
+  // MONITORING_SECTION that names it stays honest and old/new clients interoperate
+  // (see CLAUDE.md → multi-signal capture). When `measured_targets` is present and
+  // non-empty, IT is the source of truth and this field is the primary (= [0]).
   measured_target: SignalCondition;
-  // Cost safeguard: gate AND target must hold continuously this long to count.
+  // The "what" (multi-signal form, additive): the full list of signals to RECORD
+  // at this one operating condition. The detector arms on `context_gate` (plus any
+  // measured target carrying a BOUNDED range — the deliberate "wait for this
+  // event" capture) and then records every target in the window.
+  //   - DEFAULT for a baseline measurement: emit an OPEN range {min:null,max:null}
+  //     — record-only, never gates the start (record whatever the signal reads).
+  //   - BOUNDED range: reserved for a "wait until the signal enters this band"
+  //     event capture; it becomes an additional arming condition.
+  // The phone reads `measured_targets ?? [measured_target]`, so this is fully
+  // back-compatible with plans that only carry the legacy single target.
+  measured_targets?: SignalCondition[];
+  // Cost safeguard: the arming conditions must hold continuously this long.
   sustained_seconds: number;
   // How many seconds of data to package once the plan fires.
   capture_window_seconds: number;

@@ -34,6 +34,7 @@ export interface CaptureCardUpdate {
   state: CaptureCardState;
   conditionLabel: string;
   signalIds: string[];
+  recordedSignalIds: string[]; // the measured signals this capture records ("Recording: …")
   conditions: ConditionReadout[]; // Fix 2: per-condition live readout for WAITING
   durationSeconds?: number;
   progress?: number;
@@ -118,6 +119,7 @@ export class CaptureExecutor {
             state: ev.state,
             conditionLabel: ev.conditionLabel,
             signalIds: ev.signalIds,
+            recordedSignalIds: ev.recordedSignalIds,
             conditions: ev.conditions,
             durationSeconds: ev.durationSeconds,
             progress: ev.progress,

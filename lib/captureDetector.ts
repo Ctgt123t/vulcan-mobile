@@ -22,7 +22,7 @@
 // ============================================================================
 
 import type { LiveValues, RingBufferEntry } from "./obd2";
-import type { NumericRange } from "./assessmentTypes";
+import type { CapturePlan, NumericRange } from "./assessmentTypes";
 import type { ResolvedPlanItem, ResolvedSignal } from "./captureResolver";
 
 // ---- Tunable constants (named + grouped so real-car tuning is one edit) ----
@@ -98,7 +98,7 @@ export interface ConditionReadout {
 }
 
 export type DetectorEvent =
-  | { type: "card"; itemIndex: number; state: CardState; conditionLabel: string; signalIds: string[]; conditions: ConditionReadout[]; durationSeconds?: number; progress?: number }
+  | { type: "card"; itemIndex: number; state: CardState; conditionLabel: string; signalIds: string[]; recordedSignalIds: string[]; conditions: ConditionReadout[]; durationSeconds?: number; progress?: number }
   | { type: "fire"; window: CapturedWindow }
   | { type: "budget_exhausted" }
   | { type: "paused" }
@@ -126,19 +126,34 @@ function readValue(
   return { present: true, value: lv.value };
 }
 
+// A measured target with a BOUNDED range (either bound set) is a deliberate
+// "wait until the signal enters this band" event capture, so it arms the hold
+// just like a context gate. A measured target with an OPEN range
+// ({min:null,max:null}) is record-only: it never gates the start (we record
+// whatever it reads once the gate holds). This is the fix for the warm-idle
+// stall — a baseline measurement must not block its own capture.
+function isBoundedRange(r: NumericRange): boolean {
+  return r.min != null || r.max != null;
+}
+
+// The conditions that must HOLD for the capture to arm: every context gate, plus
+// any measured target carrying a bounded range. Open-range targets are excluded
+// (record-only). Order: gates first, then bounded targets.
+function armingConditions(item: RunnableItem): ResolvedSignal[] {
+  return [...item.gate, ...item.targets.filter((t) => isBoundedRange(t.range))];
+}
+
 function conditionSatisfied(item: RunnableItem, tick: MonitorTick): boolean {
-  const t = readValue(item.target, tick);
-  if (!t.present || t.value == null || !inRange(t.value, item.target.range)) return false;
-  for (const g of item.gate) {
-    const v = readValue(g, tick);
-    if (!v.present || v.value == null || !inRange(v.value, g.range)) return false;
+  for (const c of armingConditions(item)) {
+    const v = readValue(c, tick);
+    if (!v.present || v.value == null || !inRange(v.value, c.range)) return false;
   }
   return true;
 }
 
 // ---- Per-item runtime state ------------------------------------------------
 
-type RunnableItem = Extract<ResolvedPlanItem, { runnable: true }>;
+export type RunnableItem = Extract<ResolvedPlanItem, { runnable: true }>;
 
 interface ItemState {
   item: RunnableItem;
@@ -153,39 +168,74 @@ interface ItemState {
   lastConditionsSig: string | null;
 }
 
+// The "Watching for" arming string — the ARMING conditions only (gates + any
+// bounded measured targets). Record-only (open-range) targets are NOT shown here;
+// they are surfaced separately via recordedSignalIds (the "Recording: …" line).
 function conditionLabel(item: RunnableItem): string {
-  const parts = item.gate.map((g) => rangeLabel(g));
-  parts.push(rangeLabel(item.target));
-  return parts.join(" AND ");
+  return armingConditions(item)
+    .map((s) => rangeLabel(s))
+    .join(" AND ");
 }
 function rangeLabel(s: ResolvedSignal): string {
-  const r = s.range;
+  return rangeLabelRaw(s.requestedId, s.range);
+}
+function rangeLabelRaw(id: string, r: NumericRange): string {
   const u = r.unit ?? "";
-  if (r.min != null && r.max != null) return `${s.requestedId} ${r.min}-${r.max}${u}`;
-  if (r.min != null) return `${s.requestedId} ≥ ${r.min}${u}`;
-  if (r.max != null) return `${s.requestedId} ≤ ${r.max}${u}`;
-  return `${s.requestedId}`;
+  if (r.min != null && r.max != null) return `${id} ${r.min}-${r.max}${u}`;
+  if (r.min != null) return `${id} ≥ ${r.min}${u}`;
+  if (r.max != null) return `${id} ≤ ${r.max}${u}`;
+  return `${id}`;
 }
 function planSignalKeys(item: RunnableItem): string[] {
   const keys: string[] = [];
-  if (item.target.availability.status === "resolved") keys.push(item.target.availability.signalKey);
+  for (const t of item.targets) if (t.availability.status === "resolved") keys.push(t.availability.signalKey);
   for (const g of item.gate) if (g.availability.status === "resolved") keys.push(g.availability.signalKey);
   return Array.from(new Set(keys));
 }
 function planSignalIds(item: RunnableItem): string[] {
-  return Array.from(new Set([item.target.requestedId, ...item.gate.map((g) => g.requestedId)]));
+  return Array.from(new Set([...item.targets.map((t) => t.requestedId), ...item.gate.map((g) => g.requestedId)]));
+}
+// The signals this capture RECORDS (all measured targets, open or bounded) — for
+// the card's "Recording: …" surface. Distinct from the arming conditions.
+function recordedSignalIds(item: RunnableItem): string[] {
+  return Array.from(new Set(item.targets.map((t) => t.requestedId)));
 }
 
-// Per-condition live readout for the card (Fix 2). Order matches conditionLabel:
-// gates first, then the measured target. `met` requires a present, non-stale,
-// in-band value.
+// Public helpers so the UI can SEED the initial card with the exact same
+// gate-only label + recorded-signals the detector will emit on its first tick —
+// no visible "changed once on its own" flip from prose to the numeric label.
+export function describeArmingCondition(item: RunnableItem): string {
+  return conditionLabel(item);
+}
+export function listRecordedSignalIds(item: RunnableItem): string[] {
+  return recordedSignalIds(item);
+}
+
+// Same gate-only arming label, computed from a RAW (un-resolved) capture_plan, so
+// the UI can show an immediate placeholder before the catalog resolves that is
+// byte-identical to the detector's first emitted label (no prose→numeric flip).
+// Resolution binds ids to PIDs but never changes the gate ranges, so this matches.
+export function describeArmingConditionFromPlan(plan: CapturePlan): string {
+  const targets = plan.measured_targets && plan.measured_targets.length > 0 ? plan.measured_targets : [plan.measured_target];
+  const bounded = targets.filter((t) => t.range && isBoundedRange(t.range));
+  return [...plan.context_gate, ...bounded].map((c) => rangeLabelRaw(c.signal_id, c.range)).join(" AND ");
+}
+export function listRecordedSignalIdsFromPlan(plan: CapturePlan): string[] {
+  const targets = plan.measured_targets && plan.measured_targets.length > 0 ? plan.measured_targets : [plan.measured_target];
+  return Array.from(new Set(targets.map((t) => t.signal_id)));
+}
+
+// Per-condition live readout for the card (Fix 2). Shows the ARMING conditions
+// (gates + bounded targets) so a warm-up wait reads as "almost there"; open
+// record-only targets are not arming conditions and are not shown here. `met`
+// requires a present, non-stale, in-band value.
 function conditionReadouts(item: RunnableItem, tick: MonitorTick): ConditionReadout[] {
   const one = (sig: ResolvedSignal): ConditionReadout => {
     const r = readValue(sig, tick);
     const met = r.present && r.value != null && inRange(r.value, sig.range);
     return { label: sig.requestedId, current: r.value, range: sig.range, met };
   };
-  return [...item.gate.map(one), one(item.target)];
+  return armingConditions(item).map(one);
 }
 
 // ===========================================================================
@@ -320,11 +370,14 @@ export class CaptureDetector {
       value: readValue(g, tick).value,
       range: g.range,
     }));
+    // Trigger stays single-valued = the PRIMARY recorded target (targets[0]); the
+    // full multi-signal evidence lives in the captured window / observed snapshot.
+    const primary = st.item.targets[0];
     const trigger: CapturedWindow["trigger"] = {
       firedAt: tick.timestamp,
-      targetSignalId: st.item.target.requestedId,
-      targetSignalKey: st.item.target.availability.status === "resolved" ? st.item.target.availability.signalKey : "",
-      targetValueAtFire: readValue(st.item.target, tick).value,
+      targetSignalId: primary.requestedId,
+      targetSignalKey: primary.availability.status === "resolved" ? primary.availability.signalKey : "",
+      targetValueAtFire: readValue(primary, tick).value,
       gateValuesAtFire,
       sustainedHeldMs: heldMs,
     };
@@ -382,6 +435,7 @@ export class CaptureDetector {
       state,
       conditionLabel: conditionLabel(st.item),
       signalIds: planSignalIds(st.item),
+      recordedSignalIds: recordedSignalIds(st.item),
       conditions,
       durationSeconds: st.item.captureWindowSeconds,
       progress,

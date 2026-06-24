@@ -49,6 +49,12 @@ import {
 } from "../lib/api";
 import { CaptureExecutor } from "../lib/captureExecutor";
 import type { ConditionReadout } from "../lib/captureDetector";
+import {
+  describeArmingCondition,
+  listRecordedSignalIds,
+  describeArmingConditionFromPlan,
+  listRecordedSignalIdsFromPlan,
+} from "../lib/captureDetector";
 import { resolvePlan, type ResolveContext } from "../lib/captureResolver";
 import {
   buildSelectedDescriptors,
@@ -139,8 +145,13 @@ interface CaptureUiState {
     | "stopped"
     | "unavailable"
     | "error";
+  // The ARMING condition shown as "Watching for: …" — context gate (+ any bounded
+  // measured target). Record-only measured signals are NOT here; they live in
+  // recordedSignalIds ("Recording: …").
   conditionLabel: string;
   signalIds: string[];
+  // The measured signals this capture records (for the "Recording: …" line).
+  recordedSignalIds?: string[];
   // Fix 2: per-condition live readout (current value vs target + met) so the
   // WAITING card reads as "warming up, almost there" instead of a dead spinner.
   conditions?: ConditionReadout[];
@@ -148,6 +159,11 @@ interface CaptureUiState {
   progress?: number;
   note?: string;
 }
+
+// Round-level state (catalog-load failure / no-runnable-items / pre-resolve
+// placeholder) lives under this reserved key in the per-item captures map, since
+// it isn't tied to a specific plan item index.
+const CAPTURE_ROUND_KEY = -1;
 
 interface AssessmentEntry {
   id: number;
@@ -157,8 +173,11 @@ interface AssessmentEntry {
     | { status: "done"; assessment: DiagnosticAssessment }
     | { status: "error"; message: string };
   // Present only on a DATA_CAPTURE assessment whose capture round is in
-  // progress / done this session. Runtime-only; SavedAssessmentEntry omits it.
-  capture?: CaptureUiState | null;
+  // progress / done this session. Keyed by plan item index (CAPTURE_ROUND_KEY for
+  // round-level states) so a multi-item plan renders one card PER item instead of
+  // overwriting a single slot — the fix for the gate "flipping" mid-wait.
+  // Runtime-only; SavedAssessmentEntry omits it.
+  captures?: Record<number, CaptureUiState>;
   // Wall-clock time this assessment resolved (set on done; restored from the
   // saved entry on resume). SB4 history serialization orders done assessments
   // against captured-evidence results by this timestamp.
@@ -168,6 +187,17 @@ interface AssessmentEntry {
 type ThreadRow =
   | { key: string; kind: "message"; message: ChatMessage }
   | { key: string; kind: "assessment"; entry: AssessmentEntry };
+
+// Any capture slot present on this entry (round active or terminal this session).
+function hasAnyCapture(entry: AssessmentEntry): boolean {
+  return !!entry.captures && Object.keys(entry.captures).length > 0;
+}
+// Any capture slot still actively watching/capturing (gates re-run + cancel).
+function anyCaptureActive(entry: AssessmentEntry): boolean {
+  return Object.values(entry.captures ?? {}).some(
+    (c) => c.phase === "waiting" || c.phase === "capturing",
+  );
+}
 
 export default function Screen() {
   const router = useRouter();
@@ -321,9 +351,13 @@ export default function Screen() {
   useEffect(() => {
     if (!isConnected && roundActiveRef.current && !roundActiveRef.current.complete) {
       const active = roundActiveRef.current;
-      patchCapture(active.entryId, {
-        phase: "stopped",
-        note: "Connection lost — monitoring stopped.",
+      setCaptures(active.entryId, {
+        [CAPTURE_ROUND_KEY]: {
+          phase: "stopped",
+          conditionLabel: "",
+          signalIds: [],
+          note: "Connection lost — monitoring stopped.",
+        },
       });
       teardownRound(false); // disconnect already stopped polling; nothing to restore
     }
@@ -877,13 +911,44 @@ export default function Screen() {
     return [...byKey.values()];
   }
 
-  // Patch the transient capture state on one assessment entry (merge).
-  function patchCapture(entryId: number, patch: Partial<CaptureUiState>): void {
+  // Patch the transient capture state for ONE plan item on an assessment entry
+  // (merge). Keyed by itemIndex so concurrent items don't overwrite each other.
+  function patchCapture(
+    entryId: number,
+    itemIndex: number,
+    patch: Partial<CaptureUiState>,
+  ): void {
     const next = assessmentsRef.current.map((a) => {
       if (a.id !== entryId) return a;
+      const captures = { ...(a.captures ?? {}) };
       const base: CaptureUiState =
-        a.capture ?? { phase: "waiting", conditionLabel: "", signalIds: [] };
-      return { ...a, capture: { ...base, ...patch } };
+        captures[itemIndex] ?? { phase: "waiting", conditionLabel: "", signalIds: [] };
+      captures[itemIndex] = { ...base, ...patch };
+      return { ...a, captures };
+    });
+    setAssessments(next);
+    assessmentsRef.current = next;
+  }
+
+  // Replace the whole per-item capture map for an entry (seed / complete / clear).
+  function setCaptures(entryId: number, captures: Record<number, CaptureUiState>): void {
+    const next = assessmentsRef.current.map((a) =>
+      a.id === entryId ? { ...a, captures } : a,
+    );
+    setAssessments(next);
+    assessmentsRef.current = next;
+  }
+
+  // Merge a patch into EVERY current capture slot on an entry (round-wide notes:
+  // pause/resume). No-op if the entry has no capture slots.
+  function patchAllCaptures(entryId: number, patch: Partial<CaptureUiState>): void {
+    const next = assessmentsRef.current.map((a) => {
+      if (a.id !== entryId || !a.captures) return a;
+      const captures: Record<number, CaptureUiState> = {};
+      for (const [k, v] of Object.entries(a.captures)) {
+        captures[Number(k)] = { ...v, ...patch };
+      }
+      return { ...a, captures };
     });
     setAssessments(next);
     assessmentsRef.current = next;
@@ -938,16 +1003,22 @@ export default function Screen() {
     if (requestedData.length === 0) return;
     if (!captureConnectionOk) return; // connected + different-vehicle guard (2B)
 
-    // Initial card so the tech sees "waiting" immediately (refined by onCard).
-    const firstItem = requestedData[0];
-    patchCapture(entry.id, {
-      phase: "waiting",
-      conditionLabel: firstItem?.operating_condition ?? "the requested condition",
-      signalIds: requestedData.map((rd) => rd.signal_id),
-      durationSeconds: firstItem?.capture_plan?.capture_window_seconds,
-      progress: undefined,
-      note: undefined,
+    // Immediate per-item "waiting" cards so the tech sees feedback instantly,
+    // seeded from the RAW plan with the SAME gate-only arming label the detector
+    // will emit on its first tick — no prose→numeric flip (the operating_condition
+    // prose is NOT shown as the gate). Refined by onCard once ticks arrive.
+    const seed: Record<number, CaptureUiState> = {};
+    requestedData.forEach((rd, i) => {
+      if (!rd.capture_plan) return; // prose-only item — not executable, no card
+      seed[i] = {
+        phase: "waiting",
+        conditionLabel: describeArmingConditionFromPlan(rd.capture_plan),
+        signalIds: listRecordedSignalIdsFromPlan(rd.capture_plan),
+        recordedSignalIds: listRecordedSignalIdsFromPlan(rd.capture_plan),
+        durationSeconds: rd.capture_plan.capture_window_seconds,
+      };
     });
+    setCaptures(entry.id, seed);
 
     // Build the resolve context from the connected vehicle. DB-2: prefer the
     // cached catalog (now persisted app-wide on connect via VehicleContext), and
@@ -964,9 +1035,13 @@ export default function Screen() {
       if (catalog) saveCatalog(catalog).catch(() => {});
     }
     if (!catalog) {
-      patchCapture(entry.id, {
-        phase: "unavailable",
-        note: "Couldn't load this vehicle's signal catalog to set up monitoring — check your connection and try again.",
+      setCaptures(entry.id, {
+        [CAPTURE_ROUND_KEY]: {
+          phase: "unavailable",
+          conditionLabel: "",
+          signalIds: [],
+          note: "Couldn't load this vehicle's signal catalog to set up monitoring — check your connection and try again.",
+        },
       });
       return;
     }
@@ -992,19 +1067,39 @@ export default function Screen() {
         firstUnrunnable && !firstUnrunnable.runnable
           ? `${firstUnrunnable.targetSignalId} (${firstUnrunnable.detail.status === "unavailable" ? firstUnrunnable.detail.reason : "unavailable"})`
           : "the requested signal";
-      patchCapture(entry.id, {
-        phase: "unavailable",
-        note: `Can't watch ${reason} on this vehicle. Pick a different test or capture it manually on the OBD2 screen.`,
+      setCaptures(entry.id, {
+        [CAPTURE_ROUND_KEY]: {
+          phase: "unavailable",
+          conditionLabel: "",
+          signalIds: [],
+          note: `Can't watch ${reason} on this vehicle. Pick a different test or capture it manually on the OBD2 screen.`,
+        },
       });
       return;
     }
+
+    // Re-seed the live cards to exactly the RUNNABLE items (drops any item whose
+    // target couldn't bind), using the detector's own gate-only label so the
+    // first onCard tick is identical (no flip).
+    const runnableSeed: Record<number, CaptureUiState> = {};
+    for (const item of runnable) {
+      if (!item.runnable) continue;
+      runnableSeed[item.itemIndex] = {
+        phase: "waiting",
+        conditionLabel: describeArmingCondition(item),
+        signalIds: listRecordedSignalIds(item),
+        recordedSignalIds: listRecordedSignalIds(item),
+        durationSeconds: item.captureWindowSeconds,
+      };
+    }
+    setCaptures(entry.id, runnableSeed);
 
     // Collect the resolved plan signalKeys and build descriptors to poll.
     const planKeys = new Set<string>();
     for (const item of runnable) {
       if (!item.runnable) continue;
-      if (item.target.availability.status === "resolved") {
-        planKeys.add(item.target.availability.signalKey);
+      for (const t of item.targets) {
+        if (t.availability.status === "resolved") planKeys.add(t.availability.signalKey);
       }
       for (const g of item.gate) {
         if (g.availability.status === "resolved") planKeys.add(g.availability.signalKey);
@@ -1040,11 +1135,13 @@ export default function Screen() {
       callbacks: {
         onCard: (u) => {
           if (roundActiveRef.current?.complete) return; // ignore post-fire reset
-          // u.state ("waiting"|"capturing"|"complete") maps 1:1 to phase.
-          patchCapture(entry.id, {
+          // Keyed by u.itemIndex so concurrent plan items render distinct cards
+          // instead of overwriting one slot (the mid-wait "flip" fix).
+          patchCapture(entry.id, u.itemIndex, {
             phase: u.state,
             conditionLabel: u.conditionLabel,
             signalIds: u.signalIds,
+            recordedSignalIds: u.recordedSignalIds,
             conditions: u.conditions,
             durationSeconds: u.durationSeconds,
             progress: u.progress,
@@ -1056,9 +1153,9 @@ export default function Screen() {
         },
         onStatus: (s) => {
           if (s.type === "paused") {
-            patchCapture(entry.id, { note: "Paused — waiting for live data…" });
+            patchAllCaptures(entry.id, { note: "Paused — waiting for live data…" });
           } else if (s.type === "resumed") {
-            patchCapture(entry.id, { note: undefined });
+            patchAllCaptures(entry.id, { note: undefined });
           }
         },
       },
@@ -1123,14 +1220,34 @@ export default function Screen() {
     if (active) active.complete = true;
 
     if (evidence.outcome === "cancelled") {
-      patchCapture(entry.id, { phase: "stopped", note: "Monitoring stopped." });
+      setCaptures(entry.id, {
+        [CAPTURE_ROUND_KEY]: {
+          phase: "stopped",
+          conditionLabel: "",
+          signalIds: [],
+          note: "Monitoring stopped.",
+        },
+      });
       teardownRound(true);
       return;
     }
 
-    // Completed (or timeout with a partial window): mark complete, stop the
-    // executor + restore polling, persist the evidence, and interpret it.
-    patchCapture(entry.id, { phase: "complete", progress: 1 });
+    // Completed (or timeout with a partial window): mark the FIRED item complete
+    // (and drop the other items' now-stale waiting cards — the round concluded),
+    // stop the executor + restore polling, persist the evidence, and interpret it.
+    const firedIndex = evidence.trigger?.firedItemIndex ?? CAPTURE_ROUND_KEY;
+    const firedBase =
+      assessmentsRef.current.find((a) => a.id === entry.id)?.captures?.[firedIndex];
+    setCaptures(entry.id, {
+      [firedIndex]: {
+        phase: "complete",
+        conditionLabel: firedBase?.conditionLabel ?? "",
+        signalIds: firedBase?.signalIds ?? [],
+        recordedSignalIds: firedBase?.recordedSignalIds,
+        durationSeconds: firedBase?.durationSeconds,
+        progress: 1,
+      },
+    });
     captureExecutorRef.current?.stop();
     captureExecutorRef.current = null;
     if (active) {
@@ -1243,7 +1360,14 @@ export default function Screen() {
   function cancelCaptureRound(): void {
     const active = roundActiveRef.current;
     if (!active) return;
-    patchCapture(active.entryId, { phase: "stopped", note: "Monitoring stopped." });
+    setCaptures(active.entryId, {
+      [CAPTURE_ROUND_KEY]: {
+        phase: "stopped",
+        conditionLabel: "",
+        signalIds: [],
+        note: "Monitoring stopped.",
+      },
+    });
     teardownRound(true);
   }
 
@@ -2350,11 +2474,7 @@ export default function Screen() {
                   captureConnectionOk &&
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status !== "running" &&
-                  !(
-                    item.entry.capture &&
-                    (item.entry.capture.phase === "waiting" ||
-                      item.entry.capture.phase === "capturing")
-                  )
+                  !anyCaptureActive(item.entry)
                     ? onRerunAssessment
                     : undefined
                 }
@@ -2366,17 +2486,13 @@ export default function Screen() {
                   item.entry.id === lastAssessmentId &&
                   item.entry.slot.status === "done" &&
                   item.entry.slot.assessment.next_step.type === "DATA_CAPTURE" &&
-                  !item.entry.capture
+                  !hasAnyCapture(item.entry)
                     ? () => handleStartCapturePress(item.entry)
                     : undefined
                 }
                 captureGate={captureGate}
                 onCancelCapture={
-                  item.entry.capture &&
-                  (item.entry.capture.phase === "waiting" ||
-                    item.entry.capture.phase === "capturing")
-                    ? cancelCaptureRound
-                    : undefined
+                  anyCaptureActive(item.entry) ? cancelCaptureRound : undefined
                 }
                 onSubmitFinding={
                   item.entry.id === lastAssessmentId &&
@@ -2747,7 +2863,11 @@ function AssessmentThreadCard({
   // "wrong_vehicle" = surface the resume-block messaging (adapter already on).
   captureGate?: "ready" | "disconnected" | "wrong_vehicle";
 }) {
-  const cap = entry.capture ?? null;
+  // One capture card per plan item (sorted by item index), so concurrent items
+  // render distinctly instead of overwriting one slot.
+  const captureSlots = Object.entries(entry.captures ?? {})
+    .map(([k, v]) => ({ itemIndex: Number(k), state: v }))
+    .sort((a, b) => a.itemIndex - b.itemIndex);
   // A photo staged against this finding card; sent with the next outcome tap.
   const [stagedFindingPhoto, setStagedFindingPhoto] =
     useState<ImageAttachment | null>(null);
@@ -2797,28 +2917,31 @@ function AssessmentThreadCard({
       )}
 
       {/* Stage 2C-4 capture round — driven by the real detector via the
-          executor's onCard. Lives under the DATA_CAPTURE assessment that
-          ordered it (its reserved home). */}
-      {cap && (cap.phase === "waiting" || cap.phase === "capturing" || cap.phase === "complete") && (
-        <CaptureCard
-          state={cap.phase}
-          conditionLabel={cap.conditionLabel}
-          signalIds={cap.signalIds}
-          durationSeconds={cap.durationSeconds}
-          progress={cap.progress}
-          onCancel={
-            cap.phase !== "complete" && onCancelCapture
-              ? onCancelCapture
-              : undefined
-          }
-        />
-      )}
-      {cap && (cap.phase === "stopped" || cap.phase === "unavailable" || cap.phase === "error") && (
-        <View style={[styles.captureNoteBox]}>
-          <Text style={styles.captureNoteText}>
-            {cap.note ?? "Monitoring stopped."}
-          </Text>
-        </View>
+          executor's onCard. One card PER plan item (keyed by item index), so a
+          multi-item plan no longer overwrites a single slot / "flips" mid-wait.
+          Lives under the DATA_CAPTURE assessment that ordered it. */}
+      {captureSlots.map(({ itemIndex, state: cap }) =>
+        cap.phase === "waiting" || cap.phase === "capturing" || cap.phase === "complete" ? (
+          <CaptureCard
+            key={`cap-${itemIndex}`}
+            state={cap.phase}
+            conditionLabel={cap.conditionLabel}
+            signalIds={cap.signalIds}
+            recordedSignalIds={cap.recordedSignalIds}
+            conditions={cap.conditions}
+            durationSeconds={cap.durationSeconds}
+            progress={cap.progress}
+            onCancel={
+              cap.phase !== "complete" && onCancelCapture ? onCancelCapture : undefined
+            }
+          />
+        ) : (
+          <View key={`cap-${itemIndex}`} style={[styles.captureNoteBox]}>
+            <Text style={styles.captureNoteText}>
+              {cap.note ?? "Monitoring stopped."}
+            </Text>
+          </View>
+        ),
       )}
 
       {/* Stage 3 (Step 1) guided result-capture — a directed physical
@@ -2875,7 +2998,7 @@ function AssessmentThreadCard({
       {/* Start / connect affordance. Always renders on the latest not-yet-acted
           DATA_CAPTURE card; the label reflects WHY it can't run yet so the tech
           is never left a dangling instruction (SUB-BATCH 2 reworks the run UX). */}
-      {isDataCapture && onStartCapture && !cap && (
+      {isDataCapture && onStartCapture && captureSlots.length === 0 && (
         <TouchableOpacity
           style={styles.startCaptureBtn}
           onPress={onStartCapture}

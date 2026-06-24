@@ -76,8 +76,15 @@ export function serializeAssessment(a: DiagnosticAssessment): string {
         const gate = cp.context_gate
           .map((g) => `${g.signal_id} ${rangeStr(g.range)}`)
           .join(", ");
+        const targets =
+          cp.measured_targets && cp.measured_targets.length > 0
+            ? cp.measured_targets
+            : [cp.measured_target];
+        const targetStr = targets
+          .map((t) => `${t.signal_id} ${rangeStr(t.range)}`)
+          .join(", ");
         cap =
-          `${cp.measured_target.signal_id} ${rangeStr(cp.measured_target.range)}` +
+          targetStr +
           (gate ? ` while ${gate}` : "") +
           `, sustained ${cp.sustained_seconds}s`;
       } else {

@@ -28,6 +28,7 @@ export default function CaptureCard({
   state,
   conditionLabel,
   signalIds,
+  recordedSignalIds,
   conditions,
   durationSeconds,
   progress,
@@ -36,6 +37,9 @@ export default function CaptureCard({
   state: CaptureCardState;
   conditionLabel: string;
   signalIds: string[];
+  // The signals this capture RECORDS (shown as a distinct "Recording: …" line) —
+  // separate from the arming conditions in conditionLabel/conditions.
+  recordedSignalIds?: string[];
   // Fix 2: per-condition live readout (current vs target + met). When present,
   // the WAITING card shows it instead of bare signal chips.
   conditions?: ConditionReadout[];
@@ -45,12 +49,19 @@ export default function CaptureCard({
   // Stage 2 wires this to abort the watch; no button renders when absent.
   onCancel?: () => void;
 }) {
+  const armingLabel = conditionLabel.trim();
   const title =
     state === "waiting"
-      ? `Watching for: ${conditionLabel}`
+      ? armingLabel
+        ? `Watching for: ${armingLabel}`
+        : "Watching for the capture condition"
       : state === "capturing"
-        ? `Capturing — ${conditionLabel}`
+        ? armingLabel
+          ? `Capturing — ${armingLabel}`
+          : "Capturing"
         : "Capture complete";
+  // The recorded signals to surface separately. Fall back to signalIds.
+  const recorded = (recordedSignalIds && recordedSignalIds.length > 0 ? recordedSignalIds : signalIds) ?? [];
 
   const subtitle =
     state === "waiting"
@@ -97,10 +108,10 @@ export default function CaptureCard({
         </View>
       )}
 
-      {/* Fix 2: live per-condition readout while waiting/capturing — current
-          value → target with a met (✓) state, so a warm-up wait reads as
-          "almost there" rather than a dead spinner. Falls back to bare chips. */}
-      {state !== "complete" && conditions && conditions.length > 0 ? (
+      {/* Fix 2: live per-condition ARMING readout while waiting/capturing —
+          current value → target band with a met (✓) state, so a warm-up wait
+          reads as "almost there" rather than a dead spinner. Gates only. */}
+      {state !== "complete" && conditions && conditions.length > 0 && (
         <View style={styles.conditionList}>
           {conditions.map((c, i) => (
             <View key={`${c.label}-${i}`} style={styles.conditionRow}>
@@ -123,16 +134,19 @@ export default function CaptureCard({
             </View>
           ))}
         </View>
-      ) : (
-        signalIds.length > 0 && (
-          <View style={styles.signalRow}>
-            {signalIds.map((id) => (
-              <View key={id} style={styles.signalChip}>
-                <Text style={styles.signalChipText}>{id}</Text>
-              </View>
-            ))}
-          </View>
-        )
+      )}
+
+      {/* The signals being RECORDED — distinct from the arming conditions above.
+          Always shown so it's clear what data the capture is collecting. */}
+      {recorded.length > 0 && (
+        <View style={styles.recordRow}>
+          <Text style={styles.recordLabel}>Recording:</Text>
+          {recorded.map((id) => (
+            <View key={id} style={styles.signalChip}>
+              <Text style={styles.signalChipText}>{id}</Text>
+            </View>
+          ))}
+        </View>
       )}
 
       {onCancel && state !== "complete" && (
@@ -260,6 +274,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
+  },
+  recordRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+  },
+  recordLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.muted,
+    letterSpacing: 0.4,
   },
   signalChip: {
     paddingHorizontal: 8,
