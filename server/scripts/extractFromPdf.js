@@ -23,12 +23,18 @@
 import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName, PDFRawStream } from "pdf-lib";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { pool } from "../db.js";
 import { logApiCost } from "../costLogger.js";
+import {
+  PAGE_SCORE_THRESHOLD,
+  BAND_MARGIN_PAGES,
+  MIN_SELECTED_PAGES,
+  scorePageText,
+} from "./trimScan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODEL = "claude-opus-4-6";
@@ -40,51 +46,41 @@ const MODEL = "claude-opus-4-6";
 const MAX_PAGES_PER_CHUNK = 150;
 const CONTEXT_LIMIT = 1_000_000;
 
+// #7b — request-size guard. The Anthropic request limit is ~32MB, and the
+// base64 PDF document is the bulk of it. pdf-lib's copyPages materializes the
+// document-wide SHARED resource pool (fonts/images inherited via the page tree)
+// into EVERY chunk, so a chunk's size barely scales with its page count — a
+// 5-page slice of the 33MB Honda manual is ~31.6MB raw (~42MB base64) just like
+// a 150-page slice, and it tripped the 32MB rejection. Almost all of that bloat
+// is embedded photos/diagrams (Honda: 14.6MB of image XObjects), which are NOT
+// spec data: the verbatim-quote gate only stores values quotable from the text,
+// spec tables are vector text (not scanned images), and Anthropic rasterizes
+// the page for vision from the remaining vector content regardless. So when a
+// chunk would exceed the soft limit we neutralize its image XObjects (the
+// indirect objects stay valid — no dangling /Do refs — their bytes just
+// collapse), which brings a Honda chunk to ~17MB raw / ~22.7MB base64. The
+// strip is CONDITIONAL: normal manuals stay byte-for-byte untouched (full
+// fidelity); only an oversized image-heavy chunk gets stripped.
+const CHUNK_B64_SOFT_LIMIT = 30 * 1024 * 1024; // leave headroom under the ~32MB request cap
+
 // ---- Trim-before-extract (the cost lever) ---------------------------------
 // The first-slice test proved every spec lives in the maintenance / specs /
-// capacities sections (the back half of the Sierra manual); pages 1-300 cost
-// ~$3 and produced ZERO specs. So rather than feed the whole manual, we locate
-// the spec-bearing pages LOCALLY (pdfjs-dist text extraction — zero API cost),
-// score each page against a spec-signal dictionary, expand each hot page by a
-// margin, merge into bands, and feed ONLY those pages to Claude. Target:
-// ~85-90% cost cut for ~100% of specs.
+// capacities sections; the front of an owner's manual (operating/infotainment)
+// costs input tokens and produces ZERO specs. So rather than feed the whole
+// manual, we locate the spec-bearing pages LOCALLY (pdfjs-dist text extraction
+// — zero API cost), score each page against the spec-signal scoring, expand
+// each hot page by a margin, merge into bands, and feed ONLY those pages.
+//
+// The scoring itself lives in the shared, manufacturer-agnostic ./trimScan.js
+// (also used by the zero-cost scripts/trimPreflight.js, so the two can never
+// drift). #7a FIX: the scoring used to be fitted to GM vocabulary and silently
+// under-selected on non-GM manuals; trimScan.js now drives off generic spec
+// vocabulary + structural measurement patterns. See that file's header.
 //
 // Escape hatch: EXTRACT_FULL=1 or a `--full` arg forces whole-document
 // extraction (for A/B validation of the trimmed run against the full run).
 const FORCE_FULL =
   process.env.EXTRACT_FULL === "1" || process.argv.includes("--full");
-
-// Tunables — named, not buried magic numbers; we tune these against the re-run.
-// Default threshold deliberately favours OVER-inclusion: on the Sierra manual
-// real spec pages are scattered across scores 5-22 (e.g. the Technical Data
-// "Capacities" table scores only 5; the oil-spec and brake-fluid pages score 7),
-// so a high threshold would silently drop specs. 6 keeps the clustered spec
-// pages (isolated score-5 *prose* is dropped; score-5 *spec* pages sit next to
-// score>=6 anchors and are rescued by the margin). Raise toward 8 only after the
-// answer-key re-run confirms which bands actually produced specs.
-const PAGE_SCORE_THRESHOLD = 6; // min keyword score for a page to count as "hot"
-const BAND_MARGIN_PAGES = 5;    // pages added on EACH side of every hot page (over-include)
-const MIN_SELECTED_PAGES = 20;  // sanity floor: fewer selected than this distrusts the trim
-
-// Spec-signal dictionary — the same vocabulary the extractor targets. A page's
-// score is the sum of the weights of the distinct signals it contains (case-
-// insensitive substring match). Strong, unambiguous spec markers outweigh
-// generic ones so a single specs/maintenance heading clears the threshold while
-// an incidental "battery" mention in a prose page does not.
-const SPEC_SIGNALS = [
-  // strong section headings + unambiguous unit/standard markers
-  ["capacities and specifications", 4], ["maintenance schedule", 4],
-  ["recommended fluids", 3], ["capacity", 2], ["specification", 2],
-  ["lb-ft", 2], ["ft-lb", 2], ["lb ft", 2], ["ft lb", 2], ["n·m", 2],
-  ["viscosity", 2], ["dexos", 2], ["dex-cool", 2], ["dexron", 2],
-  ["gawr", 2], ["gvwr", 2], ["r-134a", 2], ["spark plug gap", 2],
-  // generic spec vocabulary
-  ["torque", 1], ["coolant", 1], ["refrigerant", 1], ["lubricant", 1],
-  ["fluid", 1], ["sae ", 1], ["quart", 1], ["liter", 1], ["litre", 1],
-  ["psi", 1], ["kpa", 1], [" rpm", 1], ["transfer case", 1],
-  ["differential", 1], [" axle", 1], ["fuel tank", 1], ["dot 3", 1],
-  ["brake fluid", 1], ["tire pressure", 1], ["idle speed", 1],
-];
 
 const DEFAULT_PDF = path.join(
   __dirname,
@@ -357,8 +353,13 @@ function validateSpec(s) {
       }
       case "fuel_capacity": {
         if (!CAP_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a capacity unit`; break; }
-        if (/l|liter|litre/.test(u)) { if (v < 10 || v > 230) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
-        else if (/gal/.test(u)) { if (v < 3 || v > 60) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
+        // #16 FIX — test /gal/ BEFORE the litre regex. "gal" contains the
+        // letter "l", so /l|liter|litre/ matched gallon values and forced them
+        // into the litre range (10-230), making the dedicated gallon branch
+        // unreachable — a sub-10-gallon tank (kei/sport) would be wrongly
+        // quarantined. Gallon now resolves first to its own 3-60 range.
+        if (/gal/.test(u)) { if (v < 3 || v > 60) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
+        else if (/l|liter|litre/.test(u)) { if (v < 10 || v > 230) { ok = false; why = `fuel capacity ${v}${u} out of range`; } }
         else if (v < 10 || v > 250) { ok = false; why = `fuel capacity ${v}${u} out of range`; } // qt
         break;
       }
@@ -450,15 +451,50 @@ async function extractChunk(client, pdfB64, pageNote) {
   return { out: toolBlock ? toolBlock.input : null, costData, stopReason: final.stop_reason };
 }
 
+// Neutralize every image XObject in a built chunk: replace the raw image
+// stream with a single byte (the indirect object + all /XObject and /Do
+// references stay valid — only the bytes collapse). Returns how many were
+// stripped. Used by chunkToB64 only when a chunk would exceed the request cap.
+function stripImageStreams(chunkDoc) {
+  let stripped = 0;
+  for (const [, obj] of chunkDoc.context.enumerateIndirectObjects()) {
+    if (obj instanceof PDFRawStream) {
+      const sub = obj.dict.get(PDFName.of("Subtype"));
+      if (sub && sub.toString() === "/Image") {
+        obj.contents = new Uint8Array([0]);
+        obj.dict.set(PDFName.of("Length"), chunkDoc.context.obj(1));
+        stripped++;
+      }
+    }
+  }
+  return stripped;
+}
+
 // Build a base64 PDF containing exactly the given 0-indexed pages of srcDoc
 // (in the order supplied). Works for both contiguous ranges and the sparse
-// page sets the trimmer produces.
+// page sets the trimmer produces. #7b: if the result would exceed the request
+// size cap, strip embedded images and rebuild so the chunk fits (see
+// CHUNK_B64_SOFT_LIMIT). Returns { b64, rawBytes, strippedImages }.
 async function chunkToB64(srcDoc, idx) {
-  const chunk = await PDFDocument.create();
-  const copied = await chunk.copyPages(srcDoc, idx);
-  for (const p of copied) chunk.addPage(p);
-  const bytes = await chunk.save();
-  return Buffer.from(bytes).toString("base64");
+  const build = async (strip) => {
+    const chunk = await PDFDocument.create();
+    const copied = await chunk.copyPages(srcDoc, idx);
+    for (const p of copied) chunk.addPage(p);
+    const strippedImages = strip ? stripImageStreams(chunk) : 0;
+    const bytes = await chunk.save();
+    return { bytes, strippedImages };
+  };
+
+  let { bytes, strippedImages } = await build(false);
+  // base64 inflates by ~4/3; compare against the request cap before encoding.
+  if (Math.ceil(bytes.length / 3) * 4 > CHUNK_B64_SOFT_LIMIT) {
+    ({ bytes, strippedImages } = await build(true));
+  }
+  return {
+    b64: Buffer.from(bytes).toString("base64"),
+    rawBytes: bytes.length,
+    strippedImages,
+  };
 }
 
 // ---- Identity guard (local, zero API cost) --------------------------------
@@ -495,9 +531,84 @@ async function verifyIdentity(pdfBytes, vehicle) {
   return { ok, found, pagesScanned: pagesToScan };
 }
 
+// ---- Identity vision fallback (#17 — small paid call, only on text-fail) ---
+// When the local text scan can't find the model/year (e.g. the cover is an
+// image with no extractable text — common on manufacturer portal PDFs), send
+// just the first few pages to Claude as a vision pass to READ the cover/title
+// and compare it against the declared vehicle. This keeps identity confirmation
+// AUTOMATIC for the common "no text but has a cover" case, so the operator only
+// needs --identity-override for genuinely cover-less files (e.g. the Subaru
+// STIS PDF, which has no cover at all — a vision pass finds nothing).
+//
+// FAIL-SAFE: returns { confirmed:false, ... } on any error or non-confirmation,
+// so identity NEVER passes silently — the caller falls through to the abort.
+// Cost: one PDF-vision call over <=3 cover pages (a few thousand input tokens),
+// ~a couple of cents on opus-4-6; fires only when the text scan already failed
+// AND no override was supplied (the override short-circuits before this call).
+const IDENTITY_VISION_TOOL = {
+  name: "report_cover_identity",
+  description:
+    "Report what the document's cover/title page(s) identify the vehicle as, and whether that matches the declared vehicle.",
+  input_schema: {
+    type: "object",
+    properties: {
+      confirmed: {
+        type: "boolean",
+        description: "True ONLY if the cover/title page text clearly identifies the SAME year/make/model (or an unambiguous match) as the declared vehicle. If the pages are blank, generic, or name a different vehicle, this is false.",
+      },
+      cover_title: {
+        type: "string",
+        description: "The vehicle title/heading you actually read on the cover, verbatim (empty if none is legible).",
+      },
+      reasoning: {
+        type: "string",
+        description: "One sentence on why it matches or not.",
+      },
+    },
+    required: ["confirmed", "cover_title", "reasoning"],
+  },
+};
+
+async function verifyIdentityVision(pdfBytes, vehicle, client) {
+  const doc = await PDFDocument.load(pdfBytes);
+  const n = Math.min(3, doc.getPageCount());
+  const idx = Array.from({ length: n }, (_, i) => i);
+  const { b64 } = await chunkToB64(doc, idx);
+  const stream = client.messages.stream({
+    model: MODEL,
+    max_tokens: 1024,
+    system:
+      "You verify a document's identity from its cover/title pages ONLY. Read the visible cover text. " +
+      "Do not guess from content you cannot see. Confirm a match ONLY when the cover clearly names the same vehicle.",
+    tools: [IDENTITY_VISION_TOOL],
+    tool_choice: { type: "tool", name: "report_cover_identity" },
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } },
+          {
+            type: "text",
+            text:
+              `These are the first ${n} page(s) of a PDF. Do the cover/title page(s) identify this as the ` +
+              `${vehicle.year} ${vehicle.make} ${vehicle.model}? Call report_cover_identity exactly once.`,
+          },
+        ],
+      },
+    ],
+  });
+  const final = await stream.finalMessage();
+  logApiCost(final.usage, MODEL, { callType: "identity-vision" });
+  const block = final.content.find((b) => b.type === "tool_use");
+  return block
+    ? block.input
+    : { confirmed: false, cover_title: "", reasoning: "no tool output" };
+}
+
 // ---- Trim: locate the spec-bearing pages (local, zero API cost) -----------
-// Extracts every page's text with pdfjs-dist, scores it against SPEC_SIGNALS,
-// expands each hot page by ±BAND_MARGIN_PAGES, and merges into bands. Returns
+// Extracts every page's text with pdfjs-dist, scores it via the shared
+// manufacturer-agnostic scorePageText (./trimScan.js), expands each hot page by
+// ±BAND_MARGIN_PAGES, and merges into bands. Returns
 // { pages: sorted 0-indexed page list (or null), bands, scoredHot, reason }.
 async function selectSpecPages(pdfBytes, pageCount) {
   const data = new Uint8Array(pdfBytes);
@@ -508,11 +619,7 @@ async function selectSpecPages(pdfBytes, pageCount) {
       const page = await doc.getPage(i + 1);
       const tc = await page.getTextContent();
       const text = tc.items.map((t) => t.str).join(" ").toLowerCase();
-      let score = 0;
-      for (const [needle, w] of SPEC_SIGNALS) {
-        if (text.includes(needle)) score += w;
-      }
-      if (score >= PAGE_SCORE_THRESHOLD) hot.push(i); // 0-indexed
+      if (scorePageText(text) >= PAGE_SCORE_THRESHOLD) hot.push(i); // 0-indexed
     }
   } finally {
     await doc.destroy();
@@ -588,6 +695,7 @@ async function main() {
   // are logged loudly and persisted in the run snapshot for audit. Without
   // the flag, the abort below stands unchanged.
   const identityOverride = argVal("identity-override", "");
+  let identityVision = null; // #17 — vision-pass result, persisted in the snapshot
   if (!idCheck.ok && identityOverride) {
     console.warn(
       `[extract] IDENTITY OVERRIDE accepted for "${VEHICLE_LABEL}" — text check failed ` +
@@ -595,14 +703,39 @@ async function main() {
         `but the operator asserts provenance-based identity: ${identityOverride}`,
     );
   } else if (!idCheck.ok) {
-    console.error(
-      `[extract] ABORT: the PDF's front matter does not match the declared vehicle "${VEHICLE_LABEL}" ` +
-        `(model=${idCheck.found.model}, make=${idCheck.found.make}, year=${idCheck.found.year}). ` +
-        `Refusing to file these specs under a possibly-wrong identity — check --make/--model/--year and the PDF path. ` +
-        `If the document's identity is provenance-based (manufacturer portal serves it under this vehicle but the ` +
-        `text never names it), re-run with --identity-override="<justification>".`,
+    // #17 — text scan failed and no override. Try a VISUAL cover-page check
+    // before aborting: many manuals name the model/year only on a cover image
+    // (no extractable text), so a vision pass keeps confirmation automatic for
+    // the common no-text-but-has-cover case. Fail-safe: any error or a
+    // non-confirmation falls through to the abort — identity never passes
+    // silently. (The override above short-circuits this, so a known cover-less
+    // file like the Subaru STIS PDF spends nothing on a vision pass that would
+    // find nothing.)
+    console.log(
+      `[extract] text identity check failed for "${VEHICLE_LABEL}" — attempting visual cover-page check (vision pass) ...`,
     );
-    process.exit(1);
+    try {
+      identityVision = await verifyIdentityVision(pdfBytes, VEHICLE, client);
+    } catch (err) {
+      identityVision = { confirmed: false, cover_title: "", reasoning: `vision pass error: ${err.message}` };
+      console.warn(`[extract] identity vision pass failed (continuing to abort): ${err.message}`);
+    }
+    if (identityVision.confirmed) {
+      console.warn(
+        `[extract] IDENTITY CONFIRMED BY VISION for "${VEHICLE_LABEL}" — cover read: ` +
+          `"${identityVision.cover_title}" (${identityVision.reasoning})`,
+      );
+    } else {
+      console.error(
+        `[extract] ABORT: the PDF's front matter does not match the declared vehicle "${VEHICLE_LABEL}" ` +
+          `(text: model=${idCheck.found.model}, make=${idCheck.found.make}, year=${idCheck.found.year}; ` +
+          `vision: ${identityVision.reasoning}). ` +
+          `Refusing to file these specs under a possibly-wrong identity — check --make/--model/--year and the PDF path. ` +
+          `If the document's identity is provenance-based (manufacturer portal serves it under this vehicle but the ` +
+          `text/cover never names it), re-run with --identity-override="<justification>".`,
+      );
+      process.exit(1);
+    }
   }
 
   // --- Pre-flight: token count of the WHOLE document (headline finding) --
@@ -620,16 +753,16 @@ async function main() {
     try {
       const tc = await client.messages.countTokens({
         model: MODEL,
-      system: SYSTEM_PROMPT,
-      tools: [TOOL],
-      messages: [{
-        role: "user",
-        content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBytes.toString("base64") } },
-          { type: "text", text: "count" },
-        ],
-      }],
-    });
+        system: SYSTEM_PROMPT,
+        tools: [TOOL],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBytes.toString("base64") } },
+            { type: "text", text: "count" },
+          ],
+        }],
+      });
       preflightTokens = tc.input_tokens;
       console.log(`[extract] whole-document token size: ${preflightTokens.toLocaleString()} input tokens`);
     } catch (err) {
@@ -698,7 +831,13 @@ async function main() {
       `This is a ${idx.length}-page selection (spanning roughly manual pages ` +
       `${first}-${last}) from a ${pageCount}-page ${VEHICLE_LABEL} owner's manual.`;
     console.log(`[extract] chunk ${ci + 1}/${chunks.length} (${idx.length} pages, ~${first}-${last}) -> ${MODEL} ...`);
-    const b64 = await chunkToB64(srcDoc, idx);
+    const { b64, rawBytes, strippedImages } = await chunkToB64(srcDoc, idx);
+    if (strippedImages > 0) {
+      console.log(
+        `[extract] chunk ${ci + 1}: oversized — stripped ${strippedImages} embedded image(s) to fit the ` +
+          `request limit (now ${(rawBytes / 1024 / 1024).toFixed(1)}MB raw; spec tables are text, unaffected)`,
+      );
+    }
     const { out, costData, stopReason } = await extractChunk(client, b64, note);
     if (stopReason === "max_tokens") {
       anyTruncated = true;
@@ -712,23 +851,16 @@ async function main() {
       totals.cost.total += costData.cost.total;
     }
     if (!out) { console.warn(`[extract] chunk ${ci + 1}: no tool_use returned, skipping`); continue; }
-    // Remap chunk-relative page -> absolute 1-indexed PDF page. Claude numbers
-    // pages within the chunk PDF it received (1..idx.length); idx[P-1] is that
-    // page's original 0-indexed position in the full document. If Claude's value
-    // is outside the chunk range (e.g. it echoed a printed "12-2"), keep it raw
-    // and warn rather than mis-map — the verbatim_quote remains the strong anchor.
-    const remapPage = (item, kind) => {
-      const p = Number(item.page);
-      if (Number.isInteger(p) && p >= 1 && p <= idx.length) {
-        item.page = idx[p - 1] + 1;
-      } else {
-        console.warn(
-          `[extract] chunk ${ci + 1}: ${kind} page ${item.page} out of chunk range [1,${idx.length}] — keeping raw (not remapped)`,
-        );
-      }
-    };
-    for (const s of out.specs || []) { remapPage(s, "spec"); rawSpecs.push(s); }
-    for (const f of out.component_facts || []) { remapPage(f, "fact"); rawFacts.push(f); }
+    // #6 PAGE FIX — trust Claude's ABSOLUTE page numbers; no remap. The prompt
+    // instructs Claude to report absolute manual page numbers, so the previous
+    // post-processing remap (which assumed chunk-relative numbering and
+    // re-translated via idx[p-1]) double-counted and produced wrong stored
+    // pages on Ford/Sierra rows. The value + verbatim_quote were always
+    // correct; this was a citation-precision bug only. We now store the page
+    // as Claude reports it (coerced to an integer; the validation gate still
+    // rejects a missing/invalid page, and verbatim_quote remains the anchor).
+    for (const s of out.specs || []) { rawSpecs.push(s); }
+    for (const f of out.component_facts || []) { rawFacts.push(f); }
     for (const d of out.other_data_types_present || []) discoverySet.add(String(d).trim());
     console.log(`[extract] chunk ${ci + 1}: ${(out.specs || []).length} specs, ${(out.component_facts || []).length} facts`);
   }
@@ -914,6 +1046,8 @@ async function main() {
     pdf_pages: pageCount,
     identity_check: idCheck.found,
     identity_override: identityOverride || null,
+    identity_vision: identityVision, // #17 — null unless a vision fallback ran
+
     whole_document_tokens: preflightTokens,
     mode: FORCE_FULL ? "full" : "trim",
     selection: selectionNote,
@@ -938,7 +1072,17 @@ async function main() {
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error("[extract] error:", err.message);
-  process.exit(1);
-});
+// Run the extraction only when invoked directly (npm run extract:pdf). Guarding
+// this lets the pure validation helpers (validateSpec/normalizeSpec/…) be
+// imported by a zero-cost node check (e.g. scripts/verifyFuelRange.js) without
+// triggering an extraction run or a DB write.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("[extract] error:", err.message);
+    process.exit(1);
+  });
+}
+
+// Exported for zero-cost node checks (no DB, no Claude). The validation gate is
+// the boundary the #16 fuel-capacity fix lives in.
+export { validateSpec, validateComponentFact, normalizeSpec, normUnitForMatch };

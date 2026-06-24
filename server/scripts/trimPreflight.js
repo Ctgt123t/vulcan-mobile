@@ -1,42 +1,27 @@
 // ----------------------------------------------------------------------------
 // trimPreflight.js — read-only, zero-API-cost preflight for an extraction run.
 //
-// Replicates extractFromPdf.js's keyword-density page scan (same dictionary,
-// same threshold/margin/floor constants) against a candidate manual WITHOUT
-// running the extractor, so the Honda finding (#7a: the GM-shaped trim
+// Mirrors extractFromPdf.js's keyword-density page scan against a candidate
+// manual WITHOUT running the extractor, so the Honda finding (#7a: the trim
 // dictionary SILENTLY under-selects on non-GM manuals) can be checked before
 // any Claude spend. Also dumps the first-pages text (local identity peek) and
 // per-page scores around the selected bands so a human can judge whether the
 // manual's actual Specifications / Maintenance chapters were captured.
 //
 // Usage: node scripts/trimPreflight.js <pdfPath>
-// Keep the SPEC_SIGNALS / threshold constants in sync with extractFromPdf.js
-// if they change there (this is a diagnostic mirror, not an import, so the
-// extractor stays untouched).
+// The scoring is IMPORTED from the shared ./trimScan.js (the SAME module the
+// extractor uses), so the two can never drift — a green preflight is a real
+// guarantee about what the extractor will select, not an approximation.
 // ----------------------------------------------------------------------------
 
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const PAGE_SCORE_THRESHOLD = 6;
-const BAND_MARGIN_PAGES = 5;
-const MIN_SELECTED_PAGES = 20;
-
-const SPEC_SIGNALS = [
-  ["capacities and specifications", 4], ["maintenance schedule", 4],
-  ["recommended fluids", 3], ["capacity", 2], ["specification", 2],
-  ["lb-ft", 2], ["ft-lb", 2], ["lb ft", 2], ["ft lb", 2], ["n·m", 2],
-  ["viscosity", 2], ["dexos", 2], ["dex-cool", 2], ["dexron", 2],
-  ["gawr", 2], ["gvwr", 2], ["r-134a", 2], ["spark plug gap", 2],
-  ["torque", 1], ["coolant", 1], ["refrigerant", 1], ["lubricant", 1],
-  ["fluid", 1], ["sae ", 1], ["quart", 1], ["liter", 1], ["litre", 1],
-  ["psi", 1], ["kpa", 1], [" rpm", 1], ["transfer case", 1],
-  ["differential", 1], [" axle", 1], ["fuel tank", 1], ["dot 3", 1],
-  ["brake fluid", 1], ["tire pressure", 1], ["idle speed", 1],
-];
+import {
+  PAGE_SCORE_THRESHOLD,
+  BAND_MARGIN_PAGES,
+  MIN_SELECTED_PAGES,
+  scorePageText,
+} from "./trimScan.js";
 
 const pdfPath = process.argv[2];
 if (!pdfPath) {
@@ -58,9 +43,7 @@ for (let i = 1; i <= pageCount; i++) {
   const tc = await page.getTextContent();
   const text = tc.items.map((it) => it.str).join(" ").toLowerCase();
   texts.push(text);
-  let score = 0;
-  for (const [sig, w] of SPEC_SIGNALS) if (text.includes(sig)) score += w;
-  scores.push(score);
+  scores.push(scorePageText(text));
 }
 
 // Identity peek: first 3 pages of raw text (what verifyIdentity will see).
