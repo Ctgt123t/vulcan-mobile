@@ -31,6 +31,11 @@
 // ----------------------------------------------------------------------------
 
 import { query, isDbReady } from "../db.js";
+import {
+  ensureCanonicalLoaded,
+  canonicalizeMake,
+  normalizeModel,
+} from "../canonicalVehicle.js";
 
 export const id = "supabase-spec-db";
 
@@ -189,6 +194,15 @@ export async function lookup(vehicle, appSpecType, _params, _fetcher) {
   const dbTypes = SPEC_TYPE_MAP[appSpecType];
   if (!dbTypes) return null; // app intent not mapped to the DB vocab
 
+  // §5.B — canonicalize the query's make/model toward the NHTSA spelling stored
+  // rows are keyed under, so "Chevy"/"F150"/etc. join instead of false-missing.
+  // Fail-safe: an unaliased name passes through unchanged (honest miss, never a
+  // wrong-vehicle match). ensureCanonicalLoaded merges the DB alias tables on
+  // top of the in-code seed (best-effort).
+  await ensureCanonicalLoaded();
+  const cMake = canonicalizeMake(vehicle.make);
+  const cModel = normalizeModel(vehicle.model);
+
   try {
     const specRes = await query(
       `select s.spec_type, s.value_numeric, s.value_unit, s.value_text, s.qualifier,
@@ -200,7 +214,7 @@ export async function lookup(vehicle, appSpecType, _params, _fetcher) {
           and lower(vv.make) = lower($2)
           and lower(vv.model) = lower($3)
           and s.spec_type = any($4)`,
-      [vehicle.year, String(vehicle.make), String(vehicle.model), dbTypes],
+      [vehicle.year, cMake, cModel, dbTypes],
     );
     if (specRes.rows.length === 0) return null; // no data -> miss
 
@@ -225,7 +239,7 @@ export async function lookup(vehicle, appSpecType, _params, _fetcher) {
             and lower(vv.make) = lower($2)
             and lower(vv.model) = lower($3)
             and cf.source_id = $4`,
-        [vehicle.year, String(vehicle.make), String(vehicle.model), winning.source_id],
+        [vehicle.year, cMake, cModel, winning.source_id],
       );
       const seenF = new Set();
       for (const r of cfRes.rows) {
@@ -276,8 +290,12 @@ export async function recordSpecMiss(vehicle, appSpecType) {
   const mk = String(vehicle?.make ?? "").trim();
   const md = String(vehicle?.model ?? "").trim();
   if (!mk || !md || mk === "[object Object]" || md === "[object Object]") return;
+  // Canonicalize so the demand queue groups by the canonical name (a "Chevy" and
+  // a "Chevrolet" miss are the same demand). Fail-safe passthrough preserved.
+  const cMake = canonicalizeMake(vehicle.make);
+  const cModel = normalizeModel(vehicle.model);
   try {
-    const key = [vehicle.year, vehicle.make, vehicle.model, vehicle.series, vehicle.engineType]
+    const key = [vehicle.year, cMake, cModel, vehicle.series, vehicle.engineType]
       .map((x) => String(x ?? "").toLowerCase().trim())
       .join("|");
     const found = await query(
@@ -298,8 +316,8 @@ export async function recordSpecMiss(vehicle, appSpecType) {
           JSON.stringify({
             key,
             year: vehicle.year,
-            make: vehicle.make,
-            model: vehicle.model,
+            make: cMake,
+            model: cModel,
             series: vehicle.series ?? null,
             engineType: vehicle.engineType ?? null,
           }),

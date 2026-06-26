@@ -35,6 +35,7 @@ import {
   MIN_SELECTED_PAGES,
   scorePageText,
 } from "./trimScan.js";
+import { canonicalizeMake, normalizeModel } from "../canonicalVehicle.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODEL = "claude-opus-4-6";
@@ -104,10 +105,15 @@ function argVal(name, fallback) {
   const hit = process.argv.find((a) => a.startsWith(pref));
   return hit ? hit.slice(pref.length) : fallback;
 }
+// §5.B — store rows under the CANONICAL NHTSA make/model spelling, not the
+// operator's free-text (or the manual's title-page) spelling, so a later lookup
+// joins. Canonicalization is fail-safe (an unaliased name passes through). The
+// in-code alias seed is available synchronously here (no DB needed for the
+// known aliases); DB-added aliases would only matter to the lookup side.
 const VEHICLE = {
   year: Number(argVal("year", 2011)),
-  make: argVal("make", "GMC"),
-  model: argVal("model", "Sierra"),
+  make: canonicalizeMake(argVal("make", "GMC")),
+  model: normalizeModel(argVal("model", "Sierra")),
 };
 const VEHICLE_LABEL = `${VEHICLE.year} ${VEHICLE.make} ${VEHICLE.model}`;
 const SOURCE_META = {

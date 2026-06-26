@@ -11,6 +11,7 @@
     "dev": "node --watch index.js",
     "migrate": "node migrate.js",
     "db:smoke": "node scripts/dbSmokeTest.js",
+    "import:nhtsa-makes": "node scripts/importNhtsaMakes.js",
     "extract:pdf": "node scripts/extractFromPdf.js",
     "test:ask-loop": "node scripts/askToolLoopTest.js",
     "test:ask-loop:integration": "node scripts/askToolLoopIntegrationTest.js"
