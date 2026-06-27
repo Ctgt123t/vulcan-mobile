@@ -22,6 +22,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
 import PhotoThumb from "../components/PhotoThumb";
+import DiagramResults from "../components/DiagramResults";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import {
@@ -197,7 +198,10 @@ export default function AskScreen() {
         tsbs,
         diagnosticLogger.getCurrentSessionId(),
       );
-      setMessages([...next, { role: "assistant", content: reply.text }]);
+      setMessages([
+        ...next,
+        { role: "assistant", content: reply.text, diagrams: reply.diagrams },
+      ]);
       if (reply.cost) {
         diagnosticLogger.log({
           type: "ask_vulcan",
@@ -443,6 +447,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
     <View style={styles.assistantWrap}>
       <View style={[styles.bubble, styles.bubbleAssistant]}>
         <Text style={styles.bubbleText}>{message.content}</Text>
+        {message.diagrams && <DiagramResults result={message.diagrams} />}
       </View>
     </View>
   );

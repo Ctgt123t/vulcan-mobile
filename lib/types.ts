@@ -30,10 +30,28 @@ export interface ImageAttachment {
   base64?: string;
 }
 
+// Diagram lookup (fuse / component / wiring) — real open-web images surfaced
+// with attribution + source links. Never stored as Vulcan data.
+export interface DiagramResult {
+  domain: string;
+  title: string;
+  sourceUrl: string;
+  thumbnailUrl: string;
+}
+export interface DiagramLookupResult {
+  type: string;
+  images: DiagramResult[];
+  webSearchUrl: string;
+  attribution: string;
+  supported: boolean;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   image?: ImageAttachment;
+  // Diagram results attached to an assistant turn (Ask Vulcan) for rendering.
+  diagrams?: DiagramLookupResult | null;
 }
 
 export interface FinalDiagnosis {

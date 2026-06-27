@@ -8,3 +8,4 @@ costEntries.json
 costAggregate.json
 extraction_test/
 extraction_runs/
+scripts/diagramProbe*.js

@@ -45,6 +45,7 @@ import {
   ASK_TOOL_HANDLERS,
   runAskToolLoop,
 } from "./askToolLoop.js";
+import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
 import { initDb } from "./db.js";
 import {
   ASSESS_BODY,
@@ -389,6 +390,39 @@ app.get("/api/dtc/:code", async (req, res) => {
     );
   } catch (err) {
     return respondWithError(res, err, "dtc-fallback");
+  }
+});
+
+// Diagram lookup — the build-once capability behind both surfaces (the Ask
+// Vulcan diagram_lookup tool AND the mid-diagnosis "Find a diagram" affordance).
+// Surfaces REAL open-web diagrams with attribution; never stores/relabels them.
+// Fail-soft: diagramLookup never throws — a missing key / Brave error degrades
+// to links-only (the webSearchUrl fallback), so this endpoint can't 500 on a
+// retrieval failure. Reads nothing protected; spends only on supported types.
+app.post("/api/diagram-lookup", async (req, res) => {
+  const { vehicle, type } = req.body || {};
+  if (!vehicle || typeof vehicle !== "object" || !vehicle.year || !vehicle.make || !vehicle.model) {
+    return res.status(400).json({ error: "Missing or invalid 'vehicle' (year, make, model)." });
+  }
+  if (typeof type !== "string" || type.length === 0) {
+    return res.status(400).json({ error: "Missing 'type'." });
+  }
+  try {
+    const result = await diagramLookup(vehicle, type); // never throws
+    return res.json(result);
+  } catch (err) {
+    // Defensive: should be unreachable (diagramLookup is fail-soft), but never
+    // let a diagram lookup take down the request path.
+    console.warn(`[diagram] lookup error (returning links-only): ${err.message}`);
+    return res.json({
+      type,
+      images: [],
+      webSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(
+        `${vehicle.year} ${vehicle.make} ${vehicle.model} ${type} diagram`,
+      )}`,
+      attribution: "Powered by Brave",
+      supported: DIAGRAM_TYPES.includes(type),
+    });
   }
 });
 
@@ -905,6 +939,10 @@ app.post("/api/ask", async (req, res) => {
     return res.json({
       text,
       cost: costSummary.cost.total > 0 ? costSummary : null,
+      // Additive: real diagram results (fuse/component) the diagram_lookup tool
+      // surfaced this turn, for the mobile DiagramResults card. null if the tool
+      // didn't fire. Never affects text/cost.
+      diagrams: loopCtx.diagrams ?? null,
     });
   } catch (err) {
     return respondWithError(res, err, "ask");

@@ -2,6 +2,7 @@ import type {
   AssistantTurn,
   ChatMessage,
   DiagnoseResponse,
+  DiagramLookupResult,
   DtcDefinition,
   Recall,
   Tsb,
@@ -248,7 +249,7 @@ export async function ask(
   recalls: Recall[] = [],
   tsbs: Tsb[] = [],
   sessionId?: string | null,
-): Promise<{ text: string; cost: ApiCostData | null }> {
+): Promise<{ text: string; cost: ApiCostData | null; diagrams: DiagramLookupResult | null }> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseError(
       "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
@@ -301,8 +302,44 @@ export async function ask(
     throw new DiagnoseError(msg);
   }
 
-  const resp = json as { text: string; cost?: ApiCostData | null };
-  return { text: resp.text ?? "", cost: resp.cost ?? null };
+  const resp = json as {
+    text: string;
+    cost?: ApiCostData | null;
+    diagrams?: DiagramLookupResult | null;
+  };
+  return { text: resp.text ?? "", cost: resp.cost ?? null, diagrams: resp.diagrams ?? null };
+}
+
+// Direct diagram lookup (the mid-diagnosis "Find a diagram" affordance hits this
+// straight, NOT through the diagnosis brain). Fail-soft on the client too: any
+// error degrades to a links-only result with a prebuilt web-search URL so the
+// UI never dead-ends.
+export async function diagramLookup(
+  vehicle: VehicleInfo,
+  type: "fuse" | "wiring" | "component",
+): Promise<DiagramLookupResult> {
+  const fallback: DiagramLookupResult = {
+    type,
+    images: [],
+    webSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(
+      `${vehicle.year} ${vehicle.make} ${vehicle.model} ${type} diagram`,
+    )}`,
+    attribution: "Powered by Brave",
+    supported: type === "fuse" || type === "component",
+  };
+  if (!BASE_URL || BASE_URL.length === 0) return fallback;
+  try {
+    const res = await fetch(`${BASE_URL}/api/diagram-lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+      body: JSON.stringify({ vehicle, type }),
+    });
+    if (!res.ok) return fallback;
+    const json = (await res.json()) as DiagramLookupResult;
+    return json && Array.isArray(json.images) ? json : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export class AssessError extends Error {}

@@ -9,6 +9,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,6 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import DiagnosisActions from "../components/DiagnosisActions";
+import FindDiagramModal from "../components/FindDiagramModal";
 import Navbar from "../components/Navbar";
 import PhotoThumb from "../components/PhotoThumb";
 import RecallList from "../components/RecallList";
@@ -260,6 +262,9 @@ export default function Screen() {
   const [intakePhoto, setIntakePhoto] = useState<ImageAttachment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Find a diagram" surface — opens a modal that hits POST /api/diagram-lookup
+  // directly (NOT the diagnosis brain). Additive; nothing else depends on it.
+  const [diagramModalOpen, setDiagramModalOpen] = useState(false);
   // PULL_CODES (Item B): the assessment entry whose brain-requested code re-pull
   // is in flight (adapter is being read). Drives the in-progress card state; null
   // when no pull is running. One pull at a time.
@@ -2450,7 +2455,22 @@ export default function Screen() {
       >
         <Navbar transparent showBack />
         <VehicleBar vehicle={vehicle} onReset={resetSession} />
+        <View style={styles.diagramBarRow}>
+          <Pressable
+            style={styles.findDiagramBtn}
+            onPress={() => setDiagramModalOpen(true)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.findDiagramText}>🗺  Find a diagram</Text>
+          </Pressable>
+        </View>
       </View>
+
+      <FindDiagramModal
+        visible={diagramModalOpen}
+        vehicle={vehicle}
+        onClose={() => setDiagramModalOpen(false)}
+      />
 
       <KeyboardAvoidingView
         style={[
@@ -3681,6 +3701,24 @@ const styles = StyleSheet.create({
   },
   composerWrap: {
     flexDirection: "column",
+  },
+  diagramBarRow: {
+    flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+  },
+  findDiagramBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: colors.steelChip,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.steelChipBorder,
+  },
+  findDiagramText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "600",
   },
   answerRow: {
     flexDirection: "row",

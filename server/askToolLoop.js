@@ -20,6 +20,7 @@
 // ----------------------------------------------------------------------------
 
 import { lookupSpec, formatSpecContextBlock } from "./vehicleSpecs.js";
+import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
 
 // Iteration cap on the tool loop. Env-configurable so the forced-text fallback
 // path (cap reached while Claude still wants a tool) can be exercised against
@@ -144,8 +145,78 @@ export async function handleSpecLookup(input, ctx) {
   return { text: formatSpecContextBlock(hits) };
 }
 
-export const ASK_TOOLS = [specLookupTool];
-export const ASK_TOOL_HANDLERS = { [SPEC_LOOKUP_TOOL_NAME]: handleSpecLookup };
+// ---- diagram_lookup tool ---------------------------------------------------
+//
+// Finds REAL open-web diagrams (fuse / wiring / component) for the current
+// vehicle and surfaces them in-app with attribution + source links. The actual
+// images ride back to the client on ctx.diagrams (like componentFactsServed) —
+// the tool_result TEXT below deliberately gives Claude NOTHING to describe, so
+// it cannot fabricate or infer diagram contents (§3 no-fabrication, absolute).
+export const DIAGRAM_LOOKUP_TOOL_NAME = "diagram_lookup";
+
+export const diagramLookupTool = {
+  name: DIAGRAM_LOOKUP_TOOL_NAME,
+  description:
+    "Find and SHOW the technician a real fuse-box, wiring, or component (serpentine/accessory belt) diagram for their current vehicle, pulled from the open web with a link to the source — the same as Googling \"<year> <make> <model> fuse box diagram\" but surfaced inside the app. Call this whenever the technician asks to SEE or FIND a diagram (\"show me the fuse box diagram\", \"where's the X fuse\", \"belt routing diagram\", \"wiring diagram for …\"). The vehicle is supplied automatically; you only choose the diagram_type. The images are displayed to the technician DIRECTLY by the app — you do NOT and CANNOT see them. Never describe, summarize, or infer what a diagram shows, and never state a fuse/circuit/component assignment that was not given to you as verified data.",
+  input_schema: {
+    type: "object",
+    properties: {
+      diagram_type: {
+        type: "string",
+        enum: DIAGRAM_TYPES,
+        description: "fuse (fuse/relay box), wiring (electrical), or component (serpentine/accessory belt routing).",
+      },
+    },
+    required: ["diagram_type"],
+  },
+};
+
+export async function handleDiagramLookup(input, ctx) {
+  const type = DIAGRAM_TYPES.includes(input?.diagram_type) ? input.diagram_type : null;
+  if (!type) {
+    return { text: `No valid diagram_type. Valid: ${DIAGRAM_TYPES.join(", ")}.` };
+  }
+  const vehicle = ctx?.vehicle;
+  const hasVehicle =
+    vehicle && typeof vehicle === "object" && vehicle.year && vehicle.make && vehicle.model;
+  if (!hasVehicle) {
+    return {
+      text:
+        "No vehicle (year, make, model) is set, so a diagram can't be looked up. " +
+        "Ask the technician for the year, make, and model.",
+    };
+  }
+
+  const result = await diagramLookup(vehicle, type); // fail-soft; never throws
+  // Surface the real results to the endpoint -> the client renders them.
+  ctx.diagrams = result;
+
+  const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+  const n = result.images.length;
+  if (n > 0) {
+    return {
+      text:
+        `Displayed ${n} real ${type} diagram image(s) for the ${label} to the technician, ` +
+        `each with its source link, plus a "search the web" link. The technician views the ` +
+        `images directly — do NOT describe, summarize, or infer their contents, and do NOT ` +
+        `state any fuse/circuit/component assignment not given to you as verified data. ` +
+        `Briefly tell the technician the diagram(s) are shown above and to tap a thumbnail for the full source.`,
+    };
+  }
+  return {
+    text:
+      `No year/generation-verified ${type} diagram could be confirmed for the ${label}, so ` +
+      `(to avoid showing a wrong-generation diagram) a "search the web" link was shown instead. ` +
+      `Do NOT invent or describe a diagram. Tell the technician to tap the "search the web" link ` +
+      `to look for it themselves.`,
+  };
+}
+
+export const ASK_TOOLS = [specLookupTool, diagramLookupTool];
+export const ASK_TOOL_HANDLERS = {
+  [SPEC_LOOKUP_TOOL_NAME]: handleSpecLookup,
+  [DIAGRAM_LOOKUP_TOOL_NAME]: handleDiagramLookup,
+};
 
 // ---- Cost accumulation -----------------------------------------------------
 //
