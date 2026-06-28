@@ -120,13 +120,14 @@ spec_type          text         -- controlled vocab: "oil_capacity", "oil_viscos
                                  --   "trans_fluid_type", "brake_fluid_type", "battery_group",
                                  --   "service_interval_oil", "spark_plug_gap", "tire_pressure", ...
                                  -- (DRAFT sketch. The LIVE vocab is the spec_spec_type_check
-                                 --  CONSTRAINT, widened by migrations 0002→0006: Batch A/C/D/E
-                                 --  added fuel/axle/transfer-case/gvwr/gawr/idle, towing/octane/
-                                 --  compression/displacement/def, gcwr/dimension/
+                                 --  CONSTRAINT, widened by migrations 0002→0007: Batch A/C/D/E +
+                                 --  Phase 2 added fuel/axle/transfer-case/gvwr/gawr/idle,
+                                 --  towing/octane/compression/displacement/def, gcwr/dimension/
                                  --  ac_compressor_oil_capacity/washer_fluid_capacity/
-                                 --  trailer_tongue_weight, and cargo_load_limit/
+                                 --  trailer_tongue_weight, cargo_load_limit/
                                  --  vehicle_capacity_weight/oil_low_to_full/
-                                 --  low_fuel_warning_level. See §11 Batch D/E.)
+                                 --  low_fuel_warning_level, and firing_order/fuel_type/
+                                 --  adjustment_spec. See §11 Batch D/E + Phase 2.)
 value_numeric      numeric NULL -- e.g. 6.0
 value_unit         text NULL    -- e.g. "qt", "ft-lb", "kPa"  (store canonical; convert at display)
 value_text         text NULL    -- e.g. "0W-20", "DOT 3", "dexos1 Gen 2"  (for non-numeric specs)
@@ -402,6 +403,15 @@ Everything parked as of the Stage-2 pause, with **why it's deferred** and **the 
 - **Fold reversibility (the wrinkle):** label-based reversal is UNSAFE — a genuine `torque` row already has `value_text='lug bolt torque'`, which a fold-reversal regex would wrongly catch. So the moved row-ids were captured (`UPDATE … RETURNING id`) and committed to **`migrations/0006_batch_e_folds.reversal.json`** (torque=12, towing_capacity=16, displacement=6, tire_pressure=4); reverse by `id`. NEW types reverse trivially by `spec_type` (they didn't exist pre-E). The fold UPDATE itself only touches `spec_type='other'`, so genuine target rows are never moved.
 - **Cosmetic field-convention note (accepted):** the existing fold targets store the VALUE in `value_text` (`torque`=`"100 lb-ft (135 nm)"`); the folded `other` rows keep the LABEL there (value in `value_numeric`). Fully queryable (value in `value_numeric`) and the label usefully disambiguates *which* torque/trailer-rating — only a `value_text` convention mix under the type.
 - **Left in `other`:** **40 numeric** (`compression_ratio` 6 — native type is all-textual `':1'` strings, a numeric fold would lose the format; auxiliary EV/hybrid coolant capacities; numeric brake-pedal clearance/wear → belongs with the Phase-2 adjustment family; singletons like redline rpm / seating capacity / horsepower) **+ the 480 textual rows → Phase 2** (the textual quote-parser, the immediate next task).
+
+**BATCH D PHASE 2 — textual `other` quote-parser — LANDED 2026-06-28 (migration `0007_phase2_spec_types.sql`).** The 480 textual `other` rows held their real value ONLY in `verbatim_quote` (`value_text` was the label). Phase 2 built **deterministic, no-Claude per-type parsers** that lift the value out of the quote and re-key the row to its proper `spec_type` or `component_fact`, behind a **mandatory verification + quarantine gate** (a parse WRITES a real value, so a mis-parse stores wrong data — bias to quarantine; better an honest un-parsed row than a confidently wrong one).
+- **Hard re-dry-run-proof gate (the load-bearing discipline):** before any write the parsers ran no-write across all 15 writing families with automated mis-parse detectors. It caught **two SILENT bugs a clean-looking parser had slipped** — spark-plug code truncation (`"DENSO FC16HR-Q8" → "FC16HR"`) and an adjustment range truncated by an un-normalized U+23AF dash (`"0.04 ⎯ 0.24 in" → "0.24 in"`) — both fixed and re-proven to **zero detected mis-parses** before a single write.
+- **Moved 339 rows → 277 component_facts + spec re-keys; `other` 520 → 181.** **3 new spec_types** (CHECK-widening + enum + prompt; all textual, value in `value_text`): `firing_order` (53 — the sequence), `adjustment_spec` (33 — pedal/clutch free-play/clearance measurement, the WHICH in `qualifier`), `fuel_type` (6). **component_fact families (NO migration, free-form per Batch C):** tire/size 53, wheel/size 34, spark_plug type 33 + part_number 8, engine type 31 + bore_stroke 22 + cylinder_arrangement 13, key_fob/battery_type 21, lug_nut thread+socket 20, transmission/type 9, wiper_blade 16, oil/air/cabin-filter part_number 17.
+- **Caution dials:** `firing_order` parsed aggressively — the sequence must be a **permutation of 1..N**, near-provably correct; prose families (engine type / cylinder arrangement / fuel type) required a domain keyword or quarantined. **QUARANTINED — left in `other`, not guessed:** `vin_engine_code` (ambiguous "F" vs "L82"), fuel-selection/octane/ethanol (mixed destination), and the misc tail (~65). 14 rows quarantined inside the parsed families + those whole families left.
+- **Cross-table moves (the new wrinkle vs Phases 1/E):** routing to `component_fact` is **INSERT + DELETE from spec** (not an in-table rename), so label/value-based reversal is impossible — the **full source spec rows were captured to `migrations/0007_phase2_reversal.json`** (96 in-table re-keys + 243 cross-table moves, 277 cf ids). Reverse = restore the spec rows + delete the created component_facts.
+- **Multi-value:** a quote listing several sizes became one `component_fact` PER size (35 tire rows → 53 facts; 18 wheel → 34).
+- **Known cosmetic nit (not a mis-parse):** tire-size strings were over-space-stripped (`"P205/55R16 89V"` → `"P205/55R1689V"`) — data correct, `verbatim_quote` preserved; a cosmetic re-format is a trivial reversible follow-up.
+- **`other` now 181 = 40 numeric** (Batch-E leftovers incl `compression_ratio`) **+ 141 textual** (`vin_engine_code`, fuel-selection, misc tail — genuinely miscellaneous / deliberately quarantined, no forced fits).
 
 **DEFERRED (explicit follow-on tracks, NOT in the core):**
 - **Diagram-bound capture** — fuse-box LAYOUT diagrams + warning-light/DIC symbol glyphs live in images and collide with the #7b image-strip (a stripped page is blank where the diagram was), so neither the text engine nor a vision pass on a stripped chunk can read them. Needs a dedicated, size-bounded vision-capture design. The fuse/bulb *assignment tables* (text) ARE captured; only the layout/symbol *images* are deferred.

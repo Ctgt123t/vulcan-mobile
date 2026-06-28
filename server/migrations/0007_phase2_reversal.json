@@ -1,0 +1,4845 @@
+{
+  "note": "Batch D Phase 2 reversal. spec_inplace: UPDATE spec SET spec_type='other', value_text/value_numeric/value_unit/qualifier=orig WHERE id. cf_moves: re-INSERT spec from spec_orig + DELETE component_fact WHERE id IN cf_ids.",
+  "generated_at": "2026-06-28T12:24:07.482Z",
+  "spec_inplace": [
+    {
+      "id": 317,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 319,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 320,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 321,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 318,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 439,
+      "vt": "firing order 1-3-2-4",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 588,
+      "vt": "firing order (2.7L EcoBoost)",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 589,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 981,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1180,
+      "vt": "Firing order - 2.3L EcoBoost",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1181,
+      "vt": "Firing order - 3.5L Duratec",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1182,
+      "vt": "Firing order - 3.5L EcoBoost",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1383,
+      "vt": "firing order, 2.5 L",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1384,
+      "vt": "firing order, 3.6 L",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1447,
+      "vt": "Firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1448,
+      "vt": "Firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1449,
+      "vt": "Firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1630,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1893,
+      "vt": "firing order: 1-3-4-2",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1894,
+      "vt": "firing order: 1-2-3-4-5-6",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2293,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2294,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2295,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2296,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2326,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2385,
+      "vt": "engine firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2553,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2552,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": "2.7L EcoBoost"
+    },
+    {
+      "id": 2969,
+      "vt": "firing order 1-3-4-2",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3286,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3287,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3288,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3412,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3413,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3623,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3692,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3693,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3750,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3751,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3752,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3875,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3873,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3874,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4527,
+      "vt": "firing order 1-2-3-4-5-6",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4565,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4653,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4721,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4762,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 5008,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": "1-4-2-5-3-6"
+    },
+    {
+      "id": 5050,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": "1-3-4-2"
+    },
+    {
+      "id": 5051,
+      "vt": "firing order",
+      "vn": null,
+      "vu": null,
+      "ql": "1-4-2-5-3-6"
+    },
+    {
+      "id": 5123,
+      "vt": "Firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 5124,
+      "vt": "Firing order",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 332,
+      "vt": "required fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 870,
+      "vt": "fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1102,
+      "vt": "Fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1730,
+      "vt": "fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4874,
+      "vt": "fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4907,
+      "vt": "fuel type",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 456,
+      "vt": "brake pedal free play 0.02-0.11 in (0.5-2.7 mm)",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 457,
+      "vt": "brake pedal reserve distance >2.56 in (65 mm)",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 458,
+      "vt": "clutch pedal free play 0.16-0.43 in (4.0-11.0 mm)",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 863,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 864,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 906,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 909,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 910,
+      "vt": "clutch pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 907,
+      "vt": "brake pedal clearance",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 908,
+      "vt": "brake pedal clearance",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1094,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1095,
+      "vt": "brake pad wear limit",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1096,
+      "vt": "parking brake lining wear limit",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1097,
+      "vt": "parking brake pedal travel",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1098,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1391,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1732,
+      "vt": "brake pedal clearance, 2WD models",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1733,
+      "vt": "brake pedal clearance, 4WD models",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1734,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1735,
+      "vt": "parking brake pedal travel",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 1736,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2930,
+      "vt": "parking brake lever travel",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2931,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2932,
+      "vt": "clutch pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 2933,
+      "vt": "front brake pad wear limit",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3575,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4891,
+      "vt": "brake pedal clearance",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4892,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4893,
+      "vt": "steering free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4946,
+      "vt": "brake pedal clearance minimum",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4947,
+      "vt": "brake pedal free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4948,
+      "vt": "parking brake pedal travel",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 4949,
+      "vt": "steering wheel free play",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3571,
+      "vt": "overall length",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3572,
+      "vt": "overall width",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3573,
+      "vt": "overall height (unladen)",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    },
+    {
+      "id": 3574,
+      "vt": "wheelbase",
+      "vn": null,
+      "vu": null,
+      "ql": null
+    }
+  ],
+  "cf_moves": [
+    {
+      "cf_ids": [
+        7785
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 66,
+        "verbatim_quote": "Lithium battery CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7786
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1606,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "remote transmitter battery type",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 16,
+        "page": 114,
+        "verbatim_quote": "Battery type: CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7787
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1721,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob battery type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 17,
+        "page": 77,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7788
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2448,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob battery type: CR2025",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 23,
+        "page": 89,
+        "verbatim_quote": "Replace only with the same type battery (CR2025 or equivalent)."
+      }
+    },
+    {
+      "cf_ids": [
+        7789
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3072,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Nissan Intelligent Key battery type",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 26,
+        "page": 68,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7790
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3303,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob recommended battery",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 28,
+        "page": 63,
+        "verbatim_quote": "Recommended battery: CR1620 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7791
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3303,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key recommended battery",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 28,
+        "page": 65,
+        "verbatim_quote": "Recommended battery: CR2025 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7792
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 4185,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 36,
+        "page": 87,
+        "verbatim_quote": "Replace only with the same type battery (CR2025 or equivalent)."
+      }
+    },
+    {
+      "cf_ids": [
+        7793
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5018,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type CR2032",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 42,
+        "page": 66,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7794
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6590,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 50,
+        "page": 66,
+        "verbatim_quote": "Lithium battery CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7795
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 69,
+        "verbatim_quote": "Lithium battery CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7796
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7800,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "electronic key battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 57,
+        "page": 104,
+        "verbatim_quote": "Lithium battery CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7797
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7868,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 58,
+        "page": 81,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7798
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11379,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type CR2032",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 85,
+        "page": 87,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7799
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11424,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 86,
+        "page": 76,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7800
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11487,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type",
+        "qualifier": "NISSAN Intelligent Key",
+        "confidence": "0.98",
+        "source_id": 87,
+        "page": 127,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7801
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11615,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 88,
+        "page": 98,
+        "verbatim_quote": "Recommended battery: CR2032 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7802
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11677,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Intelligent Key battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 89,
+        "page": 71,
+        "verbatim_quote": "Recommended battery: CR2025 or equivalent."
+      }
+    },
+    {
+      "cf_ids": [
+        7803
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11734,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key fob battery type CR2025",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 90,
+        "page": 86,
+        "verbatim_quote": "Replace only with the same type battery (CR2025 or equivalent)."
+      }
+    },
+    {
+      "cf_ids": [
+        7804
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "key/remote battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 75,
+        "verbatim_quote": "Lithium battery CR2032"
+      }
+    },
+    {
+      "cf_ids": [
+        7805
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11998,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wireless remote control battery type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 64,
+        "verbatim_quote": "Lithium battery CR2016"
+      }
+    },
+    {
+      "cf_ids": [
+        7806
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1007,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Driver side wiper blade length 55 cm (21.7 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Wiper Blades Driver Side – 55 cm (21.7 in) 23417074"
+      }
+    },
+    {
+      "cf_ids": [
+        7807
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1007,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger side wiper blade length 55 cm (21.7 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Wiper Blades Passenger Side – 55 cm (21.7 in) 23417074"
+      }
+    },
+    {
+      "cf_ids": [
+        7808
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6098,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Wiper blade length, driver side",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 47,
+        "page": 99,
+        "verbatim_quote": "Driver Side – 55 cm (21.7 in) 84578275"
+      }
+    },
+    {
+      "cf_ids": [
+        7809
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6098,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Wiper blade length, passenger side",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 47,
+        "page": 99,
+        "verbatim_quote": "Passenger Side – 55 cm (21.7 in) 84578275"
+      }
+    },
+    {
+      "cf_ids": [
+        7810
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6293,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Wiper blade length (driver side)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 48,
+        "page": 89,
+        "verbatim_quote": "Driver Side – 55 cm (21.7 in) 84578275"
+      }
+    },
+    {
+      "cf_ids": [
+        7811
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6293,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Wiper blade length (passenger side)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 48,
+        "page": 89,
+        "verbatim_quote": "Passenger Side – 55 cm (21.7 in) 84578275"
+      }
+    },
+    {
+      "cf_ids": [
+        7812
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Front wiper blade size 55 cm (21.7 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Front Driver Side – 55 cm (21.7 in) 22756331"
+      }
+    },
+    {
+      "cf_ids": [
+        7813
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Rear wiper blade size 33 cm (13.0 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Rear – 33 cm (13.0 in) 22956295"
+      }
+    },
+    {
+      "cf_ids": [
+        7814
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10499,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Driver side wiper blade length",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Driver Side – 60 cm (23.6 in) 23372088"
+      }
+    },
+    {
+      "cf_ids": [
+        7815
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10499,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger side wiper blade length",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Passenger Side – 50 cm (19.7 in) 23360287"
+      }
+    },
+    {
+      "cf_ids": [
+        7816
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10499,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Rear wiper blade length",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Rear – 30 cm (11.8 in) 84215609"
+      }
+    },
+    {
+      "cf_ids": [
+        7817
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Driver side wiper blade length 60 cm (23.6 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Driver Side – 60 cm (23.6 in) 95391363"
+      }
+    },
+    {
+      "cf_ids": [
+        7818
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger side wiper blade length 35 cm (13.8 in)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Passenger Side – 35 cm (13.8 in) 95391365"
+      }
+    },
+    {
+      "cf_ids": [
+        7819
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "driver side wiper blade length",
+        "qualifier": "60.0 cm (23.6 in)",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Driver Side – 60.0 cm (23.6 in) 23368186"
+      }
+    },
+    {
+      "cf_ids": [
+        7820
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "passenger side wiper blade length",
+        "qualifier": "45.0 cm (17.7 in)",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Passenger Side – 45.0 cm (17.7 in) 23353587"
+      }
+    },
+    {
+      "cf_ids": [
+        7821
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "rear wiper blade length",
+        "qualifier": "30.0 cm (11.8 in)",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Rear – 30.0 cm (11.8 in) 84215609"
+      }
+    },
+    {
+      "cf_ids": [
+        7822
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5067,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission type, Ten-speed automatic transmission 10R80",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 43,
+        "page": 137,
+        "verbatim_quote": "Ten-speed automatic transmission 10R80 U"
+      }
+    },
+    {
+      "cf_ids": [
+        7823
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5483,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission type",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 45,
+        "page": 8,
+        "verbatim_quote": "Six-speed automatic transmission 6R80E"
+      }
+    },
+    {
+      "cf_ids": [
+        7824
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8366,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 62,
+        "page": 142,
+        "verbatim_quote": "Ten-speed automatic transmission 10R80 U"
+      }
+    },
+    {
+      "cf_ids": [
+        7825
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8633,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission code - ten-speed automatic 10R80",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 63,
+        "page": 140,
+        "verbatim_quote": "Ten-speed automatic transmission 10R80 U"
+      }
+    },
+    {
+      "cf_ids": [
+        7826
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8633,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission code - six-speed manual MT82",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 63,
+        "page": 140,
+        "verbatim_quote": "Six-speed manual transmission MT82 X"
+      }
+    },
+    {
+      "cf_ids": [
+        7827
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 9106,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission description",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 65,
+        "page": 39,
+        "verbatim_quote": "Six-speed automatic transmission 6R80E 6"
+      }
+    },
+    {
+      "cf_ids": [
+        7828
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12058,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission type",
+        "qualifier": "Ten-speed automatic transmission 10R80, code U",
+        "confidence": "0.99",
+        "source_id": 93,
+        "page": 11,
+        "verbatim_quote": "Ten-speed automatic transmission 10R80 U"
+      }
+    },
+    {
+      "cf_ids": [
+        7829
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12280,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission code 8F35",
+        "qualifier": "Code 8",
+        "confidence": "0.99",
+        "source_id": 94,
+        "page": 142,
+        "verbatim_quote": "Eight-speed automatic transmission 8F35 8"
+      }
+    },
+    {
+      "cf_ids": [
+        7830
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12280,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "transmission code 8F57",
+        "qualifier": "Code F",
+        "confidence": "0.99",
+        "source_id": 94,
+        "page": 142,
+        "verbatim_quote": "Eight-speed automatic transmission 8F57 F"
+      }
+    },
+    {
+      "cf_ids": [
+        7831
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1792,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 18,
+        "page": 129,
+        "verbatim_quote": "**Lug Nut/Bolt Size M14 x 1.50"
+      }
+    },
+    {
+      "cf_ids": [
+        7832
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1792,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 18,
+        "page": 129,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7833
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3391,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 29,
+        "page": 125,
+        "verbatim_quote": "**Lug Nut/Bolt Size M14 x 1.50"
+      }
+    },
+    {
+      "cf_ids": [
+        7834
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3391,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 29,
+        "page": 125,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7835
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5285,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 44,
+        "page": 15,
+        "verbatim_quote": "**Lug Nut/Bolt Size M14 x 1.50"
+      }
+    },
+    {
+      "cf_ids": [
+        7836
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5285,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size 22 mm",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 44,
+        "page": 15,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7837
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6425,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size 22 mm",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 49,
+        "page": 9,
+        "verbatim_quote": "130 Ft-Lbs (176 N·m) Cone M14 x 1.50 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7838
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6779,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 53,
+        "page": 124,
+        "verbatim_quote": "M14 x 1.50"
+      }
+    },
+    {
+      "cf_ids": [
+        7839
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6779,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 53,
+        "page": 124,
+        "verbatim_quote": "22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7840
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7563,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel lug nut bolt size M12 x 1.5",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 56,
+        "page": 129,
+        "verbatim_quote": "M12 x 1.5 100 (135)"
+      }
+    },
+    {
+      "cf_ids": [
+        7841
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10824,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 79,
+        "page": 136,
+        "verbatim_quote": "M12 x 1.25"
+      }
+    },
+    {
+      "cf_ids": [
+        7842
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10902,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": "M12 x 1.5",
+        "confidence": "0.99",
+        "source_id": 80,
+        "page": 136,
+        "verbatim_quote": "M12 x 1.5"
+      }
+    },
+    {
+      "cf_ids": [
+        7843
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10902,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": "19 mm",
+        "confidence": "0.99",
+        "source_id": 80,
+        "page": 136,
+        "verbatim_quote": "19 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7844
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11113,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Lug nut/bolt socket size: 22 mm",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 81,
+        "page": 133,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7845
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11137,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": "M12 x 1.5",
+        "confidence": "0.98",
+        "source_id": 82,
+        "page": 6,
+        "verbatim_quote": "M12 x 1.5"
+      }
+    },
+    {
+      "cf_ids": [
+        7846
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11137,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": "19 mm",
+        "confidence": "0.98",
+        "source_id": 82,
+        "page": 6,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 19 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7847
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11266,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 83,
+        "page": 129,
+        "verbatim_quote": "**Lug Nut/Bolt Size M14 x 1.50"
+      }
+    },
+    {
+      "cf_ids": [
+        7848
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11266,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 83,
+        "page": 129,
+        "verbatim_quote": "Lug Nut/Bolt Socket Size 22 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7849
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11354,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 84,
+        "page": 139,
+        "verbatim_quote": "M12 x 1.5"
+      }
+    },
+    {
+      "cf_ids": [
+        7850
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11354,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "lug nut/bolt socket size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 84,
+        "page": 139,
+        "verbatim_quote": "19 mm"
+      }
+    },
+    {
+      "cf_ids": [
+        7851
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 549,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "temporary spare tire size T135/80 D16",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 8,
+        "page": 456,
+        "verbatim_quote": "Temporary spare tire size T135/80 D16"
+      }
+    },
+    {
+      "cf_ids": [
+        7852,
+        7853,
+        7854
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 549,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire sizes: P205/55R16 89V, 205/50R17 89V, P225/40R18 88V",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 8,
+        "page": 455,
+        "verbatim_quote": "Tire size P205/55R16 89V 205/50R17 89V P225/40R18 88V"
+      }
+    },
+    {
+      "cf_ids": [
+        7855,
+        7856
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 106,
+        "verbatim_quote": "Tire size 205/65R16 95H, T155/70D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7857,
+        7858
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 107,
+        "verbatim_quote": "Tire size 215/55R17 94V, T155/70D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7859,
+        7860
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 107,
+        "verbatim_quote": "Tire size 235/45R18 94V, T155/70D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7861,
+        7862
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type D",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 108,
+        "verbatim_quote": "Tire size 235/45R18 94Y, T155/70D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7863,
+        7864
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type E",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 108,
+        "verbatim_quote": "Tire size 235/40R19 92V, T155/70D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7865,
+        7866
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Tire size 195/65R15 91S, T135/80R16 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7867,
+        7868
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Tire size P205/55R16 89H, T135/80R16 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7869,
+        7870
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Tire size P215/45R17 87W, T135/80R16 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7871
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2578,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size, Outback 225/65R17",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 122,
+        "verbatim_quote": "225/65R17 102H"
+      }
+    },
+    {
+      "cf_ids": [
+        7872
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2578,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size, Outback 225/60R18",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 122,
+        "verbatim_quote": "225/60R18 100H"
+      }
+    },
+    {
+      "cf_ids": [
+        7873
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2578,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "temporary spare tire size, Outback",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 122,
+        "verbatim_quote": "T155/80 R17 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7874,
+        7875
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3415,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 30,
+        "page": 123,
+        "verbatim_quote": "Tire size P265/70R17 113S, P245/60R20 107H"
+      }
+    },
+    {
+      "cf_ids": [
+        7876,
+        7877
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 115,
+        "verbatim_quote": "Tire size 195/65R15 91S, T125/70D17 98M"
+      }
+    },
+    {
+      "cf_ids": [
+        7878,
+        7879
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 116,
+        "verbatim_quote": "Tire size 205/55R16 91H, T125/70D17 98M"
+      }
+    },
+    {
+      "cf_ids": [
+        7880,
+        7881
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 116,
+        "verbatim_quote": "Tire size 225/40R18 88V, T125/70D17 98M"
+      }
+    },
+    {
+      "cf_ids": [
+        7882,
+        7883
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type F (APEX)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 117,
+        "verbatim_quote": "Tire size 225/40R18 88W, T125/70D17 98M"
+      }
+    },
+    {
+      "cf_ids": [
+        7884
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7868,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size - 2.5 S model",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 133,
+        "verbatim_quote": "2.5 S model P215/60R16"
+      }
+    },
+    {
+      "cf_ids": [
+        7885
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7868,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size - 2.5 SV/SL models",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 133,
+        "verbatim_quote": "2.5 SV/SL models P215/55R17"
+      }
+    },
+    {
+      "cf_ids": [
+        7886
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7868,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size - 2.5 and 2.0 SR/Platinum models",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 133,
+        "verbatim_quote": "2.5 and 2.0 SR/Platinum models P235/40R19"
+      }
+    },
+    {
+      "cf_ids": [
+        7887
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7868,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spare tire size (temporary)",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 133,
+        "verbatim_quote": "Temporary T135/70D16"
+      }
+    },
+    {
+      "cf_ids": [
+        7888
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Outback tire size (17-inch)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "225/65R17 102H"
+      }
+    },
+    {
+      "cf_ids": [
+        7889
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Outback tire size (18-inch)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "225/60R18 100H"
+      }
+    },
+    {
+      "cf_ids": [
+        7890
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Legacy tire size (17-inch)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "225/55R17 97V"
+      }
+    },
+    {
+      "cf_ids": [
+        7891
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Legacy tire size (18-inch)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "225/50R18 95V"
+      }
+    },
+    {
+      "cf_ids": [
+        7892
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Outback temporary spare tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "T155/80 D17 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7893
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8093,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Legacy temporary spare tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 148,
+        "verbatim_quote": "T155/70 D17 110M"
+      }
+    },
+    {
+      "cf_ids": [
+        7894,
+        7895
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8302,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 61,
+        "page": 121,
+        "verbatim_quote": "Tire size P265/70R17 113S, P245/60R20 107H"
+      }
+    },
+    {
+      "cf_ids": [
+        7896
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "17-inch tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 128,
+        "verbatim_quote": "Tire size P235/60R17 100T"
+      }
+    },
+    {
+      "cf_ids": [
+        7897
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "18-inch tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 129,
+        "verbatim_quote": "Tire size 235/55R18 100V, 235/55RF18 100T"
+      }
+    },
+    {
+      "cf_ids": [
+        7898
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "19-inch tire size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 129,
+        "verbatim_quote": "Tire size P235/50R19 99V"
+      }
+    },
+    {
+      "cf_ids": [
+        7899
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "compact spare tire size (2WD models)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 130,
+        "verbatim_quote": "Tire size T155/80R17 101M"
+      }
+    },
+    {
+      "cf_ids": [
+        7900,
+        7901
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11998,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 111,
+        "verbatim_quote": "Tire size P275/65R18 114T, P255/70R18 112T (spare tire)"
+      }
+    },
+    {
+      "cf_ids": [
+        7902,
+        7903
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11998,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "tire size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 111,
+        "verbatim_quote": "Tire size P275/55R20 111H, P255/70R18 112T (spare tire)"
+      }
+    },
+    {
+      "cf_ids": [
+        7904
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1722,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 17,
+        "page": 119,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.504 x 3.937 (89.0 x 100.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7905
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2448,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 23,
+        "page": 124,
+        "verbatim_quote": "Bore × Stroke 89.0 × 100 mm (3.50 × 3.94 in)"
+      }
+    },
+    {
+      "cf_ids": [
+        7906
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2574,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke, 2.5 L",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 116,
+        "verbatim_quote": "Bore × Stroke in (mm) 3.70 × 3.54 (94.0 × 90.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7907
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2575,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke, 3.6 L",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 116,
+        "verbatim_quote": "Bore × Stroke in (mm) 3.62 × 3.58 (92.0 × 91.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7908
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3304,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.138 x 3.547 (79.7 x 90.1)"
+      }
+    },
+    {
+      "cf_ids": [
+        7909
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3306,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "3.138 x 3.193 (79.7 x 81.1)"
+      }
+    },
+    {
+      "cf_ids": [
+        7910
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3781,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.504 x 3.937 (89.0 x 100.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7911
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3783,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.760 x 3.622 (95.5 x 92)"
+      }
+    },
+    {
+      "cf_ids": [
+        7912
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 4188,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 36,
+        "page": 126,
+        "verbatim_quote": "Bore × Stroke 83.5 × 91.2 mm (3.29 × 3.59 in)"
+      }
+    },
+    {
+      "cf_ids": [
+        7913
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 4190,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 36,
+        "page": 126,
+        "verbatim_quote": "Bore × Stroke 89.0 × 100 mm (3.50 × 3.94 in)"
+      }
+    },
+    {
+      "cf_ids": [
+        7914
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5019,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 42,
+        "page": 105,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.780 x 3.189 (96 x 81)"
+      }
+    },
+    {
+      "cf_ids": [
+        7915
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6714,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke 89.0 x 100.0 mm",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 52,
+        "page": 116,
+        "verbatim_quote": "Bore × Stroke in (mm) 3.504 × 3.937 (89.0 × 100.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7916
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7870,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.504 x 3.937 (89.0 x 100.0)"
+      }
+    },
+    {
+      "cf_ids": [
+        7917
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7872,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": "when compression ratio = 8",
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "when compression ratio = 8 in (mm) 3.307 x 3.547 (84.0 x 90.1)"
+      }
+    },
+    {
+      "cf_ids": [
+        7918
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7872,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": "when compression ratio = 14",
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "when compression ratio = 14 in (mm) 3.307 x 3.500 (84.0 x 88.9)"
+      }
+    },
+    {
+      "cf_ids": [
+        7919
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11380,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke 3.760 x 3.205 in (95.5 x 81.4 mm)",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 85,
+        "page": 127,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.760 x 3.205 (95.5 x 81.4)"
+      }
+    },
+    {
+      "cf_ids": [
+        7920
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11425,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 86,
+        "page": 117,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.780 x 3.189 (96 x 81)"
+      }
+    },
+    {
+      "cf_ids": [
+        7921
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11513,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 29,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.858 x 3.622 (98 x 92)"
+      }
+    },
+    {
+      "cf_ids": [
+        7922
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11583,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 136,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.701 x 3.543 (94 x 90)"
+      }
+    },
+    {
+      "cf_ids": [
+        7923
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11616,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 88,
+        "page": 138,
+        "verbatim_quote": "Bore x Stroke in (mm) 3.071 x 3.291 (78.0 x 83.6)"
+      }
+    },
+    {
+      "cf_ids": [
+        7924
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11671,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 89,
+        "page": 113,
+        "verbatim_quote": "Bore × Stroke in (mm) 3.858 × 3.622 (98 × 92)"
+      }
+    },
+    {
+      "cf_ids": [
+        7925
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11734,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "bore x stroke",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 90,
+        "page": 123,
+        "verbatim_quote": "Bore × Stroke 89.0 × 100 mm (3.50 × 3.94 in)"
+      }
+    },
+    {
+      "cf_ids": [
+        7926
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 602,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plugs DILKAR7B8 (NGK)",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 8,
+        "page": 455,
+        "verbatim_quote": "Spark plugs DILKAR7B8 (NGK)"
+      }
+    },
+    {
+      "cf_ids": [
+        7927
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1012,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark plug part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Spark Plugs 4.3L V6 12622441 41–114"
+      }
+    },
+    {
+      "cf_ids": [
+        7928
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1013,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark plug part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Spark Plugs 6.0L V8 12621258 41–110"
+      }
+    },
+    {
+      "cf_ids": [
+        7929
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1044,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark plug part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Spark Plugs 5.3L V8; 6.2L V8 12622441 41–114"
+      }
+    },
+    {
+      "cf_ids": [
+        7930
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1486,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 104,
+        "verbatim_quote": "2.5 L 4-cylinder (A25A-FKS) engine DENSO FC16HR-Q8"
+      }
+    },
+    {
+      "cf_ids": [
+        7931
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1487,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 104,
+        "verbatim_quote": "3.5 L V6 (2GR-FKS) engine DENSO FK20HBR8"
+      }
+    },
+    {
+      "cf_ids": [
+        7932
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 105,
+        "verbatim_quote": "Make DENSO SC20HR11 DENSO SC16HR11"
+      }
+    },
+    {
+      "cf_ids": [
+        7933
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1722,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 17,
+        "page": 119,
+        "verbatim_quote": "Spark plug FXE20HE-11C"
+      }
+    },
+    {
+      "cf_ids": [
+        7934
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1840,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 19,
+        "page": 132,
+        "verbatim_quote": "2.7 L 4-cylinder (1AR-FE) engine DENSO SK16HR11"
+      }
+    },
+    {
+      "cf_ids": [
+        7935
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1841,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 19,
+        "page": 132,
+        "verbatim_quote": "3.5 L V6 (2GR-FKS) engine DENSO FK20HBR8"
+      }
+    },
+    {
+      "cf_ids": [
+        7936
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2448,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug number: PE5R-18-110 or PE5S-18-110",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 23,
+        "page": 124,
+        "verbatim_quote": "Spark-plug number Mazda Genuine spark plug PE5R-18-110 or PE5S-18-110"
+      }
+    },
+    {
+      "cf_ids": [
+        7937
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3076,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 26,
+        "page": 121,
+        "verbatim_quote": "Spark plug DXE22H11C"
+      }
+    },
+    {
+      "cf_ids": [
+        7938
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3078,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 26,
+        "page": 121,
+        "verbatim_quote": "Spark plug DXE22H11C DILKAR7N9HG"
+      }
+    },
+    {
+      "cf_ids": [
+        7939
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3304,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type (all except California)",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "Spark plug PLZKAR6A-11 (all except California models)"
+      }
+    },
+    {
+      "cf_ids": [
+        7940
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3304,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type (California)",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "DILKAR6A-11 (California models)"
+      }
+    },
+    {
+      "cf_ids": [
+        7941
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3306,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "DILKAR7E9HS"
+      }
+    },
+    {
+      "cf_ids": [
+        7942
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3415,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 30,
+        "page": 119,
+        "verbatim_quote": "Make DENSO SK16HR11"
+      }
+    },
+    {
+      "cf_ids": [
+        7943
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3781,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug: PLZKAR6A-11",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Spark plug Standard PLZKAR6A-11"
+      }
+    },
+    {
+      "cf_ids": [
+        7944
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3783,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug: DILFR5A-11 (non-FFV) / DILFR5A-11D (FFV)",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Spark plug Standard DILFR5A-11 ( for non FFV models) DILFR5A-11D (for FFV models)"
+      }
+    },
+    {
+      "cf_ids": [
+        7945
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5019,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type FXE22HR-11",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 42,
+        "page": 105,
+        "verbatim_quote": "Spark plug FXE22HR-11"
+      }
+    },
+    {
+      "cf_ids": [
+        7946
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6588,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make (2.5L)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 50,
+        "page": 105,
+        "verbatim_quote": "Make 2.5 L 4-cylinder (A25A-FKS) engine DENSO FC16HR-Q8"
+      }
+    },
+    {
+      "cf_ids": [
+        7947
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6589,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make (3.5L)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 50,
+        "page": 105,
+        "verbatim_quote": "3.5 L V6 (2GR-FKS) engine DENSO FK20HBR8"
+      }
+    },
+    {
+      "cf_ids": [
+        7948
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make (1.8L 2ZR-FAE)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 112,
+        "verbatim_quote": "1.8 L 4-cylinder (2ZR-FAE) engine DENSO FC16HR-Q8"
+      }
+    },
+    {
+      "cf_ids": [
+        7949
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make (2.0L M20A-FKS)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 112,
+        "verbatim_quote": "2.0 L 4-cylinder (M20A-FKS) engine DENSO FC20HR-Q8"
+      }
+    },
+    {
+      "cf_ids": [
+        7950
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6714,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type DXE22H11C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 52,
+        "page": 116,
+        "verbatim_quote": "Spark plug Standard DXE22H11C"
+      }
+    },
+    {
+      "cf_ids": [
+        7951
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7817,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 57,
+        "page": 12,
+        "verbatim_quote": "Make DENSO FK20HBR8"
+      }
+    },
+    {
+      "cf_ids": [
+        7952
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7870,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Spark plug DXE22H11C"
+      }
+    },
+    {
+      "cf_ids": [
+        7953
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7872,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Spark plug DILKAR7N9HG"
+      }
+    },
+    {
+      "cf_ids": [
+        7954
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8301,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make/model",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 61,
+        "page": 117,
+        "verbatim_quote": "Make DENSO SK16HR11"
+      }
+    },
+    {
+      "cf_ids": [
+        7955
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark Plugs part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Spark Plugs 12622441 41-114"
+      }
+    },
+    {
+      "cf_ids": [
+        7956
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10514,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark plug part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Spark Plugs 3.6L V6 Engine 12646780 41-130"
+      }
+    },
+    {
+      "cf_ids": [
+        7957
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11425,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 86,
+        "page": 117,
+        "verbatim_quote": "Spark plug FXE22HR-11"
+      }
+    },
+    {
+      "cf_ids": [
+        7958
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11513,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 87,
+        "page": 29,
+        "verbatim_quote": "Spark plug DILKAR7B11"
+      }
+    },
+    {
+      "cf_ids": [
+        7959
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11616,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 88,
+        "page": 138,
+        "verbatim_quote": "Spark plug DILKAR6K-11"
+      }
+    },
+    {
+      "cf_ids": [
+        7960
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11671,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 89,
+        "page": 113,
+        "verbatim_quote": "Spark plug Standard DILKAR7B11"
+      }
+    },
+    {
+      "cf_ids": [
+        7961
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11734,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug number PY8V-18-110",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 90,
+        "page": 123,
+        "verbatim_quote": "Spark-plug number Mazda Genuine spark plug*1 PY8V-18-110"
+      }
+    },
+    {
+      "cf_ids": [
+        7962
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 126,
+        "verbatim_quote": "Make DENSO FK20HBR8"
+      }
+    },
+    {
+      "cf_ids": [
+        7963
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11997,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug make",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 108,
+        "verbatim_quote": "Make DENSO SK20HR11"
+      }
+    },
+    {
+      "cf_ids": [
+        7964
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Spark plug part number ACDelco 41-124",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Spark Plugs 12637197 41-124"
+      }
+    },
+    {
+      "cf_ids": [
+        7965
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12921,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug part number",
+        "qualifier": "ACDelco 41-125 / GM 12647827",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "2.0L L4 Engine 12647827 41–125"
+      }
+    },
+    {
+      "cf_ids": [
+        7966
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12922,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "spark plug part number",
+        "qualifier": "ACDelco 41-115 / GM 12627160",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "2.5L L4 Engine 12627160 41-115"
+      }
+    },
+    {
+      "cf_ids": [
+        7967
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 602,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine model",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 8,
+        "page": 451,
+        "verbatim_quote": "Engine model FB20 (2.0 L, DOHC)"
+      }
+    },
+    {
+      "cf_ids": [
+        7968
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 602,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type: horizontally opposed, liquid cooled 4-cyl, 4-stroke DI gasoline",
+        "qualifier": null,
+        "confidence": "1.00",
+        "source_id": 8,
+        "page": 451,
+        "verbatim_quote": "Engine type Horizontally opposed, liquid cooled 4 cylinder, 4-stroke direct injection gasoline engine"
+      }
+    },
+    {
+      "cf_ids": [
+        7969
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1486,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type (A25A-FKS)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 101,
+        "verbatim_quote": "Type 4-cylinder in line, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7970
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1487,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type (2GR-FKS)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 101,
+        "verbatim_quote": "Type 6-cylinder V type, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7971
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1722,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 17,
+        "page": 119,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7972
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2448,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 23,
+        "page": 124,
+        "verbatim_quote": "Type DOHC-16V in-line, 4-cylinder"
+      }
+    },
+    {
+      "cf_ids": [
+        7973
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2574,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine model, 2.5 L",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 116,
+        "verbatim_quote": "Engine model FB25 (2.5 L, DOHC, non-turbo)"
+      }
+    },
+    {
+      "cf_ids": [
+        7974
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 2575,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine model, 3.6 L",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 24,
+        "page": 116,
+        "verbatim_quote": "Engine model EZ36 (3.6 L, DOHC, non-turbo)"
+      }
+    },
+    {
+      "cf_ids": [
+        7975
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3076,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 26,
+        "page": 121,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC\nCylinder arrangement 4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        7976
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3078,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 26,
+        "page": 121,
+        "verbatim_quote": "KR20DDET Gasoline, 4-cycle, DOHC 4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        7977
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3304,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7978
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3306,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7979
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3415,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 30,
+        "page": 115,
+        "verbatim_quote": "Type 6-cylinder V type, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7980
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3781,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type: Gasoline, 4-cycle, DOHC",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7981
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3783,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type: Gasoline, 4-cycle, DOHC",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7982
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 4185,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 36,
+        "page": 126,
+        "verbatim_quote": "Type DOHC-16V in-line, 4-cylinder"
+      }
+    },
+    {
+      "cf_ids": [
+        7983
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5019,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 42,
+        "page": 105,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7984
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7870,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7985
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7872,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7986
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8089,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "2.5 L engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 143,
+        "verbatim_quote": "Engine model FB25 (2.5 L, DOHC, non-turbo)"
+      }
+    },
+    {
+      "cf_ids": [
+        7987
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8090,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "2.4 L engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 60,
+        "page": 143,
+        "verbatim_quote": "Engine model FA24 (2.4 L, DOHC, turbo)"
+      }
+    },
+    {
+      "cf_ids": [
+        7988
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8301,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 61,
+        "page": 115,
+        "verbatim_quote": "Type 6-cylinder V type, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7989
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11380,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type: Gasoline, 4-cycle, DOHC",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 85,
+        "page": 127,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7990
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11425,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 86,
+        "page": 117,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7991
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11513,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 29,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7992
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11583,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 136,
+        "verbatim_quote": "Type Diesel, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7993
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11616,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 88,
+        "page": 138,
+        "verbatim_quote": "Type Gasoline, 4-cycle, DOHC"
+      }
+    },
+    {
+      "cf_ids": [
+        7994
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11734,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 90,
+        "page": 123,
+        "verbatim_quote": "Type DOHC-16V in-line, 4-cylinder"
+      }
+    },
+    {
+      "cf_ids": [
+        7995
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine model",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 124,
+        "verbatim_quote": "Model 3.5L 6-cylinder (2GR-FKS)"
+      }
+    },
+    {
+      "cf_ids": [
+        7996
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 124,
+        "verbatim_quote": "Type 6-cylinder V type, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7997
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11997,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine type",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 105,
+        "verbatim_quote": "Type 8-cylinder V-type, 4-cycle, gasoline"
+      }
+    },
+    {
+      "cf_ids": [
+        7998
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1722,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 17,
+        "page": 119,
+        "verbatim_quote": "Cylinder arrangement 4-cylinder"
+      }
+    },
+    {
+      "cf_ids": [
+        7999
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3304,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 28,
+        "page": 108,
+        "verbatim_quote": "Cylinder arrangement 4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        8000
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3781,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement: 4-cylinder in-line",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Cylinder arrangement 4-cylinder in-line"
+      }
+    },
+    {
+      "cf_ids": [
+        8001
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3783,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement: 6-cylinder, V-block, Slanted at 60°",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 33,
+        "page": 117,
+        "verbatim_quote": "Cylinder arrangement 6-cylinder, V-block, Slanted at 60°"
+      }
+    },
+    {
+      "cf_ids": [
+        8002
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 5019,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 42,
+        "page": 105,
+        "verbatim_quote": "Cylinder arrangement 6-cylinder, V-block, Slanted at 60°"
+      }
+    },
+    {
+      "cf_ids": [
+        8003
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7870,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "Cylinder arrangement 4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        8004
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 7872,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 58,
+        "page": 132,
+        "verbatim_quote": "4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        8005
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11380,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement: 6-cylinder, V-block, Slanted at 60°",
+        "qualifier": null,
+        "confidence": "0.98",
+        "source_id": 85,
+        "page": 127,
+        "verbatim_quote": "Cylinder arrangement 6-cylinder, V-block, Slanted at 60°"
+      }
+    },
+    {
+      "cf_ids": [
+        8006
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11425,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 86,
+        "page": 117,
+        "verbatim_quote": "Cylinder arrangement 6-cylinder, V-block, Slanted at 60°"
+      }
+    },
+    {
+      "cf_ids": [
+        8007
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11513,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 29,
+        "verbatim_quote": "Cylinder arrangement 8-cylinder, V-block, Slanted at 90°"
+      }
+    },
+    {
+      "cf_ids": [
+        8008
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11583,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.95",
+        "source_id": 87,
+        "page": 136,
+        "verbatim_quote": "Cylinder arrangement 8-cylinder, V-block, Slanted at 90°"
+      }
+    },
+    {
+      "cf_ids": [
+        8009
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11616,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.97",
+        "source_id": 88,
+        "page": 138,
+        "verbatim_quote": "Cylinder arrangement 4-cylinder, inline"
+      }
+    },
+    {
+      "cf_ids": [
+        8010
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11671,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "cylinder arrangement",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 89,
+        "page": 113,
+        "verbatim_quote": "Cylinder arrangement 8-cylinder, V-slanted at 90°"
+      }
+    },
+    {
+      "cf_ids": [
+        8011,
+        8012
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 106,
+        "verbatim_quote": "Wheel size 16 × 6 1/2 J, 17 × 4 T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8013,
+        8014
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 107,
+        "verbatim_quote": "Wheel size 17 × 7 1/2 J, 17 × 4 T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8015,
+        8016
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 107,
+        "verbatim_quote": "Wheel size 18 × 8 J, 17 × 4 T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8017,
+        8018
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1488,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type E",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 14,
+        "page": 108,
+        "verbatim_quote": "Wheel size 19 × 8 J, 17 × 4 T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8019,
+        8020
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Wheel size 15 × 6 J, 16 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8021,
+        8022
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Wheel size 16 × 6 1/2 J, 16 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8023,
+        8024
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1550,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 15,
+        "page": 109,
+        "verbatim_quote": "Wheel size 17 × 7 J, 16 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8025,
+        8026,
+        8027
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 3415,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 30,
+        "page": 123,
+        "verbatim_quote": "Wheel size 17 × 7J, 17 × 7 1/2J, 20 × 7J"
+      }
+    },
+    {
+      "cf_ids": [
+        8028,
+        8029
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 115,
+        "verbatim_quote": "Wheel size 15 × 6 1/2J, 17 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8030,
+        8031
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 116,
+        "verbatim_quote": "Wheel size 16 × 7J, 17 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8032,
+        8033
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 6646,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 51,
+        "page": 116,
+        "verbatim_quote": "Wheel size 18 × 8J, 17 × 4T (compact spare)"
+      }
+    },
+    {
+      "cf_ids": [
+        8034,
+        8035,
+        8036
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 8302,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 61,
+        "page": 121,
+        "verbatim_quote": "Wheel size 17 × 7J, 17 × 7 1/2J, 20 × 7J"
+      }
+    },
+    {
+      "cf_ids": [
+        8037
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "17-inch wheel size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 128,
+        "verbatim_quote": "Wheel size 17 x 7J"
+      }
+    },
+    {
+      "cf_ids": [
+        8038
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "18-inch wheel size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 129,
+        "verbatim_quote": "Wheel size 18 x 7J"
+      }
+    },
+    {
+      "cf_ids": [
+        8039
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "19-inch wheel size",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 129,
+        "verbatim_quote": "Wheel size 19 x 7J"
+      }
+    },
+    {
+      "cf_ids": [
+        8040
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11908,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "compact spare wheel size (2WD models)",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 91,
+        "page": 130,
+        "verbatim_quote": "Wheel size 17 x 4T"
+      }
+    },
+    {
+      "cf_ids": [
+        8041,
+        8042
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11998,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type A",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 111,
+        "verbatim_quote": "Wheel size 18 × 8J, 18 × 8J (spare wheel)"
+      }
+    },
+    {
+      "cf_ids": [
+        8043,
+        8044
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 11998,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "wheel size Type B",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 92,
+        "page": 111,
+        "verbatim_quote": "Wheel size 20 × 8J, 18 × 8J (spare wheel)"
+      }
+    },
+    {
+      "cf_ids": [
+        8045
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1007,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine air cleaner/filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 84,
+        "verbatim_quote": "Engine Air Cleaner/Filter 22845992 A3181C"
+      }
+    },
+    {
+      "cf_ids": [
+        8046
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1007,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger compartment air filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 85,
+        "verbatim_quote": "Passenger Compartment Air Filter 23281440 CF188"
+      }
+    },
+    {
+      "cf_ids": [
+        8047
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1012,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Oil filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 84,
+        "verbatim_quote": "Oil Filter 4.3L V6 19330000 PF63E"
+      }
+    },
+    {
+      "cf_ids": [
+        8048
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1013,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Oil filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 84,
+        "verbatim_quote": "Oil Filter 6.0L V8 19303975 PF48E"
+      }
+    },
+    {
+      "cf_ids": [
+        8049
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 1044,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Oil filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 10,
+        "page": 84,
+        "verbatim_quote": "Oil Filter 5.3L V8; 6.2L V8 19330000 PF63E"
+      }
+    },
+    {
+      "cf_ids": [
+        8050
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Oil Filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Oil Filter 19330000 PF63E"
+      }
+    },
+    {
+      "cf_ids": [
+        8051
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine Air Cleaner/Filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Engine Air Cleaner/Filter 22845992 A3181C"
+      }
+    },
+    {
+      "cf_ids": [
+        8052
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10342,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger Compartment Air Filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 76,
+        "page": 23,
+        "verbatim_quote": "Passenger Compartment Air Filter 23281440 CF188"
+      }
+    },
+    {
+      "cf_ids": [
+        8053
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10499,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger compartment air filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Passenger Compartment Air Filter 13508023 CF185"
+      }
+    },
+    {
+      "cf_ids": [
+        8054
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10514,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine oil filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Engine Oil Filter 3.6L V6 Engine 19330000 PF63E"
+      }
+    },
+    {
+      "cf_ids": [
+        8055
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 10514,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine air cleaner/filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 77,
+        "page": 32,
+        "verbatim_quote": "Engine Air Cleaner/Filter 3.6L V6 Engine 23321606 A3212C"
+      }
+    },
+    {
+      "cf_ids": [
+        8056
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine oil filter part number",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Engine Oil Filter 12683286 PF64"
+      }
+    },
+    {
+      "cf_ids": [
+        8057
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Engine air cleaner/filter part number ACDelco A3227C",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Engine Air Cleaner/Filter 95238310 A3227C"
+      }
+    },
+    {
+      "cf_ids": [
+        8058
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12707,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "Passenger compartment air filter part number ACDelco CF202",
+        "qualifier": null,
+        "confidence": "0.99",
+        "source_id": 96,
+        "page": 15,
+        "verbatim_quote": "Passenger Compartment Air Filter 95369731 CF202"
+      }
+    },
+    {
+      "cf_ids": [
+        8059
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine oil filter part number",
+        "qualifier": "ACDelco PF64 / GM 12640445",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Engine Oil Filter 12640445 PF64"
+      }
+    },
+    {
+      "cf_ids": [
+        8060
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "engine air cleaner/filter part number",
+        "qualifier": "ACDelco A3197C / GM 22971580",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Engine Air Cleaner/Filter 22971580 A3197C"
+      }
+    },
+    {
+      "cf_ids": [
+        8061
+      ],
+      "spec_orig": {
+        "vehicle_variant_id": 12907,
+        "spec_type": "other",
+        "value_numeric": null,
+        "value_unit": null,
+        "value_text": "passenger compartment air filter part number",
+        "qualifier": "ACDelco CF185 / GM 13508023",
+        "confidence": "0.99",
+        "source_id": 98,
+        "page": 17,
+        "verbatim_quote": "Passenger Compartment Air Filter 13508023 CF185"
+      }
+    }
+  ]
+}
