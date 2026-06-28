@@ -141,6 +141,9 @@ const SPEC_TYPES = [
   // Batch C additions (0003) — richer manual data that previously fell into `other`.
   "towing_capacity", "fuel_octane", "compression_ratio",
   "displacement", "def_type", "def_capacity",
+  // Batch D additions (0005) — numeric `other`-bucket families (also re-keyed in place).
+  "gcwr", "dimension", "ac_compressor_oil_capacity",
+  "washer_fluid_capacity", "trailer_tongue_weight",
   "other",
 ];
 
@@ -158,10 +161,10 @@ Engine association:
 - Leave engine empty only for values that apply to the whole vehicle.
 
 Spec typing:
-- Use the spec_type that best matches. Prefer a specific type over "other" whenever one fits — the vocabulary includes fuel_capacity, axle_fluid_type, axle_fluid_capacity, transfer_case_fluid_type, transfer_case_fluid_capacity, gvwr, gawr, idle_speed (fast-idle / curb-idle RPM), towing_capacity (max trailer / towing weight rating), fuel_octane (required fuel grade / octane), compression_ratio, displacement (engine displacement), def_type and def_capacity (diesel exhaust fluid / AdBlue), in addition to the oil/coolant/transmission/brake/torque/tire/spark-plug/battery/maintenance/refrigerant types.
+- Use the spec_type that best matches. Prefer a specific type over "other" whenever one fits — the vocabulary includes fuel_capacity, axle_fluid_type, axle_fluid_capacity, transfer_case_fluid_type, transfer_case_fluid_capacity, gvwr, gawr, idle_speed (fast-idle / curb-idle RPM), towing_capacity (max trailer / towing weight rating), fuel_octane (required fuel grade / octane), compression_ratio, displacement (engine displacement), def_type and def_capacity (diesel exhaust fluid / AdBlue), gcwr (gross combined weight rating), dimension (a vehicle dimension — wheelbase, overall length/width/height, track, tread, or ground clearance; put WHICH dimension in value_text), ac_compressor_oil_capacity (A/C compressor / refrigerant oil amount), washer_fluid_capacity (windshield-washer reservoir), trailer_tongue_weight (max trailer tongue / nose weight), in addition to the oil/coolant/transmission/brake/torque/tire/spark-plug/battery/maintenance/refrigerant types.
 - Only use "other" when NOTHING fits. When you do, value_text is REQUIRED and must be a short descriptive label of WHAT the value is (e.g. "front GAWR", "fast-idle RPM", "wheel-nut starting torque") — never leave it empty. A bare "340 kg" with no subject is useless and will be rejected.
-- Numeric specs (capacities, weights, towing, displacement, def_capacity): provide value_numeric + value_unit. Textual specs (fluid types, viscosities/grades, fuel_octane, compression_ratio like "10.5:1", def_type): provide value_text.
-- Weights (gvwr, gawr): report value_numeric in whichever unit the document prints (kg or lb) and set value_unit to match — do NOT convert it yourself; the pipeline canonicalizes weights downstream. towing_capacity: same — report the printed unit (lb or kg), do not convert.
+- Numeric specs (capacities, weights, towing, displacement, def_capacity, gcwr, dimension, trailer_tongue_weight, washer_fluid_capacity, ac_compressor_oil_capacity): provide value_numeric + value_unit. Textual specs (fluid types, viscosities/grades, fuel_octane, compression_ratio like "10.5:1", def_type): provide value_text.
+- Weights (gvwr, gawr, gcwr): report value_numeric in whichever unit the document prints (kg or lb) and set value_unit to match — do NOT convert it yourself; the pipeline canonicalizes weights downstream. towing_capacity and trailer_tongue_weight: same — report the printed unit (lb or kg), do not convert.
 - qualifier captures conditions like "with filter", "severe service", "cold", or "front"/"rear" for per-axle ratings, or the engine/configuration a towing rating applies to.
 
 Component facts — fuses and bulbs (put these in component_facts, NOT specs):
@@ -247,6 +250,9 @@ const RPM_UNITS = ["rpm", "r/min", "min-1"];
 // "cm³"/"cm3" stay, "L"/liter stay. Owner manuals print displacement mostly as
 // "L" (e.g. 3.5L); cc / cu-in are included for completeness.
 const DISPLACEMENT_UNITS = ["l", "liter", "liters", "litre", "litres", "cc", "ccm", "cm3", "cm³", "cu-in", "cuin", "ci", "cid", "cubic-inch", "cubic-inches"];
+// Batch D — vehicle dimension length units (wheelbase/length/width/height/tread/track/clearance).
+// (After normUnitForMatch: "in", "mm", "cm", "m", or the inch glyph ".)
+const LENGTH_UNITS = ["in", "inch", "inches", "\"", "mm", "cm", "m"];
 
 const NUMERIC_TYPES = new Set([
   "oil_capacity", "coolant_capacity", "transmission_fluid_capacity",
@@ -257,13 +263,18 @@ const NUMERIC_TYPES = new Set([
   "gvwr", "gawr", "idle_speed",
   // Batch C numeric additions (towing weight, engine displacement, DEF tank).
   "towing_capacity", "displacement", "def_capacity",
+  // Batch D numeric additions (gcwr, dimensions, A/C compressor oil, washer fluid, tongue weight).
+  "gcwr", "dimension", "ac_compressor_oil_capacity",
+  "washer_fluid_capacity", "trailer_tongue_weight",
 ]);
 
 // Weights are canonicalized to a single unit so one manual can't store lb while
 // another stores kg for the same spec_type. CANONICAL WEIGHT UNIT = kg (SI);
 // the display layer converts back to lb if it ever wants to. Conversion happens
 // here at normalize time, BEFORE validation (which then checks the kg range).
-const WEIGHT_TYPES = new Set(["gvwr", "gawr"]);
+// gcwr joins gvwr/gawr as a canonicalized-to-kg weight. trailer_tongue_weight is deliberately
+// NOT here — like towing_capacity it keeps the printed unit (lb or kg) and validates per-unit.
+const WEIGHT_TYPES = new Set(["gvwr", "gawr", "gcwr"]);
 const LB_TO_KG = 0.45359237;
 
 function norm(u) {
@@ -431,6 +442,46 @@ function validateSpec(s) {
         if (/gal/.test(u)) { if (v < 1 || v > 30) { ok = false; why = `DEF capacity ${v}${u} out of range`; } }
         else if (/l|liter|litre/.test(u)) { if (v < 3 || v > 120) { ok = false; why = `DEF capacity ${v}${u} out of range`; } }
         else { if (v < 1 || v > 130) { ok = false; why = `DEF capacity ${v}${u} out of range`; } } // qt
+        break;
+      }
+      // ---- Batch D numeric types ----
+      case "gcwr": {
+        // gross combined weight rating; canonicalized to kg by normalizeSpec (WEIGHT_TYPES).
+        // Spans light cars to HD dually-with-trailer, so the kg band is wide.
+        if (u !== "kg") { ok = false; why = `gcwr unit "${u}" not canonical kg (normalize failed)`; break; }
+        if (v < 1500 || v > 40000) { ok = false; why = `gcwr ${v}kg out of range`; }
+        break;
+      }
+      case "trailer_tongue_weight": {
+        // a weight; NOT canonicalized (kept in the printed unit, like towing_capacity).
+        if (!WEIGHT_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a weight unit`; break; }
+        if (/kg|kilogram/.test(u)) { if (v < 10 || v > 4000) { ok = false; why = `tongue weight ${v}${u} out of range`; } }
+        else { if (v < 20 || v > 9000) { ok = false; why = `tongue weight ${v}${u} out of range`; } } // lb
+        break;
+      }
+      case "dimension": {
+        // length family (wheelbase / overall L·W·H / tread / track / ground clearance) — one
+        // type, the measurement+config carried in value_text. Lenient: spans clearance (~5 in)
+        // to overall length (~270 in); the gate only rejects clearly-wrong magnitudes/units.
+        if (!LENGTH_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a length unit`; break; }
+        if (u === "mm") { if (v < 20 || v > 12000) { ok = false; why = `dimension ${v}mm out of range`; } }
+        else if (u === "cm") { if (v < 2 || v > 1200) { ok = false; why = `dimension ${v}cm out of range`; } }
+        else if (u === "m") { if (v < 0.1 || v > 12) { ok = false; why = `dimension ${v}m out of range`; } }
+        else { if (v < 0.5 || v > 480) { ok = false; why = `dimension ${v}${u} out of range`; } } // in / "
+        break;
+      }
+      case "ac_compressor_oil_capacity": {
+        // small A/C compressor-oil volume: fl oz / oz / ml / cc.
+        if (!/(oz|ml|cc|cm3)/.test(u)) { ok = false; why = `unit "${u}" not an oil-volume unit`; break; }
+        if (/ml|cc|cm3/.test(u)) { if (v < 10 || v > 800) { ok = false; why = `compressor oil ${v}${u} out of range`; } }
+        else { if (v < 0.3 || v > 40) { ok = false; why = `compressor oil ${v}${u} out of range`; } } // oz / fl-oz
+        break;
+      }
+      case "washer_fluid_capacity": {
+        if (!CAP_UNITS.includes(u)) { ok = false; why = `unit "${u}" not a capacity unit`; break; }
+        if (/gal/.test(u)) { if (v < 0.3 || v > 8) { ok = false; why = `washer capacity ${v}${u} out of range`; } }
+        else if (/l|liter|litre/.test(u)) { if (v < 1 || v > 15) { ok = false; why = `washer capacity ${v}${u} out of range`; } }
+        else { if (v < 1 || v > 16) { ok = false; why = `washer capacity ${v}${u} out of range`; } } // qt
         break;
       }
     }
