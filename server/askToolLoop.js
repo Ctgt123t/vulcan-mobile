@@ -19,7 +19,12 @@
 // stubs — see scripts/askToolLoopTest.js.
 // ----------------------------------------------------------------------------
 
-import { lookupSpec, formatSpecContextBlock } from "./vehicleSpecs.js";
+import {
+  lookupSpec,
+  formatSpecContextBlock,
+  lookupFuse,
+  formatFuseContextBlock,
+} from "./vehicleSpecs.js";
 import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
 
 // Iteration cap on the tool loop. Env-configurable so the forced-text fallback
@@ -45,6 +50,7 @@ export const SPEC_TYPE_ENUM = [
   "torque",
   "battery",
   "maintenanceInterval",
+  "fuse",
 ];
 
 export const SPEC_LOOKUP_TOOL_NAME = "spec_lookup";
@@ -52,7 +58,7 @@ export const SPEC_LOOKUP_TOOL_NAME = "spec_lookup";
 export const specLookupTool = {
   name: SPEC_LOOKUP_TOOL_NAME,
   description:
-    "Retrieve VERIFIED factory specifications for the technician's current vehicle from Vulcan's provenance-tracked spec database. Call this whenever the technician asks for a numeric or factory specification — oil capacity/type/viscosity, coolant, transmission/brake/power-steering fluid, a torque value, battery group, or a maintenance interval — INCLUDING indirect phrasings like \"what oil does it take\", \"oil change specs\", or \"how much oil for a change\". ALSO call it with spec_types [\"oil\"] for OIL FILTER questions (filter type, part number, location) — verified oil-filter facts ride along with the oil spec rows when the database has them. The vehicle is supplied automatically; you only choose which spec_types to look up. If the database has a verified value it is returned for you to state directly as confirmed. If it does not, you get an explicit no-record result — then give the commonly-known figure as a likely value the technician must confirm against the OEM source, never as a confirmed factory number.",
+    "Retrieve VERIFIED factory specifications for the technician's current vehicle from Vulcan's provenance-tracked spec database. Call this whenever the technician asks for a numeric or factory specification — oil capacity/type/viscosity, coolant, transmission/brake/power-steering fluid, a torque value, battery group, or a maintenance interval — INCLUDING indirect phrasings like \"what oil does it take\", \"oil change specs\", or \"how much oil for a change\". ALSO call it with spec_types [\"oil\"] for OIL FILTER questions (filter type, part number, location) — verified oil-filter facts ride along with the oil spec rows when the database has them. ALSO call it with spec_types [\"fuse\"] for FUSE / FUSE-BOX questions — \"which fuse is the wipers\", \"what amperage is the cigarette-lighter fuse\", \"what does fuse 24 power\", \"show me the fuse list\" — and when the technician names a specific circuit, pass it in the `circuit` field (e.g. \"wipers\", \"cigarette lighter\", \"horn\"). The vehicle is supplied automatically; you only choose which spec_types to look up. If the database has a verified value it is returned for you to state directly as confirmed (for fuse, the verified assignment from the vehicle's own legend). If it does not, you get an explicit no-record result — then give the commonly-known figure as a likely value the technician must confirm against the OEM source / the printed legend, never as a confirmed factory number.",
   input_schema: {
     type: "object",
     properties: {
@@ -61,6 +67,11 @@ export const specLookupTool = {
         items: { type: "string", enum: SPEC_TYPE_ENUM },
         description:
           "One or more spec categories to look up for the current vehicle. Include every category the question touches.",
+      },
+      circuit: {
+        type: "string",
+        description:
+          "For a spec_types [\"fuse\"] lookup only: the circuit/component the technician named (e.g. \"wipers\", \"cigarette lighter\", \"horn\", \"fuel pump\"), if they named one. Omit it for a full fuse-list request.",
       },
     },
     required: ["spec_types"],
@@ -108,41 +119,73 @@ export async function handleSpecLookup(input, ctx) {
     };
   }
 
-  // Same lookupSpec the regex fast-path uses — one source of truth. lookupSpec
-  // is airtight fail-soft (never throws; a DB outage or query error degrades to
-  // a clean miss), so a DB-down and a genuine no-record are indistinguishable
-  // here and both hedge.
+  const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+
+  // Fuse is a DIFFERENT shape (component_fact + circuit keyword) and takes a
+  // dedicated retrieval — split it out from the fluid/torque spec types so the
+  // 8 existing intents behave exactly as before.
+  const fuseRequested = types.includes("fuse");
+  const specTypes = types.filter((t) => t !== "fuse");
+  const circuit = typeof input?.circuit === "string" ? input.circuit : "";
+
+  // Fluid/torque path — same lookupSpec the regex fast-path uses (one source of
+  // truth, airtight fail-soft: DB-down and no-record both fall through to hedge).
   const hits = [];
-  for (const specType of types) {
+  for (const specType of specTypes) {
     const r = await lookupSpec(vehicle, specType);
     if (r && r.data) hits.push({ specType, data: r.data });
   }
-
-  // Surface to the endpoint whether any DB component facts (the oil-filter
-  // fold riders) actually reached this answer — the componentFact demand log
-  // in /api/ask skips logging a miss when they did.
+  // Surface to the endpoint whether any DB component facts (the oil-filter fold
+  // riders) reached this answer — the componentFact demand log skips a miss then.
   if (hits.some((h) => h.data.componentFacts && h.data.componentFacts.length > 0)) {
     ctx.componentFactsServed = true;
   }
 
-  const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+  // Fuse path — dedicated component_fact retrieval (fail-soft; null on no data).
+  const fuseResult = fuseRequested ? await lookupFuse(vehicle, circuit) : null;
 
-  if (hits.length === 0) {
-    return {
-      text:
-        `No verified record in the Vulcan spec database for the ${label} for: ` +
-        `${types.join(", ")}. Do not present a number as a confirmed factory ` +
-        `spec. If you know the commonly-accepted figure, give it as a likely ` +
-        `value and tell the technician to confirm it against the OEM service ` +
-        `manual or the cap/label (e.g. "typically around X — verify against the ` +
-        `manual"). If you don't have a reliable ballpark, say so plainly and ` +
-        `point them to the OEM source.`,
-    };
+  // Assemble whatever VERIFIED blocks we got. formatSpecContextBlock renders the
+  // fluid rows ("use these exactly"); formatFuseContextBlock renders the fuse
+  // legend ("state as CONFIRMED").
+  const blocks = [];
+  if (hits.length > 0) blocks.push(formatSpecContextBlock(hits));
+  if (fuseResult) blocks.push(formatFuseContextBlock(vehicle, fuseResult));
+
+  if (blocks.length > 0) {
+    let text = blocks.join("\n\n");
+    // Verified for some, but a requested fuse legend was missing -> append the
+    // fuse hedge so the model doesn't fabricate a fuse number for the gap.
+    if (fuseRequested && !fuseResult) text += "\n\n" + fuseMissHedge(label);
+    return { text };
   }
 
-  // formatSpecContextBlock renders the DB-shaped rows with the "use these values
-  // exactly — do not substitute your own recollection" framing.
-  return { text: formatSpecContextBlock(hits) };
+  // Nothing verified. A pure fuse miss gets the fuse hedge; otherwise the spec
+  // hedge (with a fuse note appended if fuse was also asked).
+  if (fuseRequested && specTypes.length === 0) {
+    return { text: fuseMissHedge(label) };
+  }
+  let text =
+    `No verified record in the Vulcan spec database for the ${label} for: ` +
+    `${specTypes.join(", ")}. Do not present a number as a confirmed factory ` +
+    `spec. If you know the commonly-accepted figure, give it as a likely ` +
+    `value and tell the technician to confirm it against the OEM service ` +
+    `manual or the cap/label (e.g. "typically around X — verify against the ` +
+    `manual"). If you don't have a reliable ballpark, say so plainly and ` +
+    `point them to the OEM source.`;
+  if (fuseRequested) text += "\n\n" + fuseMissHedge(label);
+  return { text };
+}
+
+// Fuse-miss hedge — mirrors the Fix-1 diagram-clause carve-out: no verified
+// legend, so allow honest hedged general guidance, never an exact number as fact.
+function fuseMissHedge(label) {
+  return (
+    `No verified fuse legend in the Vulcan spec database for the ${label}. Do NOT ` +
+    `state an exact fuse number as a confirmed fact. You MAY give commonly-known ` +
+    `general guidance as a LIKELY value for the technician to confirm against the ` +
+    `printed legend (e.g. "on this generation it's commonly around #X / a ~20A ` +
+    `fuse in the under-hood box — verify against your legend"), never as confirmed.`
+  );
 }
 
 // ---- diagram_lookup tool ---------------------------------------------------

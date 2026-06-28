@@ -42,6 +42,10 @@ export const SPEC_TYPES = Object.freeze({
   TORQUE: "torque",
   BATTERY: "battery",
   MAINTENANCE_INTERVAL: "maintenanceInterval",
+  // Fuse-box assignments (Fix 2). NOT a fluid spec_type — retrieved from
+  // component_fact via lookupFuse, NOT lookupSpec/SPEC_TYPE_MAP. Tool-only (it
+  // is NOT in SPEC_PATTERNS, so it never routes through the fluid fast-path).
+  FUSE: "fuse",
 });
 
 // ----------- Cache ----------------------------------------------------------
@@ -176,6 +180,7 @@ const SPEC_SHAPED_PATTERNS = [
   /\b\d{1,2}w[-\s]?\d{2}\b/i, // oil weight: 0w20, 0w-20, 5w30, 10w-40
   /\boil\b|\bcoolant\b|\bantifreeze\b|\bfluid\b|\batf\b|\brefrigerant\b|\br[-\s]?134a\b|\b1234yf\b/i,
   /\bgap\b|\bclearance\b/i,
+  /\bfuse\b|\bfuse\s*box\b|\bamperage\b/i, // fuse questions -> never cache (Fix 2)
   /\binterval\b|\bevery\s+\d/i,
   /\btire\s+pressure\b/i,
   /\bgear\s+ratio\b|\bbolt\s+pattern\b/i,
@@ -291,6 +296,82 @@ export function recordComponentFactMiss(vehicle) {
   } catch {
     // keep the no-throw guarantee airtight
   }
+}
+
+// ----------- Fuse retrieval (component_fact, NOT the fluid path) -------------
+//
+// Separate from lookupSpec because fuse data is component_fact (not spec) and
+// carries a circuit keyword; it does NOT route through provider.lookup /
+// SPEC_TYPE_MAP (which would always-miss and pollute spec_miss with a non-spec
+// type). Airtight fail-soft like lookupSpec — never throws; DB-down / error /
+// no-record all degrade to a clean miss (null) -> the Fix-1 hedge. A miss logs a
+// "fuse" demand row (same fail-soft queue as componentFact).
+export async function lookupFuse(vehicle, circuit) {
+  try {
+    if (!vehicle || !vehicle.year || !vehicle.make || !vehicle.model) return null;
+    cache.providerCalls++;
+    const r = await supabaseSpecs.lookupFuse(vehicle, circuit);
+    if (r && Array.isArray(r.rows) && r.rows.length > 0) {
+      cache.hits++;
+      persist();
+      console.log(
+        `[vehicleSpecs] HIT fuse for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
+          `(matched=${r.matched}, rows=${r.rows.length}/${r.total})`,
+      );
+      return r;
+    }
+    cache.misses++;
+    persist();
+    console.log(
+      `[vehicleSpecs] MISS fuse for ${vehicle.year} ${vehicle.make} ${vehicle.model} — falling through to the hedge`,
+    );
+    try {
+      await supabaseSpecs.recordSpecMiss(vehicle, "fuse");
+    } catch (err) {
+      console.warn(`[vehicleSpecs] fuse miss-log unexpected error (continuing): ${err.message}`);
+    }
+    return null;
+  } catch (err) {
+    console.warn(
+      `[vehicleSpecs] lookupFuse unexpected error (failing soft to miss): ${err.message}`,
+    );
+    return null;
+  }
+}
+
+// Verified fuse legend as a tool-result context block. Marked VERIFIED so the
+// model states it as CONFIRMED fact (the verified branch of label-not-suppress —
+// the Fix-1 hedge is only for when lookupFuse returns nothing). The raw verbatim
+// quote rides on every line so the model never has to fabricate a circuit name.
+export function formatFuseContextBlock(vehicle, result) {
+  const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+  const scope = result.matched
+    ? `the fuse(s) matching "${result.circuit}"`
+    : `the full fuse legend`;
+  const lines = [
+    `VERIFIED fuse assignments for the ${label} — ${scope} — from the vehicle's own ` +
+      `manual (source: ${result.sourceTitle}, doc-extracted, provenance-tracked). State these ` +
+      `as CONFIRMED; do NOT hedge and do NOT substitute your own recollection. ` +
+      `Each line is: fuse number — amperage — circuit (verbatim from the legend):`,
+    "",
+  ];
+  for (const r of result.rows) {
+    const circuit = r.circuit_text || "(see verbatim)";
+    // Numbered rows show the position; circuit-named rows (no position in the
+    // manual) just show amperage + circuit.
+    const head = r.fuse_number ? `fuse ${r.fuse_number} — ${r.amperage}` : `${r.amperage}`;
+    lines.push(`• ${head} — ${circuit}   [verbatim: "${r.verbatim_quote}"]`);
+  }
+  if (!result.matched && result.circuit) {
+    lines.push(
+      "",
+      `No line explicitly matched "${result.circuit}" — the full legend is shown so you can ` +
+        `locate it from the verbatim circuit names. Point the tech to the matching line; if ` +
+        `none clearly fits, say so plainly rather than guessing.`,
+    );
+  }
+  lines.push("", `_Source: ${result.sourceTitle}_`);
+  return lines.join("\n");
 }
 
 // ----------- Formatters (DB-native) -----------------------------------------

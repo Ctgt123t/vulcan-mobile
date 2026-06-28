@@ -36,6 +36,7 @@ import {
   canonicalizeMake,
   normalizeModel,
 } from "../canonicalVehicle.js";
+import { shapeFuseRows, filterByCircuit, FUSE_ROW_CAP } from "../fuseLegend.js";
 
 export const id = "supabase-spec-db";
 
@@ -272,6 +273,56 @@ export async function lookup(vehicle, appSpecType, _params, _fetcher) {
   } catch (err) {
     console.warn(
       `[supabase-spec] lookup failed for ${appSpecType} (treating as miss): ${err.message}`,
+    );
+    return null;
+  }
+}
+
+// ---- Fuse-assignment retrieval (component_fact, fact_type='amperage') -------
+//
+// Fuse data is component_fact, NOT spec, so it does NOT route through lookup() /
+// SPEC_TYPE_MAP. Pulls the vehicle's fuse legend YEAR-EXACT (across all engine
+// variants of the year/make/model, deduped — a fuse box is vehicle-wide, not
+// per-engine) and, when a circuit keyword is given, filters to the matching
+// fuse(s) via the synonym expansion in fuseLegend.js. Same canonicalization +
+// airtight fail-soft posture as lookup(): returns null on DB-down / query error
+// / no-record (the caller then hedges; never fabricates). Returns:
+//   { rows:[{fuse_number, amperage, circuit_text, verbatim_quote}], matched,
+//     circuit, sourceTitle, trustTier, total } | null
+export async function lookupFuse(vehicle, circuit) {
+  if (!isDbReady()) return null;
+  await ensureCanonicalLoaded();
+  const cMake = canonicalizeMake(vehicle.make);
+  const cModel = normalizeModel(vehicle.model);
+  try {
+    const res = await query(
+      `select cf.component, cf.value_text, cf.verbatim_quote,
+              src.title as source_title, src.trust_tier
+         from component_fact cf
+         join vehicle_variant vv on vv.id = cf.vehicle_variant_id
+         join source src on src.id = cf.source_id
+        where vv.year = $1
+          and lower(vv.make) = lower($2)
+          and lower(vv.model) = lower($3)
+          and cf.fact_type = 'amperage'
+        order by cf.component`,
+      [vehicle.year, cMake, cModel],
+    );
+    if (res.rows.length === 0) return null; // no fuse legend for this vehicle
+
+    const all = shapeFuseRows(res.rows);
+    const { rows, matched } = filterByCircuit(all, circuit);
+    return {
+      rows: rows.slice(0, FUSE_ROW_CAP),
+      matched,
+      circuit: String(circuit ?? "").trim(),
+      sourceTitle: res.rows[0].source_title,
+      trustTier: res.rows[0].trust_tier,
+      total: all.length,
+    };
+  } catch (err) {
+    console.warn(
+      `[supabase-spec] fuse lookup failed (treating as miss): ${err.message}`,
     );
     return null;
   }
