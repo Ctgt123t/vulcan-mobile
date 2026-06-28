@@ -46,10 +46,10 @@ export const GEN_MAP = {
   "Ford|Edge": [[2015, 2024]], "Ford|Escape": [[2013, 2019], [2020, 2024]], "Ford|Expedition": [[2018, 2024]],
   "Ford|Explorer": [[2011, 2019], [2020, 2024]], "Ford|F-150": [[2015, 2020], [2021, 2024]], "Ford|Flex": [[2013, 2019]],
   "Ford|Fusion": [[2013, 2020]], "Ford|Mustang": [[2015, 2023]], "Ford|Ranger": [[2019, 2023]], "Ford|Taurus": [[2013, 2019]],
-  "Ford|Transit": [[2015, 2023]],
+  "Ford|Transit": [[2015, 2023]], "Ford|Super Duty": [[2017, 2022], [2023, 2024]],   // Super Duty 4th|5th (run-2 anchor 2019, verified: 6.2L/6.7L-diesel/6.8L-V10 = pre-7.3 4th gen)
   "GMC|Acadia": [[2017, 2023]], "GMC|Canyon": [[2015, 2022]], "GMC|Sierra": [[2007, 2013], [2014, 2018], [2019, 2024]],
   "GMC|Terrain": [[2018, 2024]], "GMC|Yukon": [[2015, 2020], [2021, 2024]],
-  "Honda|Accord": [[2018, 2022]],
+  "Honda|Accord": [[2018, 2022]], "Honda|CR-V": [[2017, 2022], [2023, 2024]],   // CR-V 5th|6th (run-2 anchor 2020, verified: cover "2020 CR-V" + 2.0 hybrid = 5th gen)
   "Jeep|Cherokee": [[2014, 2023]], "Jeep|Compass": [[2017, 2024]], "Jeep|Grand Cherokee": [[2011, 2021], [2022, 2024]],
   "Jeep|Renegade": [[2015, 2023]], "Jeep|Wrangler": [[2018, 2024]],
   "Lincoln|Nautilus": [[2019, 2023]], "Lincoln|Navigator": [[2018, 2024]],
