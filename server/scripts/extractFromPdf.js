@@ -1048,8 +1048,20 @@ async function main() {
     );
     sourceId = src.rows[0].id;
 
+    // Overwrite-clear (spec propagation, migration 0008): a REAL extraction for a variant wipes
+    // any INFERRED placeholder rows for that variant before writing — one-directional (an inferred
+    // row never overwrites an extracted one). No-op when nothing was propagated into the variant.
+    const clearedVariants = new Set();
+    const clearInferred = async (vid) => {
+      if (clearedVariants.has(vid)) return;
+      clearedVariants.add(vid);
+      await db.query("delete from spec where vehicle_variant_id=$1 and origin='inferred'", [vid]);
+      await db.query("delete from component_fact where vehicle_variant_id=$1 and origin='inferred'", [vid]);
+    };
+
     for (const s of passedSpecs) {
       const variantId = await resolveVariant(db, s.engine);
+      await clearInferred(variantId);
       await db.query(
         `insert into spec
            (vehicle_variant_id, spec_type, value_numeric, value_unit, value_text, qualifier, confidence, source_id, page, verbatim_quote)
@@ -1070,6 +1082,7 @@ async function main() {
     }
     for (const f of passedFacts) {
       const variantId = await resolveVariant(db, f.engine);
+      await clearInferred(variantId);
       await db.query(
         `insert into component_fact
            (vehicle_variant_id, component, fact_type, value_text, source_id, page, verbatim_quote)
