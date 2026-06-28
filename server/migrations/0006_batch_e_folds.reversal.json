@@ -1,0 +1,52 @@
+{
+  "note": "Batch E fold-into-existing reversal: UPDATE spec SET spec_type='other' WHERE id IN (ids) per type. Label-based reversal is unsafe (a genuine torque row has value_text 'lug bolt torque').",
+  "generated_at": "2026-06-28T01:13:09.211Z",
+  "reversal": {
+    "torque": [
+      1045,
+      1046,
+      1047,
+      1048,
+      1899,
+      2426,
+      2713,
+      2778,
+      3030,
+      4531,
+      4573,
+      4791
+    ],
+    "towing_capacity": [
+      466,
+      609,
+      782,
+      1551,
+      2192,
+      2662,
+      2735,
+      2800,
+      2802,
+      3321,
+      3459,
+      3619,
+      3621,
+      4136,
+      4968,
+      4970
+    ],
+    "displacement": [
+      322,
+      324,
+      325,
+      326,
+      323,
+      436
+    ],
+    "tire_pressure": [
+      1378,
+      3517,
+      4061,
+      4503
+    ]
+  }
+}
