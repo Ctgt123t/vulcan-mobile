@@ -23,6 +23,7 @@
 //    source_id + page + verbatim_quote carried from the anchor's real manual.
 // ----------------------------------------------------------------------------
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { pool } from "../db.js";
 
 const WRITE = process.argv.includes("--write");
@@ -165,4 +166,8 @@ async function main() {
   } catch (e) { await cl.query("rollback"); console.log("[propagate] ROLLED BACK: " + e.message); }
   finally { cl.release(); await pool.end(); }
 }
-main().catch(e => { console.error("[propagate] error:", e.message); process.exit(1); });
+// Only run when invoked directly (npm run / node scripts/propagateSpecs.js); importing this
+// module for GEN_MAP / engineKey / ALLOWLIST must NOT trigger a run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(e => { console.error("[propagate] error:", e.message); process.exit(1); });
+}
