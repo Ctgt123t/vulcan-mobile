@@ -57,57 +57,6 @@ export function isLikelyVin(value: string): boolean {
   return VIN_RE.test(value.trim());
 }
 
-function titleCase(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/\b([a-z])/g, (m) => m.toUpperCase())
-    .trim();
-}
-
-// NHTSA's value for the Turbo / Other fields can be "Yes" / "No" / null /
-// rarely a model name. Treat anything that doesn't look like a clear "no"
-// or empty as a positive signal.
-function nhtsaIsYes(value: string | undefined | null): boolean {
-  if (!value) return false;
-  const v = value.trim().toLowerCase();
-  if (v === "" || v === "no" || v === "false" || v === "0" || v === "not applicable") {
-    return false;
-  }
-  return true;
-}
-
-function buildEngineType(
-  displacementL: string,
-  cyl: string,
-  turbo: string | undefined,
-  fuelType: string | undefined,
-  otherEngineInfo: string | undefined,
-): string {
-  const parts: string[] = [];
-  if (displacementL) {
-    const n = Number(displacementL);
-    if (Number.isFinite(n) && n > 0) parts.push(`${n.toFixed(1)}L`);
-  }
-  if (cyl) {
-    const n = Number(cyl);
-    if (Number.isFinite(n) && n > 0) parts.push(`${n}-cyl`);
-  }
-  // Surface forced-induction explicitly so the server-side config-mismatch
-  // detector can do keyword matching on engineType (it's how we catch e.g.
-  // turbo DTCs reported on a naturally-aspirated engine). NHTSA exposes a
-  // Turbo field directly; if it's a "yes" we tag the string. Diesel comes
-  // from FuelTypePrimary so the diesel-on-gas mismatch rule works the same
-  // way without extra plumbing.
-  if (nhtsaIsYes(turbo)) parts.push("Turbocharged");
-  if (fuelType && /diesel/i.test(fuelType)) parts.push("Diesel");
-  // OtherEngineInfo sometimes carries free-text qualifiers like "EcoBoost"
-  // or "Supercharged" that aren't surfaced through the dedicated fields.
-  if (otherEngineInfo && /ecoboost|supercharg|biturbo|twinturbo/i.test(otherEngineInfo)) {
-    parts.push(otherEngineInfo.trim());
-  }
-  return parts.join(" ");
-}
-
 export async function decodeVin(vin: string): Promise<VinDecoded> {
   const clean = vin.trim().toUpperCase();
   if (!isLikelyVin(clean)) {
@@ -115,68 +64,80 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
       "That doesn't look like a 17-character VIN. Check for typos.",
     );
   }
-  const url = `https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/${clean}?format=json`;
+  if (!BASE_URL || BASE_URL.length === 0) {
+    throw new VinDecodeError(
+      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
+    );
+  }
+
+  // Decode through Vulcan's own backend (self-hosted vPIC), NOT the public NHTSA
+  // API (which was unreliable and had no timeout). The server returns the
+  // finished VinDecoded shape — it owns the spVinDecode pivot and the engineType
+  // composition — so this is a URL swap + parse. 15s timeout (matches
+  // fetchDtcDefinition) so a dropped connection degrades to a clean error
+  // instead of spinning forever.
+  const url = `${BASE_URL}/api/decode-vin/${clean}`;
+  const headers: Record<string, string> = {
+    "ngrok-skip-browser-warning": "true",
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
 
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET" });
+    res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if ((err as Error).name === "AbortError") {
+      throw new VinDecodeError(
+        "VIN decode timed out. Check your connection and try again.",
+      );
+    }
+    throw new VinDecodeError(
+      "Couldn't reach the decode service. Check your connection and try again.",
+    );
+  }
+  clearTimeout(timeoutId);
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch {
+    throw new VinDecodeError(`Couldn't read the decode response (${res.status}).`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
   } catch {
     throw new VinDecodeError(
-      "Couldn't reach NHTSA. Check your connection and try again.",
+      `Decode service returned an unexpected response (${res.status}).`,
     );
   }
 
   if (!res.ok) {
-    throw new VinDecodeError(`NHTSA returned ${res.status}.`);
+    // 400 (bad VIN), 422 (no usable vehicle -> ErrorText), and 503 (decode DB
+    // down) all arrive here carrying the server's { error } message. The screens
+    // surface it inline; VehicleContext's fail-soft keeps the raw VIN and never
+    // mislabels the session with the previous vehicle.
+    const msg =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : `VIN decode failed (${res.status}).`;
+    throw new VinDecodeError(msg);
   }
 
-  type NhtsaRow = {
-    ModelYear?: string;
-    Make?: string;
-    Model?: string;
-    Series?: string;
-    Trim?: string;
-    Trim2?: string;
-    EngineCylinders?: string;
-    DisplacementL?: string;
-    Turbo?: string;
-    FuelTypePrimary?: string;
-    OtherEngineInfo?: string;
-    ErrorCode?: string;
-    ErrorText?: string;
-  };
-
-  let payload: { Results?: NhtsaRow[] };
-  try {
-    payload = await res.json();
-  } catch {
-    throw new VinDecodeError("NHTSA returned an unreadable response.");
-  }
-
-  const row = payload.Results?.[0];
-  if (!row) {
-    throw new VinDecodeError("NHTSA returned no results for that VIN.");
-  }
-
-  if (!row.Make && !row.Model && !row.ModelYear) {
-    const err = (row.ErrorText ?? "Could not decode VIN.").split(";")[0];
-    throw new VinDecodeError(err);
-  }
-
+  // Fields arrive already finished (make/model/trim title-cased, series raw,
+  // engineType composed) — just read them through, preserving the shape.
+  const d = json as Partial<VinDecoded>;
   return {
-    year: (row.ModelYear ?? "").trim(),
-    make: row.Make ? titleCase(row.Make) : "",
-    model: row.Model ? titleCase(row.Model) : "",
-    // Raw, untouched by titleCase — it's a query disambiguator, not display text.
-    series: (row.Series ?? "").trim(),
-    trim: row.Trim ? titleCase(row.Trim) : row.Trim2 ? titleCase(row.Trim2) : "",
-    engineType: buildEngineType(
-      row.DisplacementL ?? "",
-      row.EngineCylinders ?? "",
-      row.Turbo,
-      row.FuelTypePrimary,
-      row.OtherEngineInfo,
-    ),
+    year: (d.year ?? "").trim(),
+    make: d.make ?? "",
+    model: d.model ?? "",
+    series: d.series ?? "",
+    trim: d.trim ?? "",
+    engineType: d.engineType ?? "",
   };
 }
 

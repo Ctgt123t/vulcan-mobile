@@ -46,7 +46,8 @@ import {
   runAskToolLoop,
 } from "./askToolLoop.js";
 import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
-import { initDb } from "./db.js";
+import { initDb, query, isDbReady } from "./db.js";
+import { isLikelyVin, buildVinDecoded } from "./decodeVin.js";
 import {
   ASSESS_BODY,
   EVIDENCE_UPDATE_BODY,
@@ -390,6 +391,40 @@ app.get("/api/dtc/:code", async (req, res) => {
     );
   } catch (err) {
     return respondWithError(res, err, "dtc-fallback");
+  }
+});
+
+// Self-hosted VIN decode via vpic.spvindecode (the trimmed NHTSA vPIC decode DB
+// in the `vpic` schema). Replaces the device's old direct call to the flaky
+// public NHTSA API. Returns the same VinDecoded shape the mobile decodeVin()
+// consumes (decodeVin.js owns the tall->wide pivot + the byte-for-byte
+// engineType composition), so the device change is a URL swap. Parameterized —
+// the VIN is never interpolated into SQL.
+app.get("/api/decode-vin/:vin", async (req, res) => {
+  const raw = String(req.params.vin || "").trim().toUpperCase();
+  if (!isLikelyVin(raw)) {
+    return res.status(400).json({
+      error: "That doesn't look like a 17-character VIN. Check for typos.",
+    });
+  }
+  // DB-down -> 503. The device treats this exactly like the old network failure:
+  // it keeps the raw VIN and never mislabels with the previous vehicle's name.
+  if (!isDbReady()) {
+    return res.status(503).json({ error: "VIN decode service unavailable." });
+  }
+  try {
+    const { rows } = await query(
+      "select itemelementid, variable, value from vpic.spvindecode($1)",
+      [raw],
+    );
+    const result = buildVinDecoded(rows);
+    if (result.error) {
+      // Decoded to no usable vehicle (no make/model/year) -> 422 with ErrorText.
+      return res.status(422).json({ error: result.error });
+    }
+    return res.json(result.decoded);
+  } catch (err) {
+    return respondWithError(res, err, "decode-vin");
   }
 });
 
