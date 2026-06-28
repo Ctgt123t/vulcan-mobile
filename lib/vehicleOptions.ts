@@ -66,9 +66,12 @@ export function yearOptions(now: Date = new Date()): string[] {
   return out;
 }
 
-// Case-insensitive substring filter; an empty query returns the list unchanged.
+// Case-insensitive PREFIX filter; an empty query returns the list unchanged.
+// Prefix (not substring) so a tech typing "fo"/"civ" gets Ford/Civic without
+// scrolling past unrelated entries (FOFO, or a model that merely contains the
+// letters). The trade-off: you match from the start of the name.
 export function filterOptions(options: string[], query: string): string[] {
   const q = query.trim().toLowerCase();
   if (!q) return options;
-  return options.filter((o) => o.toLowerCase().includes(q));
+  return options.filter((o) => o.toLowerCase().startsWith(q));
 }

@@ -437,26 +437,17 @@ app.get("/api/decode-vin/:vin", async (req, res) => {
 // works even when the DB is down). q present -> ilike search over vpic.make
 // (TitleCase names). The device emits these verbatim; the spec join is
 // case-insensitive so the spelling stays canonical (see commonMakes.js).
-app.get("/api/makes", async (req, res) => {
-  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-  if (!q) {
-    return res.json({ makes: COMMON_MAKES.map((name) => ({ name })) });
-  }
-  if (!isDbReady()) {
-    return res.status(503).json({ error: "Vehicle list service unavailable." });
-  }
-  try {
-    const { rows } = await query(
-      `select name from vpic.make
-        where name ilike $1
-        order by (lower(name) = lower($2)) desc, length(name), name
-        limit 50`,
-      [`%${q}%`, q],
-    );
-    return res.json({ makes: rows.map((r) => ({ name: r.name })) });
-  } catch (err) {
-    return respondWithError(res, err, "makes");
-  }
+app.get("/api/makes", (req, res) => {
+  // Curated-only: the searchable pool is the ~47 common-makes list, NEVER the
+  // full ~12k vpic.make table — obscure brands (FOFO/FORT/…) must not appear as
+  // suggestions. PREFIX match so "fo" -> Ford only. A genuinely obscure make
+  // typed in full is still accepted by the device combobox (free-text); it just
+  // isn't autocompleted. No DB needed (the list is a constant) -> fully fail-soft.
+  const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+  const matches = q
+    ? COMMON_MAKES.filter((n) => n.toLowerCase().startsWith(q))
+    : COMMON_MAKES;
+  return res.json({ makes: matches.map((name) => ({ name })) });
 });
 
 // GET /api/models?make=&year= — universal vpic.make_model list for the make

@@ -147,7 +147,6 @@ export function VehiclePickerRow({
   const [makeLoading, setMakeLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
   const years = useRef(yearOptions()).current;
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Curated makes on mount.
   useEffect(() => {
@@ -164,17 +163,6 @@ export function VehiclePickerRow({
       live = false;
     };
   }, []);
-
-  // Debounced server search as the user types a make.
-  function searchMakes(q: string) {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      setMakeLoading(true);
-      fetchMakes(q)
-        .then(setMakeOpts)
-        .finally(() => setMakeLoading(false));
-    }, 250);
-  }
 
   // (Re)load models whenever the make changes (and is non-empty). This fires for
   // BOTH a user pick and a VIN auto-fill, so the model list always matches the
@@ -205,14 +193,15 @@ export function VehiclePickerRow({
         label="Make"
         value={make}
         onChange={onMake}
-        onQueryChange={searchMakes}
-        // Selecting a make from the list clears the model (it depends on make).
-        // Free-typing the make does NOT clear it (avoids wiping mid-edit), and a
-        // VIN auto-fill sets values at the parent so it never triggers this.
+        // Curated list is fetched once and prefix-filtered on-device (no
+        // per-keystroke server call; the pool is only the ~47 common makes).
+        // Selecting a make from the list clears the model (it depends on make);
+        // free-typing does NOT clear it (avoids wiping mid-edit), and a VIN
+        // auto-fill sets values at the parent so it never triggers this.
         onSelectOption={() => onModel("")}
         options={makeOpts}
         loading={makeLoading}
-        clientFilter={false}
+        clientFilter
         placeholder="Ford, Toyota…"
         autoCapitalize="words"
       />
