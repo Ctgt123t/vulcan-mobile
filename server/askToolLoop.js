@@ -200,7 +200,7 @@ export async function handleDiagramLookup(input, ctx) {
         `each with its source link, plus a "search the web" link. The technician views the ` +
         `images directly — do NOT describe, summarize, or infer their contents, and do NOT ` +
         `state any fuse/circuit/component assignment not given to you as verified data. ` +
-        `Briefly tell the technician the diagram(s) are shown above and to tap a thumbnail for the full source.`,
+        `Briefly tell the technician the diagram(s) are shown below and to tap a thumbnail to enlarge it (or the source link to open the page).`,
     };
   }
   return {
