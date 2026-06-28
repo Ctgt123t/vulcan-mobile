@@ -157,7 +157,7 @@ export const DIAGRAM_LOOKUP_TOOL_NAME = "diagram_lookup";
 export const diagramLookupTool = {
   name: DIAGRAM_LOOKUP_TOOL_NAME,
   description:
-    "Find and SHOW the technician a real fuse-box, wiring, or component (serpentine/accessory belt) diagram for their current vehicle, pulled from the open web with a link to the source — the same as Googling \"<year> <make> <model> fuse box diagram\" but surfaced inside the app. Call this whenever the technician asks to SEE or FIND a diagram (\"show me the fuse box diagram\", \"where's the X fuse\", \"belt routing diagram\", \"wiring diagram for …\"). The vehicle is supplied automatically; you only choose the diagram_type. The images are displayed to the technician DIRECTLY by the app — you do NOT and CANNOT see them. Never describe, summarize, or infer what a diagram shows, and never state a fuse/circuit/component assignment that was not given to you as verified data.",
+    "Find and SHOW the technician a real fuse-box, wiring, or component (serpentine/accessory belt) diagram for their current vehicle, pulled from the open web with a link to the source — the same as Googling \"<year> <make> <model> fuse box diagram\" but surfaced inside the app. Call this whenever the technician asks to SEE or FIND a diagram (\"show me the fuse box diagram\", \"where's the X fuse\", \"belt routing diagram\", \"wiring diagram for …\"). The vehicle is supplied automatically; you only choose the diagram_type. The images are displayed to the technician DIRECTLY by the app — you do NOT and CANNOT see them. Never read, describe, summarize, or infer a fuse/circuit/component assignment from the diagram image, and never state an exact assignment as a confirmed fact for this vehicle unless it was given to you as verified data. You MAY still offer commonly-known general guidance as a LIKELY value for the technician to confirm against the printed legend — clearly hedged (e.g. \"on this generation it's commonly around #X, a ~20A fuse in the under-hood box — verify against your legend\"), never asserted as a confirmed number.",
   input_schema: {
     type: "object",
     properties: {
@@ -198,8 +198,12 @@ export async function handleDiagramLookup(input, ctx) {
       text:
         `Displayed ${n} real ${type} diagram image(s) for the ${label} to the technician, ` +
         `each with its source link, plus a "search the web" link. The technician views the ` +
-        `images directly — do NOT describe, summarize, or infer their contents, and do NOT ` +
-        `state any fuse/circuit/component assignment not given to you as verified data. ` +
+        `images directly — do NOT read, describe, summarize, or infer a fuse/circuit/component ` +
+        `assignment from the image, and do NOT state an exact assignment as a confirmed fact for ` +
+        `this vehicle unless it was given to you as verified data. You MAY still offer ` +
+        `commonly-known general guidance as a LIKELY value to confirm against the printed legend ` +
+        `(clearly hedged — e.g. "commonly around #X / a ~20A fuse on this generation, verify ` +
+        `against your legend"), never as a confirmed number. ` +
         `Briefly tell the technician the diagram(s) are shown below and to tap a thumbnail to enlarge it (or the source link to open the page).`,
     };
   }
