@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import InspectionItemRow from "../components/InspectionItemRow";
+import { VehiclePickerRow } from "../components/VehiclePicker";
 import Navbar from "../components/Navbar";
 import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
@@ -442,29 +443,14 @@ export default function Screen() {
 
               {manualOpen && (
                 <View style={styles.manualBox}>
-                  <View style={styles.row3}>
-                    <ManualField
-                      label="Year"
-                      value={vehicle.year}
-                      onChangeText={(v) => updateVehicle("year", v)}
-                      placeholder="2015"
-                      keyboardType="number-pad"
-                    />
-                    <ManualField
-                      label="Make"
-                      value={vehicle.make}
-                      onChangeText={(v) => updateVehicle("make", v)}
-                      placeholder="Toyota"
-                      autoCapitalize="words"
-                    />
-                    <ManualField
-                      label="Model"
-                      value={vehicle.model}
-                      onChangeText={(v) => updateVehicle("model", v)}
-                      placeholder="Camry"
-                      autoCapitalize="words"
-                    />
-                  </View>
+                  <VehiclePickerRow
+                    year={vehicle.year}
+                    make={vehicle.make}
+                    model={vehicle.model}
+                    onYear={(v) => updateVehicle("year", v)}
+                    onMake={(v) => updateVehicle("make", v)}
+                    onModel={(v) => updateVehicle("model", v)}
+                  />
                   <View style={styles.row2}>
                     <ManualField
                       label="Trim Level"

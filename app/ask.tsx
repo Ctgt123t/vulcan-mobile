@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Navbar from "../components/Navbar";
+import { VehiclePickerRow } from "../components/VehiclePicker";
 import PhotoThumb from "../components/PhotoThumb";
 import DiagramResults from "../components/DiagramResults";
 import VehicleBar from "../components/VehicleBar";
@@ -637,26 +638,13 @@ function AddVehicleModal({
 
           {manualOpen && (
             <View style={styles.manualBox}>
-              <ManualField
-                label="Year"
-                value={localVehicle.year}
-                onChangeText={(v) => updateField("year", v)}
-                placeholder="2015"
-                keyboardType="number-pad"
-              />
-              <ManualField
-                label="Make"
-                value={localVehicle.make}
-                onChangeText={(v) => updateField("make", v)}
-                placeholder="Toyota"
-                autoCapitalize="words"
-              />
-              <ManualField
-                label="Model"
-                value={localVehicle.model}
-                onChangeText={(v) => updateField("model", v)}
-                placeholder="Camry, Sierra 1500"
-                autoCapitalize="words"
+              <VehiclePickerRow
+                year={localVehicle.year}
+                make={localVehicle.make}
+                model={localVehicle.model}
+                onYear={(v) => updateField("year", v)}
+                onMake={(v) => updateField("make", v)}
+                onModel={(v) => updateField("model", v)}
               />
               <ManualField
                 label="Engine"

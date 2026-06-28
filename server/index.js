@@ -48,6 +48,7 @@ import {
 import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
 import { initDb, query, isDbReady } from "./db.js";
 import { isLikelyVin, buildVinDecoded } from "./decodeVin.js";
+import { COMMON_MAKES } from "./commonMakes.js";
 import {
   ASSESS_BODY,
   EVIDENCE_UPDATE_BODY,
@@ -425,6 +426,64 @@ app.get("/api/decode-vin/:vin", async (req, res) => {
     return res.json(result.decoded);
   } catch (err) {
     return respondWithError(res, err, "decode-vin");
+  }
+});
+
+// Structured make/model pickers (#14), fed entirely from self-hosted data (the
+// vpic schema + a curated list) — NO live-NHTSA dependency. Year is built
+// client-side (1981..currentYear+1), so there is no year endpoint.
+
+// GET /api/makes?q= — no q -> the curated common-makes list (a constant, so it
+// works even when the DB is down). q present -> ilike search over vpic.make
+// (TitleCase names). The device emits these verbatim; the spec join is
+// case-insensitive so the spelling stays canonical (see commonMakes.js).
+app.get("/api/makes", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!q) {
+    return res.json({ makes: COMMON_MAKES.map((name) => ({ name })) });
+  }
+  if (!isDbReady()) {
+    return res.status(503).json({ error: "Vehicle list service unavailable." });
+  }
+  try {
+    const { rows } = await query(
+      `select name from vpic.make
+        where name ilike $1
+        order by (lower(name) = lower($2)) desc, length(name), name
+        limit 50`,
+      [`%${q}%`, q],
+    );
+    return res.json({ makes: rows.map((r) => ({ name: r.name })) });
+  } catch (err) {
+    return respondWithError(res, err, "makes");
+  }
+});
+
+// GET /api/models?make=&year= — universal vpic.make_model list for the make
+// (distinct, ordered; the client type-ahead filters it). `year` is ACCEPTED but
+// RESERVED/UNUSED in v1 (so adding year-filtering later is non-breaking). An
+// unknown/free-text make that matches nothing returns { models: [] } and the
+// device falls back to free-text entry.
+app.get("/api/models", async (req, res) => {
+  const make = typeof req.query.make === "string" ? req.query.make.trim() : "";
+  // `year` reserved for a future year-filtered source; intentionally not read.
+  if (!make) return res.json({ models: [] });
+  if (!isDbReady()) {
+    return res.status(503).json({ error: "Vehicle list service unavailable." });
+  }
+  try {
+    const { rows } = await query(
+      `select distinct mo.name
+         from vpic.make_model mm
+         join vpic.make m on m.id = mm.makeid
+         join vpic.model mo on mo.id = mm.modelid
+        where lower(m.name) = lower($1)
+        order by mo.name`,
+      [make],
+    );
+    return res.json({ models: rows.map((r) => r.name) });
+  } catch (err) {
+    return respondWithError(res, err, "models");
   }
 });
 

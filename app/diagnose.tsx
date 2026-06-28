@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import DiagnosisActions from "../components/DiagnosisActions";
+import { VehiclePickerRow } from "../components/VehiclePicker";
 import FindDiagramModal from "../components/FindDiagramModal";
 import Navbar from "../components/Navbar";
 import PhotoThumb from "../components/PhotoThumb";
@@ -2250,29 +2251,14 @@ export default function Screen() {
 
               {manualOpen && (
                 <View style={styles.manualBox}>
-                  <View style={styles.row3}>
-                    <Field
-                      label="Year"
-                      value={vehicle.year}
-                      onChangeText={(v) => updateVehicle("year", v)}
-                      placeholder="2015"
-                      keyboardType="number-pad"
-                    />
-                    <Field
-                      label="Make"
-                      value={vehicle.make}
-                      onChangeText={(v) => updateVehicle("make", v)}
-                      placeholder="Toyota"
-                      autoCapitalize="words"
-                    />
-                    <Field
-                      label="Model"
-                      value={vehicle.model}
-                      onChangeText={(v) => updateVehicle("model", v)}
-                      placeholder="Camry, Sierra 1500"
-                      autoCapitalize="words"
-                    />
-                  </View>
+                  <VehiclePickerRow
+                    year={vehicle.year}
+                    make={vehicle.make}
+                    model={vehicle.model}
+                    onYear={(v) => updateVehicle("year", v)}
+                    onMake={(v) => updateVehicle("make", v)}
+                    onModel={(v) => updateVehicle("model", v)}
+                  />
                   <View style={styles.row2}>
                     <Field
                       label="Trim Level"
