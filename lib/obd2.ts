@@ -2026,9 +2026,23 @@ class Obd2Manager {
             `[obd2 poll] tick #${this.tickIndex} — selectedPids=${this.selectedPids.length}`,
           );
         }
+        const cycleStart = Date.now();
         await this.pollSelectedOnce();
         // Maintain the rolling ring buffer for the diagnostic snapshot engine.
         const nowMs = Date.now();
+        // Built-in verification (section 4): surface the poll-cycle wall-clock so
+        // the slow-cycle hypothesis is checkable on ANY car. A cycle longer than
+        // the capture freshness window (STALE_VALUE_MS, 600ms) is exactly what a
+        // slow/timing-out sibling PID produces — flagged here. Debug-gated.
+        if (DEBUG_OBD2) {
+          const cycleMs = nowMs - cycleStart;
+          console.log(
+            `[obd2 poll] tick #${this.tickIndex} cycle=${cycleMs}ms selectedPids=${this.selectedPids.length}` +
+              (cycleMs > 600
+                ? " (SLOW — exceeds the 600ms capture freshness window; a slow/timing-out PID is in this cycle)"
+                : ""),
+          );
+        }
         this.ringBuffer.push({ timestamp: nowMs, values: this.liveData });
         const cutoff = nowMs - Obd2Manager.RING_BUFFER_DURATION_MS;
         while (this.ringBuffer.length > 0 && this.ringBuffer[0].timestamp < cutoff) {
@@ -2073,6 +2087,16 @@ class Obd2Manager {
   // partial response doesn't kill an entire batch.
   private failureCounts: Map<string, number> = new Map();
   private static readonly MAX_CONSECUTIVE_MISSES = 4;
+
+  // Timeout for a SINGLE-command poll (the slow tier — Mode-22 enhanced PIDs like
+  // misfire counters — and the fast-tier single-PID fallback). Deliberately
+  // SHORTER than the multi-PID fast-tier timeout (2500ms, left untouched on the
+  // validated gauge path): a non-responsive single PID must not stall the whole
+  // poll cycle ~2.5s, which (combined with the detector's freshness window)
+  // delays/poisons a live capture. A supported enhanced PID still answers well
+  // within this; an unsupported one times out faster and is dropped sooner by the
+  // MAX_CONSECUTIVE_MISSES backoff above. Tunable + reversible (real-car tuning).
+  private static readonly POLL_SINGLE_TIMEOUT_MS = 1200;
 
   private recordMiss(key: string): void {
     const n = (this.failureCounts.get(key) ?? 0) + 1;
@@ -2240,7 +2264,10 @@ class Obd2Manager {
     if (signals.length === 0) return;
     const first = signals[0];
     const cmd = `${first.command.mode}${first.command.pid}`;
-    const res = (await this.sendCommand(cmd, 2500)) ?? "";
+    // Shorter timeout than the multi-PID fast tier so one non-responsive PID
+    // (e.g. an unsupported Mode-22 misfire counter) can't stall the cycle ~2.5s
+    // and poison the freshness of the fast gate reads. See POLL_SINGLE_TIMEOUT_MS.
+    const res = (await this.sendCommand(cmd, Obd2Manager.POLL_SINGLE_TIMEOUT_MS)) ?? "";
     if (/NO\s*DATA|UNABLE|STOPPED|\?|CAN\s*ERROR/i.test(res)) {
       for (const s of signals) this.recordMiss(signalKeyOf(s));
       return;

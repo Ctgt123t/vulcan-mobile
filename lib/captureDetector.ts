@@ -24,6 +24,10 @@
 import type { LiveValues, RingBufferEntry } from "./obd2";
 import type { CapturePlan, NumericRange } from "./assessmentTypes";
 import type { ResolvedPlanItem, ResolvedSignal } from "./captureResolver";
+// Pure flag module (reads process.env only — no RN deps), so importing it as a
+// value keeps this module node-test-runnable. Reuses the project's existing OBD2
+// debug gate (EXPO_PUBLIC_DEBUG_OBD2=1) rather than a parallel flag.
+import { DEBUG_OBD2 } from "./debug";
 
 // ---- Tunable constants (named + grouped so real-car tuning is one edit) ----
 
@@ -35,10 +39,21 @@ import type { ResolvedPlanItem, ResolvedSignal } from "./captureResolver";
 // value most likely to need real-car tuning.
 export const HOLD_DROPOUT_TOLERANCE_MS = 1000;
 
-// Stale-in-band guard: a signal value older than this is treated as MISSING for
-// in-range purposes, so a frozen-but-in-band reading can't falsely sustain a
-// hold. ~2 fast ticks; the dropout tolerance above then still rides out a
-// single stale frame.
+// Stale guard: how long a signal may go WITHOUT its value timestamp advancing
+// before it's treated as MISSING for in-range purposes, so a frozen-but-in-band
+// reading can't falsely sustain a hold.
+//
+// IMPORTANT (the 2026-06-29 freshness fix): this is measured as wall-clock since
+// the signal's value last ADVANCED (a new poll landed), NOT as the value's age
+// against tick.timestamp. tick.timestamp is stamped at the END of the whole poll
+// cycle (obd2.ts startPolling), so a slow sibling PID — e.g. a Mode-22 misfire
+// counter that times out ~2.5s — would otherwise make the fast gate reads (RPM,
+// ECT) grabbed EARLY in the same cycle look stale, and the capture would sit in
+// WAITING forever even though the car meets the condition. Advance-tracking
+// (see CaptureDetector.computeStaleKeys) decouples a signal's freshness from the
+// cycle length while STILL rejecting a value that has genuinely stopped updating
+// (sensor dropped / PID stopped answering). ~2 fast ticks; the dropout tolerance
+// above then still rides out a single stale frame.
 export const STALE_VALUE_MS = 600;
 
 // Safeguard 2 — per-item cooldown after a fire (placeholder, tune after testing).
@@ -118,11 +133,18 @@ export function inRange(value: number, range: NumericRange): boolean {
 function readValue(
   sig: ResolvedSignal,
   tick: MonitorTick,
+  staleKeys: Set<string>,
 ): { present: boolean; value: number | null } {
   if (sig.availability.status !== "resolved") return { present: false, value: null };
-  const lv = tick.values[sig.availability.signalKey];
+  const key = sig.availability.signalKey;
+  const lv = tick.values[key];
   if (!lv || lv.value == null) return { present: false, value: null };
-  if (tick.timestamp - lv.timestamp > STALE_VALUE_MS) return { present: false, value: null };
+  // Freshness is decided per-tick by the detector's advance-tracking
+  // (computeStaleKeys), NOT by this value's age against tick.timestamp. A value
+  // refreshed this cycle is fresh even if a slow sibling PID pushed the cycle-end
+  // timestamp out; a value whose timestamp hasn't advanced for longer than
+  // STALE_VALUE_MS is genuinely stale and rejected here. See STALE_VALUE_MS.
+  if (staleKeys.has(key)) return { present: false, value: null };
   return { present: true, value: lv.value };
 }
 
@@ -143,9 +165,9 @@ function armingConditions(item: RunnableItem): ResolvedSignal[] {
   return [...item.gate, ...item.targets.filter((t) => isBoundedRange(t.range))];
 }
 
-function conditionSatisfied(item: RunnableItem, tick: MonitorTick): boolean {
+function conditionSatisfied(item: RunnableItem, tick: MonitorTick, staleKeys: Set<string>): boolean {
   for (const c of armingConditions(item)) {
-    const v = readValue(c, tick);
+    const v = readValue(c, tick, staleKeys);
     if (!v.present || v.value == null || !inRange(v.value, c.range)) return false;
   }
   return true;
@@ -229,9 +251,9 @@ export function listRecordedSignalIdsFromPlan(plan: CapturePlan): string[] {
 // (gates + bounded targets) so a warm-up wait reads as "almost there"; open
 // record-only targets are not arming conditions and are not shown here. `met`
 // requires a present, non-stale, in-band value.
-function conditionReadouts(item: RunnableItem, tick: MonitorTick): ConditionReadout[] {
+function conditionReadouts(item: RunnableItem, tick: MonitorTick, staleKeys: Set<string>): ConditionReadout[] {
   const one = (sig: ResolvedSignal): ConditionReadout => {
-    const r = readValue(sig, tick);
+    const r = readValue(sig, tick, staleKeys);
     const met = r.present && r.value != null && inRange(r.value, sig.range);
     return { label: sig.requestedId, current: r.value, range: sig.range, met };
   };
@@ -253,6 +275,14 @@ export class CaptureDetector {
   private lastActivityMs: number | null = null;
   private prevSeenTs: Record<string, number> = {};
 
+  // Freshness advance-tracking (the 2026-06-29 fix). Per signalKey: the last
+  // value timestamp we saw, and the tick time at which it last ADVANCED. Used by
+  // computeStaleKeys to tell "fresh but cycle-delayed" (accepted) from "genuinely
+  // stale / not updating" (rejected). Deliberately separate from prevSeenTs above
+  // so the auto-pause (G4) bookkeeping is untouched.
+  private prevValueTs: Record<string, number> = {};
+  private lastAdvanceTickMs: Record<string, number> = {};
+
   constructor(runnableItems: RunnableItem[]) {
     this.states = runnableItems.map((item) => ({
       item,
@@ -269,6 +299,10 @@ export class CaptureDetector {
   ingestTick(tick: MonitorTick): DetectorEvent[] {
     const events: DetectorEvent[] = [];
 
+    // Decide freshness ONCE per tick (advance-tracking), before any reads — so a
+    // slow sibling PID inflating tick.timestamp can't stale the gate reads.
+    const staleKeys = this.computeStaleKeys(tick);
+
     // --- Safeguard 4: auto-pause on inactivity (evaluated first) ---
     this.updateActivity(tick, events);
     // While paused we still finalize an in-flight capture (don't strand a
@@ -276,20 +310,47 @@ export class CaptureDetector {
 
     for (const st of this.states) {
       if (st.capturing) {
-        this.advanceCapture(st, tick, events);
+        this.advanceCapture(st, tick, events, staleKeys);
         continue;
       }
       if (this.paused) {
         // hold tracking is suspended while paused
         st.holdStartMs = null;
         st.lastInRangeMs = null;
-        this.emitCard(st, "waiting", tick, events);
+        this.emitCard(st, "waiting", tick, events, staleKeys);
         continue;
       }
-      this.trackHold(st, tick, events);
+      this.trackHold(st, tick, events, staleKeys);
     }
 
     return events;
+  }
+
+  // Per-tick freshness pass. Returns the set of signalKeys that are GENUINELY
+  // STALE this tick — present in liveData but whose value timestamp has not
+  // advanced for longer than STALE_VALUE_MS of wall clock. A signal whose value
+  // advanced this cycle (or is seen for the first time) is FRESH regardless of
+  // how long the whole poll cycle took. See STALE_VALUE_MS for the why.
+  private computeStaleKeys(tick: MonitorTick): Set<string> {
+    const stale = new Set<string>();
+    for (const key of Object.keys(tick.values)) {
+      const lv = tick.values[key];
+      if (!lv || lv.value == null) continue; // genuine absence handled in readValue
+      const prev = this.prevValueTs[key];
+      if (prev == null || lv.timestamp > prev) {
+        // A newer poll landed (or first sighting) → fresh; remember when.
+        this.prevValueTs[key] = lv.timestamp;
+        this.lastAdvanceTickMs[key] = tick.timestamp;
+      } else {
+        // Value timestamp has not advanced since we last saw it. Stale only once
+        // it's been longer than STALE_VALUE_MS since it last advanced.
+        const lastAdvance = this.lastAdvanceTickMs[key];
+        if (lastAdvance == null || tick.timestamp - lastAdvance > STALE_VALUE_MS) {
+          stale.add(key);
+        }
+      }
+    }
+    return stale;
   }
 
   // Abort whatever is active for a given item (Stop watching), or all if no
@@ -317,8 +378,10 @@ export class CaptureDetector {
 
   // ---- internals ----------------------------------------------------------
 
-  private trackHold(st: ItemState, tick: MonitorTick, events: DetectorEvent[]): void {
-    const satisfied = conditionSatisfied(st.item, tick);
+  private trackHold(st: ItemState, tick: MonitorTick, events: DetectorEvent[], staleKeys: Set<string>): void {
+    const satisfied = conditionSatisfied(st.item, tick, staleKeys);
+
+    if (DEBUG_OBD2) this.logFreshness(st, tick, staleKeys, satisfied);
 
     if (satisfied) {
       if (st.holdStartMs == null) st.holdStartMs = tick.timestamp;
@@ -338,12 +401,38 @@ export class CaptureDetector {
       const held = tick.timestamp - st.holdStartMs;
       if (held >= st.item.sustainedSeconds * 1000) {
         if (this.canFire(st, tick, events)) {
-          this.beginCapture(st, tick, held, events);
+          this.beginCapture(st, tick, held, events, staleKeys);
           return;
         }
       }
     }
-    this.emitCard(st, "waiting", tick, events);
+    this.emitCard(st, "waiting", tick, events, staleKeys);
+  }
+
+  // Debug-gated per-gate freshness trace (section 4). One line per item per tick
+  // while WAITING: each arming signal's live value, arrival time, age vs the
+  // cycle-end tick, the fresh/stale verdict (advance-tracked), in-range, and the
+  // overall gate satisfied/blocked result — so the next on-vehicle run is
+  // conclusive on ANY car. Behind EXPO_PUBLIC_DEBUG_OBD2; no-op in production.
+  private logFreshness(
+    st: ItemState,
+    tick: MonitorTick,
+    staleKeys: Set<string>,
+    satisfied: boolean,
+  ): void {
+    const parts = armingConditions(st.item).map((c) => {
+      const key = c.availability.status === "resolved" ? c.availability.signalKey : "?";
+      const lv = tick.values[key];
+      const arrived = lv ? lv.timestamp : null;
+      const age = arrived != null ? tick.timestamp - arrived : null;
+      const present = !!lv && lv.value != null;
+      const verdict = !present ? "MISSING" : staleKeys.has(key) ? "STALE" : "FRESH";
+      const within = present && !staleKeys.has(key) && lv.value != null ? inRange(lv.value, c.range) : false;
+      return `${c.requestedId}=${present ? lv!.value : "—"} arrived=${arrived} age=${age}ms ${verdict} inRange=${within}`;
+    });
+    console.log(
+      `[capture freshness] item#${st.item.itemIndex} tick=${tick.timestamp} satisfied=${satisfied} | ${parts.join(" ; ")}`,
+    );
   }
 
   // G2 cooldown + G3 budget (G4 pause handled in ingestTick before trackHold).
@@ -360,14 +449,14 @@ export class CaptureDetector {
     return true;
   }
 
-  private beginCapture(st: ItemState, tick: MonitorTick, heldMs: number, events: DetectorEvent[]): void {
+  private beginCapture(st: ItemState, tick: MonitorTick, heldMs: number, events: DetectorEvent[], staleKeys: Set<string>): void {
     this.budgetRemaining -= 1;
     st.cooldownUntilMs = tick.timestamp + CAPTURE_COOLDOWN_MS;
 
     const gateValuesAtFire = st.item.gate.map((g) => ({
       signal_id: g.requestedId,
       signalKey: g.availability.status === "resolved" ? g.availability.signalKey : "",
-      value: readValue(g, tick).value,
+      value: readValue(g, tick, staleKeys).value,
       range: g.range,
     }));
     // Trigger stays single-valued = the PRIMARY recorded target (targets[0]); the
@@ -377,15 +466,15 @@ export class CaptureDetector {
       firedAt: tick.timestamp,
       targetSignalId: primary.requestedId,
       targetSignalKey: primary.availability.status === "resolved" ? primary.availability.signalKey : "",
-      targetValueAtFire: readValue(primary, tick).value,
+      targetValueAtFire: readValue(primary, tick, staleKeys).value,
       gateValuesAtFire,
       sustainedHeldMs: heldMs,
     };
     st.capturing = { startedAt: tick.timestamp, window: [{ timestamp: tick.timestamp, values: tick.values }], trigger };
-    this.emitCard(st, "capturing", tick, events, 0);
+    this.emitCard(st, "capturing", tick, events, staleKeys, 0);
   }
 
-  private advanceCapture(st: ItemState, tick: MonitorTick, events: DetectorEvent[]): void {
+  private advanceCapture(st: ItemState, tick: MonitorTick, events: DetectorEvent[], staleKeys: Set<string>): void {
     const cap = st.capturing!;
     cap.window.push({ timestamp: tick.timestamp, values: tick.values });
     const windowMs = st.item.captureWindowSeconds * 1000;
@@ -396,10 +485,10 @@ export class CaptureDetector {
       // cooldown) before firing again.
       st.holdStartMs = null;
       st.lastInRangeMs = null;
-      this.emitCard(st, "waiting", tick, events);
+      this.emitCard(st, "waiting", tick, events, staleKeys);
       return;
     }
-    this.emitCard(st, "capturing", tick, events, Math.min(1, elapsed / windowMs));
+    this.emitCard(st, "capturing", tick, events, staleKeys, Math.min(1, elapsed / windowMs));
   }
 
   private finalize(st: ItemState, outcome: CapturedWindow["outcome"]): CapturedWindow {
@@ -414,8 +503,8 @@ export class CaptureDetector {
     };
   }
 
-  private emitCard(st: ItemState, state: CardState, tick: MonitorTick, events: DetectorEvent[], progress?: number): void {
-    const conditions = conditionReadouts(st.item, tick);
+  private emitCard(st: ItemState, state: CardState, tick: MonitorTick, events: DetectorEvent[], staleKeys: Set<string>, progress?: number): void {
+    const conditions = conditionReadouts(st.item, tick, staleKeys);
     const sig = conditions.map((c) => `${c.current}/${c.met}`).join("|");
     // Coalesce: skip a repeat WAITING card only when the live readout is ALSO
     // unchanged — so values refresh during warm-up (ECT 74→…→80), while a truly

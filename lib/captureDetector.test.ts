@@ -733,6 +733,67 @@ section("multi-signal — a BOUNDED measured target still gates (wait-for-event 
 }
 
 // ===========================================================================
+// FRESHNESS — cycle-delayed vs. genuinely stale (the 2026-06-29 capture fix)
+// ===========================================================================
+
+section("freshness — fresh-but-cycle-delayed gate value still arms (the fix)");
+{
+  // The on-vehicle bug: gate signals (RPM/ECT) are polled EARLY in a poll cycle
+  // and ARE refreshed every cycle, but a slow sibling PID (a Mode-22 misfire
+  // counter timing out ~2.5s) pushes the cycle-end tick.timestamp far past the
+  // gate values' arrival time. The OLD age-vs-tick.timestamp guard wrongly
+  // flagged those fresh reads stale → readValue null → "—" → permanent WAITING.
+  //
+  // Here every value ADVANCES each tick but lags tick.timestamp by LAG=2000ms
+  // (> STALE_VALUE_MS=600). OLD code: age 2000 > 600 → stale → never fires (the
+  // bug). NEW code: advance-tracked as fresh → arms + fires.
+  const LAG = 2000;
+  const det = new CaptureDetector(runnableFor(leanPlan(2, 1)));
+  const all: { t: number; ev: DetectorEvent }[] = [];
+  for (let t = 0; t <= 4000; t += 250) {
+    const values: MonitorTick["values"] = {
+      [RPMKEY]: { value: 720, name: "", unit: "", category: "", min: 0, max: 8000, timestamp: t - LAG } as never,
+      [FTKEY]: { value: 16, name: "", unit: "", category: "", min: 0, max: 100, timestamp: t - LAG } as never,
+    };
+    for (const ev of det.ingestTick({ timestamp: t, values })) all.push({ t, ev });
+  }
+  // The gate must read its live value (not "—") while waiting/capturing.
+  const card = all
+    .map((e) => e.ev)
+    .find((e): e is Extract<DetectorEvent, { type: "card" }> => e.type === "card");
+  const rpmReadout = card?.conditions.find((c) => c.label === "RPM");
+  ok(
+    !!rpmReadout && rpmReadout.current === 720 && rpmReadout.met === true,
+    `cycle-delayed gate reads its live value, not "—" (got ${JSON.stringify(rpmReadout)})`,
+  );
+  eq(firstCapturingAt(all), 2000, "cycle-delayed-but-advancing gate arms at sustained_seconds");
+  eq(fires(all).length, 1, "a fresh-but-cycle-delayed stream FIRES (old code would stall in WAITING)");
+}
+
+section("freshness — genuinely stale (non-advancing) value still rejected + blocks arming");
+{
+  // The safety contract MUST hold: a value whose timestamp NEVER advances (sensor
+  // dropped / PID stopped answering) is genuinely stale → rejected → the gate is
+  // blocked and nothing arms, no matter how long it sits in-band.
+  const det = new CaptureDetector(runnableFor(leanPlan(2, 1)));
+  const frozen: MonitorTick["values"] = {
+    [RPMKEY]: { value: 720, name: "", unit: "", category: "", min: 0, max: 8000, timestamp: 0 } as never,
+    [FTKEY]: { value: 16, name: "", unit: "", category: "", min: 0, max: 100, timestamp: 0 } as never,
+  };
+  const all: { t: number; ev: DetectorEvent }[] = [];
+  for (let t = 0; t <= 6000; t += 250) {
+    for (const ev of det.ingestTick({ timestamp: t, values: frozen })) all.push({ t, ev });
+  }
+  eq(fires(all).length, 0, "genuinely stale (frozen) value never fires");
+  eq(firstCapturingAt(all), null, "genuinely stale value never begins a capture (gate blocked)");
+  const rpmReadouts = all
+    .map((e) => e.ev)
+    .filter((e): e is Extract<DetectorEvent, { type: "card" }> => e.type === "card")
+    .map((c) => c.conditions.find((cc) => cc.label === "RPM")?.current);
+  ok(rpmReadouts.includes(null), 'stale gate eventually reads "—" (null) — proving rejection still works');
+}
+
+// ===========================================================================
 // SUMMARY
 // ===========================================================================
 
