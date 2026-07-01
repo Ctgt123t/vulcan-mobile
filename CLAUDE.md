@@ -2,6 +2,8 @@
 
 > **Note to Claude Code:** When a significant feature is added, a major architectural change is made, or a new dependency/service is introduced, update this CLAUDE.md file to reflect the change before finishing the task. Keep it current.
 
+> **Companion docs (read for full context):** **`VULCAN_MERGE_PLAN.md`** — the plan to merge Ask Vulcan + Diagnose into one fluid chat channel **without degrading the diagnostic engine** (investigation findings, locked decisions, engine-integrity guardrails, and the phased build plan; this is the active plan for that work). `VULCAN_PROJECT_BRIEF.md` — product/strategy brief. `VULCAN_DATA_LAYER_STRATEGY.md` — the spec-database plan.
+
 ## Project Overview
 
 Vulcan is an AI-powered automotive diagnostic app for professional technicians. Built with Expo/React Native, a Railway-hosted backend, and the Claude API. Targets iOS and Android.
