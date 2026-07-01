@@ -207,7 +207,10 @@ function sanitizeImage(v: unknown): ImageAttachment | undefined {
 // plus an optional validated image (Photo Evidence Step 1 — additive; an earlier
 // build / a malformed image still loads). Anything that doesn't match the core
 // shape is dropped (not fatal — a partial thread still renders and re-sends).
-function sanitizeMessages(v: unknown): ChatMessage[] {
+// EXPORTED (merge-plan Phase 1): also the tolerant reader for the Ask→Diagnose
+// handoff's carried thread — same contract (image validated, base64 never
+// restored, unknown fields like Ask's `diagrams` dropped, never throws).
+export function sanitizeMessages(v: unknown): ChatMessage[] {
   return arr<unknown>(v)
     .filter(
       (m): m is ChatMessage =>

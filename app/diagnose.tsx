@@ -105,6 +105,7 @@ import {
   type EvidenceCaptureEntry,
   type SavedAssessmentEntry,
   makeCaseId,
+  sanitizeMessages,
   vehicleLabel,
 } from "../lib/diagnosticCasesCore";
 import { obd2, signalKeyOf, type PidDescriptor } from "../lib/obd2";
@@ -311,6 +312,12 @@ export default function Screen() {
   // Non-null = resumed, carrying the case VIN (itself null for a no-VIN /
   // manual / pre-2008 case). Sole input to the liveVehicleMatchesCase guard.
   const resumedCaseRef = useRef<{ vin: string | null } | null>(null);
+  // Merge-plan Phase 1: the full Ask thread carried by an Ask→Diagnose
+  // escalation, stashed at intake-consume and seeded BEFORE the complaint at
+  // submit (so the case + brain history hold the whole conversation).
+  // Consume-once; cleared on resume + reset so a stale thread can't leak into
+  // a later fresh intake (same discipline as the handoff drains).
+  const carriedThreadRef = useRef<ChatMessage[] | null>(null);
   // Mirrors of the volatile thread arrays so saveCase reads the latest values
   // without an async-setState race; explicit overrides at each trigger are the
   // primary path, these are the backstop.
@@ -519,6 +526,16 @@ export default function Screen() {
           ).catch(() => {});
         }
         if (h.vin) setVin(h.vin);
+        // Merge-plan Phase 1: stash the carried Ask thread (tolerant read —
+        // same sanitizer as the case migrator; base64 never restored, unknown
+        // fields dropped). Trim leading assistant turns so the seeded thread
+        // starts on a user turn — preserves endOnUserTurn's can't-empty
+        // invariant and the API's user-first ordering.
+        const carried = sanitizeMessages(h.messages);
+        while (carried.length > 0 && carried[0].role === "assistant") {
+          carried.shift();
+        }
+        carriedThreadRef.current = carried.length > 0 ? carried : null;
         const dtcLine =
           h.dtcs && h.dtcs.length > 0
             ? `OBD2 scan — stored codes: ${h.dtcs.join(", ")}.`
@@ -572,6 +589,7 @@ export default function Screen() {
     const saved = await loadCase(resumeId);
     consumeObd2DiagnoseEscalation();
     consumeHandoff("to_diagnose").catch(() => {});
+    carriedThreadRef.current = null; // resume wins over a stale carried thread
     if (!saved) {
       // Gone / unreadable (e.g. a future-version body after a rollback).
       Alert.alert(
@@ -1720,10 +1738,19 @@ export default function Screen() {
       ? { role: "user", content: symptom.trim(), image: withoutBase64(photo) }
       : { role: "user", content: symptom.trim() };
     pendingPhotoBase64Ref.current = photo?.base64 ?? null;
-    setMessages([first]);
-    messagesRef.current = [first];
+    // Merge-plan Phase 1: an Ask→Diagnose escalation seeds the carried Ask
+    // thread BEFORE the complaint — the case envelope + buildTurnHistory then
+    // hold the whole conversation (plain-text assistant turns serialize as-is
+    // and render via MessageRow's non-JSON branch). Consume-once. The carried
+    // thread starts on a user turn (trimmed at stash), so messages[0] stays a
+    // user turn and the terminal-user guarantee is untouched.
+    const carried = carriedThreadRef.current ?? [];
+    carriedThreadRef.current = null;
+    const seeded = [...carried, first];
+    setMessages(seeded);
+    messagesRef.current = seeded;
     setPhase("chat");
-    saveCase({ messages: [first] });
+    saveCase({ messages: seeded });
     // SB4: ONE unified call decides the opening move. A connected start with a
     // live-data complaint makes the brain choose an assessment+capture itself —
     // the old auto-assess-on-connect, now brain behavior. No double-fire.
@@ -2020,6 +2047,7 @@ export default function Screen() {
     setPendingPhoto(null);
     setIntakePhoto(null);
     pendingPhotoBase64Ref.current = null;
+    carriedThreadRef.current = null; // a fresh intake never inherits a carried thread
     // Stage 2B: the previous case was already saved at its last completed turn
     // and stays OPEN + resumable from the list — reset does NOT touch its stored
     // body or status. Clearing these refs makes the next intake a genuinely

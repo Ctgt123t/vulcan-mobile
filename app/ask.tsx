@@ -234,11 +234,24 @@ export default function AskScreen() {
     const lastUser = [...messages]
       .reverse()
       .find((m) => m.role === "user");
+    // Full-context escalation (merge-plan Phase 1): carry the WHOLE thread,
+    // not just the last user line. Images ride as durable-uri metadata only
+    // (base64 is transient and never re-sent — the lean-history rule; the
+    // assistant's stated visual read in the carried text is what moves
+    // forward). Diagram cards are dropped here (the case migrator strips them
+    // and Diagnose doesn't render them); the answer text describing them
+    // carries.
+    const carried: ChatMessage[] = messages.map((m) =>
+      m.image
+        ? { role: m.role, content: m.content, image: withoutBase64(m.image) }
+        : { role: m.role, content: m.content },
+    );
     await setHandoff({
       type: "to_diagnose",
       vehicle: hasVehicle ? vehicle : undefined,
       vin: vin ? vin.trim() || undefined : undefined,
       symptom: lastUser?.content ?? "",
+      messages: carried,
       recalls,
       tsbs,
     });

@@ -10,6 +10,15 @@ export type Handoff =
       vehicle?: VehicleInfo;
       vin?: string;
       symptom: string;
+      // Full-context escalation (merge-plan Phase 1): the WHOLE Ask thread,
+      // carried into the diagnostic case so escalation stops collapsing the
+      // conversation to the `symptom` string. Images ride WITHOUT base64
+      // (durable uri only — bytes are transient by the lean-history rule);
+      // diagram cards are stripped by the writer (the case migrator drops
+      // them and the Diagnose renderer doesn't draw them — the assistant's
+      // answer text describing them is what carries). Optional so older
+      // pending handoffs stay readable.
+      messages?: ChatMessage[];
       recalls?: Recall[];
       tsbs?: Tsb[];
       dtcs?: string[];
