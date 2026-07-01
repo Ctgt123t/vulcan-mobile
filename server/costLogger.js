@@ -78,7 +78,10 @@ try {
 //   logApiCost(response.usage, MODEL, { sessionId, callType }).
 // Returns the computed cost data (or null if model pricing is unknown).
 export function logApiCost(usage, model, meta = {}) {
-  const { sessionId = null, callType = "unknown" } = meta;
+  // caseId (merge-plan Phase 2, additive): attributes diagnostic calls to the
+  // diagnosis credit's metering key. sessionId is per-OBD2-connect and null
+  // for disconnected diagnoses, so it cannot key billing — caseId can.
+  const { sessionId = null, callType = "unknown", caseId = null } = meta;
 
   const costData = computeCost(usage, model);
   if (!costData) return null; // unknown model — already warned by computeCost
@@ -90,6 +93,7 @@ export function logApiCost(usage, model, meta = {}) {
     ts:        Date.now(),
     date:      today,
     sessionId,
+    caseId,
     callType,
     model:     costData.model,
     tokens:    costData.tokens,
@@ -159,6 +163,26 @@ export function getCostSummary() {
     // Most recent 50 individual call entries
     recentEntries: entries.slice(-50),
   };
+}
+
+// Per-case cost rollup from recent in-memory entries (merge-plan Phase 2).
+// Joined against the usage meter's credited cases by /api/usage/summary so a
+// diagnosis credit reconciles with what it actually cost us. Rolling window:
+// entries cap at MAX_ENTRIES, so old cases age out of this map (flagged in
+// the summary's reconciliation note). Old entries without caseId are skipped.
+export function costByCaseId() {
+  const map = {};
+  for (const e of entries) {
+    if (!e.caseId) continue;
+    const c = map[e.caseId] ?? { calls: 0, totalCost: 0, byType: {} };
+    c.calls++;
+    c.totalCost = r6(c.totalCost + e.cost.total);
+    if (!c.byType[e.callType]) c.byType[e.callType] = { calls: 0, totalCost: 0 };
+    c.byType[e.callType].calls++;
+    c.byType[e.callType].totalCost = r6(c.byType[e.callType].totalCost + e.cost.total);
+    map[e.caseId] = c;
+  }
+  return map;
 }
 
 // Surface key stats for the existing startup rollup log in index.js.

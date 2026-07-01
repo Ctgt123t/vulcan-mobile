@@ -492,6 +492,7 @@ export async function diagnoseTurn(params: {
   recalls?: Recall[];
   tsbs?: Tsb[];
   sessionId?: string | null;
+  caseId?: string | null;
 }): Promise<DiagnoseTurnResponse> {
   if (!BASE_URL || BASE_URL.length === 0) {
     throw new DiagnoseTurnError(
@@ -515,6 +516,9 @@ export async function diagnoseTurn(params: {
     recalls: params.recalls ?? [],
     tsbs: params.tsbs ?? [],
     sessionId: params.sessionId ?? null,
+    // Merge-plan Phase 2 (metering): attributes this call's cost to the
+    // diagnosis credit's key (mirrors evidenceUpdate's existing caseId).
+    caseId: params.caseId ?? null,
   });
 
   let res: Response;
@@ -552,6 +556,34 @@ export async function diagnoseTurn(params: {
 
   const resp = json as DiagnoseTurnResponse;
   return { turn: resp.turn, cost: resp.cost ?? null };
+}
+
+// Merge-plan Phase 2 (metering): mark the escalation event — one flat
+// "diagnosis credit" minted per case at intake submit. FIRE-AND-FORGET and
+// FAIL-SOFT BY CONTRACT: usage capture must never block or break a diagnosis,
+// so this never throws and never rejects (missing BASE_URL / network error /
+// non-200 all swallow silently — the server end is idempotent by caseId, so
+// a lost event under-counts rather than corrupts).
+export function recordDiagnosisStart(params: {
+  caseId: string | null;
+  sessionId?: string | null;
+  vehicle?: { year: string; make: string; model: string };
+  source?: "direct" | "ask" | "obd2";
+}): void {
+  if (!BASE_URL || BASE_URL.length === 0) return;
+  fetch(`${BASE_URL}/api/usage/diagnosis-start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
+    body: JSON.stringify({
+      caseId: params.caseId,
+      sessionId: params.sessionId ?? null,
+      vehicle: params.vehicle ?? null,
+      source: params.source ?? "direct",
+    }),
+  }).catch(() => {});
 }
 
 // Looks up a DTC against the backend's SAE + manufacturer-specific database

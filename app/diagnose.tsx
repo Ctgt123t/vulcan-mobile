@@ -49,6 +49,7 @@ import {
   diagnoseTurn,
   evidenceUpdate,
   isLikelyVin,
+  recordDiagnosisStart,
 } from "../lib/api";
 import { CaptureExecutor } from "../lib/captureExecutor";
 import type { ConditionReadout } from "../lib/captureDetector";
@@ -323,6 +324,11 @@ export default function Screen() {
   // Consume-once; cleared on resume + reset so a stale thread can't leak into
   // a later fresh intake (same discipline as the handoff drains).
   const carriedThreadRef = useRef<ChatMessage[] | null>(null);
+  // Merge-plan Phase 2 (metering): which door this intake came through, for
+  // the diagnosis-start usage event (and the §9 under-escalation metric —
+  // how often Ask threads escalate). Set by the intake-consume effect,
+  // reset to "direct" on resetSession.
+  const entrySourceRef = useRef<"direct" | "ask" | "obd2">("direct");
   // Mirrors of the volatile thread arrays so saveCase reads the latest values
   // without an async-setState race; explicit overrides at each trigger are the
   // primary path, these are the backstop.
@@ -507,6 +513,7 @@ export default function Screen() {
       //    scanned codes; the vehicle is the connected one, left as-is.
       const esc = consumeObd2DiagnoseEscalation();
       if (esc) {
+        entrySourceRef.current = "obd2";
         const dtcLine =
           esc.dtcs.length > 0
             ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
@@ -524,6 +531,7 @@ export default function Screen() {
       const h = await consumeHandoff("to_diagnose");
       if (!active) return;
       if (h) {
+        entrySourceRef.current = "ask";
         if (h.vehicle) {
           setVehicleManually(
             { ...EMPTY_VEHICLE, ...h.vehicle },
@@ -1687,6 +1695,7 @@ export default function Screen() {
         recalls,
         tsbs,
         sessionId: diagnosticLogger.getCurrentSessionId(),
+        caseId: caseMetaRef.current?.id ?? null,
       });
       dispatchTurn(result.turn);
       if (result.cost) {
@@ -1734,6 +1743,17 @@ export default function Screen() {
     setUnsaved(false);
     const proceed = await ensureCaseForNewSession();
     if (!proceed) return; // tech cancelled at the all-25-open prompt → stay on intake
+    // Merge-plan Phase 2 (metering): the ESCALATION EVENT — intake submit is
+    // where a diagnosis starts (all three doors funnel here: direct, Ask→,
+    // OBD2→), so this is where the flat diagnosis credit mints. Fire-and-
+    // forget + fail-soft (never blocks the turn); idempotent server-side by
+    // caseId (null only for a deliberate unsaved-at-cap session).
+    recordDiagnosisStart({
+      caseId: caseMetaRef.current?.id ?? null,
+      sessionId: diagnosticLogger.getCurrentSessionId(),
+      vehicle: { year: vehicle.year, make: vehicle.make, model: vehicle.model },
+      source: entrySourceRef.current,
+    });
     // Photo-on-intake: attach the staged photo to the FIRST turn (persisted image
     // WITHOUT base64) and prime the transient ref so runDiagnoseTurn's existing
     // injection (:~1379) sends the bytes exactly once. Consume the staged photo.
@@ -2086,6 +2106,7 @@ export default function Screen() {
     setIntakePhoto(null);
     pendingPhotoBase64Ref.current = null;
     carriedThreadRef.current = null; // a fresh intake never inherits a carried thread
+    entrySourceRef.current = "direct"; // and re-enters through the direct door
     // Stage 2B: the previous case was already saved at its last completed turn
     // and stays OPEN + resumable from the list — reset does NOT touch its stored
     // body or status. Clearing these refs makes the next intake a genuinely

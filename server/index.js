@@ -39,7 +39,8 @@ import {
   getVehiclePids,
   pidStats,
 } from "./pidDatabase.js";
-import { logApiCost, getCostSummary, costStats } from "./costLogger.js";
+import { logApiCost, getCostSummary, costStats, costByCaseId } from "./costLogger.js";
+import { recordDiagnosisStart, getUsageSummary } from "./usageMeter.js";
 import {
   ASK_TOOLS,
   ASK_TOOL_HANDLERS,
@@ -1708,6 +1709,7 @@ async function runStructuredAssessment({
   callType,
   logLabel,
   sessionId,
+  caseId, // merge-plan Phase 2: cost attribution to the diagnosis credit's key
 }) {
   const systemBlocks = await buildAssessmentContextBlocks({
     systemPrompt,
@@ -1734,6 +1736,7 @@ async function runStructuredAssessment({
   const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
     sessionId: typeof sessionId === "string" ? sessionId : null,
     callType,
+    caseId: typeof caseId === "string" ? caseId : null,
   });
 
   const toolUse = response.content.find((b) => b.type === "tool_use");
@@ -2016,6 +2019,7 @@ app.post("/api/evidence-update", async (req, res) => {
       callType: "evidence-update",
       logLabel: "evidence-update",
       sessionId,
+      caseId,
     });
     if (!result.ok) {
       return res.status(result.status).json({ error: result.error });
@@ -2055,6 +2059,7 @@ app.post("/api/diagnose-turn", async (req, res) => {
     recalls,
     tsbs,
     sessionId,
+    caseId,
   } = req.body ?? {};
 
   if (!vehicle || typeof vehicle !== "object") {
@@ -2113,6 +2118,7 @@ app.post("/api/diagnose-turn", async (req, res) => {
     const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
       sessionId: typeof sessionId === "string" ? sessionId : null,
       callType: "diagnose-turn",
+      caseId: typeof caseId === "string" ? caseId : null,
     });
 
     const toolUse = response.content.find((b) => b.type === "tool_use");
@@ -2159,6 +2165,31 @@ app.post("/api/diagnose-turn", async (req, res) => {
 // curl https://<railway-url>/api/costs/summary | jq .
 app.get("/api/costs/summary", (_req, res) => {
   res.json(getCostSummary());
+});
+
+// ---- Usage metering (Ask+Diagnose merge plan, Phase 2) ----------------------
+//
+// The escalation event: one flat "diagnosis credit" minted per case at intake
+// submit (fired fire-and-forget by the phone — all three escalation doors
+// funnel through onSubmitIntake). Idempotent by caseId. FAIL-SOFT BY CONTRACT:
+// usage capture must never break a diagnosis, so this endpoint never 500s.
+app.post("/api/usage/diagnosis-start", (req, res) => {
+  try {
+    const { caseId, sessionId, vehicle, source } = req.body ?? {};
+    const result = recordDiagnosisStart({ caseId, sessionId, vehicle, source });
+    res.json(result);
+  } catch (err) {
+    console.warn("[usage] diagnosis-start handler failed:", err.message);
+    res.json({ minted: false });
+  }
+});
+
+// Usage rollup + per-credit cost reconciliation (credits joined to the cost
+// logger's per-case entries so a diagnosis credit shows what it actually
+// cost us — the substrate for pricing the credit).
+// curl https://<railway-url>/api/usage/summary | jq .
+app.get("/api/usage/summary", (_req, res) => {
+  res.json(getUsageSummary(costByCaseId()));
 });
 
 app.listen(PORT, "0.0.0.0", () => {
