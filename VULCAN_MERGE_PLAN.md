@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Source-of-truth for merging Vulcan's two chat channels — **Ask Vulcan** and **Diagnose** — into one fluid chat interface, **without degrading the diagnostic engine or its safeguards.** It captures the read-only architecture investigation's findings, the locked decisions, the open decisions still needing founder ratification, and the phased build plan. Written so a fresh session (no prior chat context) can pick this up fully oriented. Companion to `CLAUDE.md`, `VULCAN_PROJECT_BRIEF.md`, and `VULCAN_DATA_LAYER_STRATEGY.md`.
 >
-> **Status: INVESTIGATION COMPLETE — architecture recommended and direction locked; NO build started; engine untouched.** The investigation was strictly read-only (nothing in the fenced engine was modified). The next session begins at **Phase 0 → 1** below, after the founder ratifies the open decisions.
+> **Status: DECISIONS RATIFIED (founder, 2026-07-01) — Phase 0 complete; build phase active starting at Phase 1.** The investigation was strictly read-only (nothing in the fenced engine was modified). All formerly-open decisions in §8 are now locked (see §1); a **persistent-chats requirement was added by founder directive** (§1.9, Phase 3).
 >
 > **Created: 2026-07-01.** Investigation performed on Opus 4.8. All file:line references below were verified first-hand against the code on this date (line numbers may drift as the code changes — treat the symbol names as the durable anchors).
 
@@ -28,7 +28,11 @@ Today the app has **two separate chat channels** that look nearly identical to t
 3. **Escalation is the billable "diagnosis" event.** Pre-escalation Ask turns are light/free; escalation mints the diagnosis credit; the capture loop rides inside it. This is the cleanest and only user-explainable metering boundary. (§6)
 4. **The engine's frozen invariants and safeguards are non-negotiable and must survive intact** (§4). A change that would edit a byte-frozen prompt section, weaken a safeguard, or make a soft-validator throw is out of bounds — flag before touching. New capability goes in **additive `UNIFIED_*`-only prompt sections + appended tools**, never by mutating the frozen spine.
 5. **Investigation was read-only; the build is separately gated.** Each build phase has an investigate → build → verify gate (§7). The engine is never exposed to a big-bang change.
-6. **Scope:** merge **only Ask + Diagnose.** OBD2 Scan and Inspection Report stay as separate instruments (they are not chat). *(Pending explicit confirmation — see §8, but this is the working assumption.)*
+6. **Scope:** merge **only Ask + Diagnose.** OBD2 Scan and Inspection Report stay as separate instruments (they are not chat). *(Confirmed by founder 2026-07-01.)*
+7. **Escalation trigger (locked 2026-07-01):** a **manual "Diagnose this" action, always available**, PLUS a **gentle, invitational, never-forced brain-suggested offer** (mirrors the existing photo-offer pattern — "we could run a full diagnosis on this if you want", never a command, never implying it's stuck without one).
+8. **Billing unit (locked 2026-07-01):** a **flat "diagnosis credit" minted at the escalation event.** Pre-escalation Ask stays cheap/free via the existing zero-cost fast-paths (DTC direct-answer, spec fast-path, cache). The capture loop rides inside the credit.
+9. **Thread behavior (locked 2026-07-01):** **once escalated, a thread stays diagnostic** (matches the case model); a fresh casual question starts a **new thread**. Casual side-questions inside a diagnosis are served by the deferred in-diagnosis retrieval (final phase).
+10. **Persistent chats are a REQUIRED part of this merge, not optional (founder directive 2026-07-01).** A user must be able to **leave any thread (diagnosis or casual query) mid-flight, open or continue another** (e.g. a spec lookup on a different vehicle), **and return where they left off.** Today the two separate screens ARE the app's crude multitasking; collapsing both channels into one window removes it. Therefore **multi-thread persistence + a chat list must land WITH or BEFORE the unified shell — never after.** A unified shell without it is a regression and must not ship. (Diagnose already persists via `DiagnosticCaseV1`; the gap is the Ask/light channel — ephemeral `useState` today — and a unified thread list over both.)
 
 **The one architecture explicitly rejected: Option 1 (a single unified brain that does casual Q&A and diagnosis implicitly).** It's the only path that re-tunes the *validated diagnostic behavior* and makes pricing incoherent. Do not drift toward "just let one brain do everything."
 
@@ -131,30 +135,32 @@ The substrate already exists: `costLogger.js` logs every call by `callType` (`as
 
 ## 7. PHASED BUILD PLAN (I own this sequencing)
 
-Each phase = investigate → build → verify. **Phases 1–3 change nothing inside the fence** (`verifyAssessPrompt.js` stays trivially green). Phase 4 is the only fence-adjacent work and uses the proven additive pattern.
+Each phase = investigate → build → verify. **Phases 1–4 change nothing inside the fence** (`verifyAssessPrompt.js` stays trivially green). Phase 5 is the only fence-adjacent work and uses the proven additive pattern.
 
 | Phase | Scope | Touches engine? | Verify gate |
 |---|---|---|---|
-| **0 — Decision lock** | Founder ratifies §8 open decisions. No code. | No | Founder sign-off. |
+| **0 — Decision lock** | ~~Founder ratifies §8 open decisions.~~ **DONE (2026-07-01)** — all §8 decisions locked into §1; persistent-chats requirement added (§1.10). | No | Founder sign-off. ✓ |
 | **1 — Fix lossy escalation + context carry** | Upgrade the Ask→Diagnose handoff to carry the **full thread + photos** into a diagnostic case (today it collapses to a `symptom` string and drops photos). Screens still separate; engines unchanged. Mobile + `lib/handoff.ts` only. | No | Escalation preserves full context on a real device; existing gates pass. |
 | **2 — Metering foundation (server-only, additive)** | Define weighted-usage credits on the existing per-`callType`/`sessionId` cost data; mark the escalation as the "diagnosis started" event; expose a per-session usage rollup. | No | Usage reconciles with the cost aggregate; escalation events logged. |
-| **3 — The unified shell (real screen merge)** | Merge `app/ask.tsx` + `app/diagnose.tsx` into one chat screen that starts light and escalates **in place**; still two endpoints underneath. Behind a preview flag. | No | On-vehicle: a diagnosis behaves identically to today; Ask zero-cost paths intact; capture unaffected. |
-| **4 — (Optional, LAST) In-diagnosis retrieval (Tier-2)** | Fold `spec_lookup`/`diagram_lookup` into the diagnostic turn so a tech can ask a spec/diagram question mid-diagnosis. Additive: append tools to `UNIFIED_TURN_TOOLS` + a new `UNIFIED_*`-only prompt section; frozen spine untouched. (Already noted as "Tier-2" in `CLAUDE.md`.) | **Additive only** | `verifyAssessPrompt` PASS; diagram tool stays no-fabrication; deployed-call validation *before* mobile wiring (the SB3 method). |
+| **3 — Persistent chats (REQUIRED pre-shell — §1.10)** | Multi-thread persistence + a chat list. Give the light/Ask channel save/leave/return (today: ephemeral `useState`), and a **thread list spanning both channels** (open diagnostic cases already persist as `DiagnosticCaseV1`; light threads get their own lightweight envelope following the same versioned/tolerant-migrator discipline). Leave a thread mid-flight, open another (different vehicle OK), return where you left off. Mobile-only; engines unchanged. | No | Leave/return round-trips on a real device across both thread kinds; case save/resume gates still pass. |
+| **4 — The unified shell (real screen merge)** | Merge `app/ask.tsx` + `app/diagnose.tsx` into one chat screen that starts light and escalates **in place**; still two endpoints underneath. Lands **ON the Phase-3 chat list** — **hard gate: the shell must not ship without multi-thread persistence (§1.10)**, since it removes the two-screen multitasking. Behind a preview flag. | No | On-vehicle: a diagnosis behaves identically to today; Ask zero-cost paths intact; capture unaffected; leave/return still works from the merged shell. |
+| **5 — (Optional, LAST) In-diagnosis retrieval (Tier-2)** | Fold `spec_lookup`/`diagram_lookup` into the diagnostic turn so a tech can ask a spec/diagram question mid-diagnosis. Additive: append tools to `UNIFIED_TURN_TOOLS` + a new `UNIFIED_*`-only prompt section; frozen spine untouched. (Already noted as "Tier-2" in `CLAUDE.md`.) | **Additive only** | `verifyAssessPrompt` PASS; diagram tool stays no-fabrication; deployed-call validation *before* mobile wiring (the SB3 method). |
 
-**Rationale for ordering:** front-load the low-risk, independently-valuable UX + pricing wins (1–2); do the big UI lift once contracts are settled (3); defer the only fence-adjacent work to last behind the automated byte gate (4).
+**Rationale for ordering:** front-load the low-risk, independently-valuable UX + pricing wins (1–2); land the multitasking substrate (3) so the big UI lift (4) can't ship as a regression; do the screen merge once contracts are settled (4); defer the only fence-adjacent work to last behind the automated byte gate (5). Phase 3 before the shell is a hard ordering constraint (§1.10), not a preference.
 
 ---
 
-## 8. OPEN DECISIONS (need founder yes/no before/at build time)
+## 8. OPEN DECISIONS — ALL RATIFIED BY FOUNDER (2026-07-01)
 
-Working defaults in **bold** — a fresh session should confirm these before building the affected phase.
+Every decision below is **locked** as stated (the former working defaults were confirmed). The authoritative versions live in §1 — do not re-litigate.
 
-1. **Escalation trigger** — **both** an explicit "Diagnose this" button (always) **and** a gentle, invitational brain-suggested offer (never forced, mirrors the photo-offer pattern). *(vs. manual-only or auto-only.)*
-2. **Billing unit** — **flat "diagnosis" credit at escalation** (most explainable), with heavy sessions optionally surfacing incremental usage. *(vs. metered per diagnostic turn/capture.)* This is also a pricing/business decision (align with RevenueCat/Stripe tiering).
-3. **Does an escalated thread stay diagnostic, or drop back to casual Ask?** — **stays diagnostic** once escalated (matches the case model); casual side-questions handled inside the diagnostic brain via Phase-4 retrieval; a fresh casual question starts a new thread.
-4. **Routing philosophy** — confirm **Option 3 (escalation)**, not a fully-automatic per-message router (Option 2: cleaner internal metering, jumpier UX, needs a classifier call per message).
-5. **Merge scope** — confirm **only Ask + Diagnose** merge; **OBD2 Scan + Inspection stay separate instruments.**
-6. **Phase-4 timing** — **defer** in-diagnosis retrieval until Phases 1–3 are validated (it's the only fence-adjacent work).
+1. **Escalation trigger — LOCKED:** **both** an explicit "Diagnose this" action (always available) **and** a gentle, invitational, never-forced brain-suggested offer (mirrors the photo-offer pattern). → §1.7
+2. **Billing unit — LOCKED:** **flat "diagnosis credit" minted at escalation**; pre-escalation Ask stays cheap/free via the zero-cost fast-paths. (Credit weights / tier alignment with RevenueCat/Stripe remain a later pricing exercise — the *unit* is settled.) → §1.8
+3. **Thread behavior — LOCKED:** an escalated thread **stays diagnostic**; a fresh casual question starts a **new thread**; casual side-questions inside a diagnosis go through the final-phase retrieval. → §1.9
+4. **Routing philosophy — LOCKED:** **Option 3 (escalation-hybrid)** — NOT the auto-router (Option 2), NOT the unified brain (Option 1). → §1.2
+5. **Merge scope — LOCKED:** **only Ask + Diagnose**; OBD2 Scan + Inspection stay separate instruments. → §1.6
+6. **In-diagnosis retrieval timing — LOCKED:** deferred to the **last, optional phase** (the only fence-adjacent work). → §7 Phase 5
+7. **ADDED by founder directive (2026-07-01): persistent chats are REQUIRED** — multi-thread persistence + a chat list must land **with or before** the unified shell, never after. → §1.10, §7 Phase 3
 
 ---
 
@@ -162,7 +168,8 @@ Working defaults in **bold** — a fresh session should confirm these before bui
 
 - **Option 1 is the trap.** Broadening the diagnostic *brain* into a general assistant re-tunes validated behavior. The chosen architecture exists to avoid this — if anyone drifts toward "one brain does everything," stop and re-confirm.
 - **Under-escalation** (a real fault handled as shallow Ask) is Option 3's characteristic failure — mitigate with always-available manual escalation + invitational brain-suggested offers; measure how often Ask threads later escalate.
-- **Screen-merge regressions** (Phase 3) — merging a ~1,079-line and a ~3,781-line screen is real UI risk independent of the engine; stage behind a preview build and validate a full on-vehicle diagnosis before promoting.
+- **Screen-merge regressions** (Phase 4) — merging a ~1,079-line and a ~3,781-line screen is real UI risk independent of the engine; stage behind a preview build and validate a full on-vehicle diagnosis before promoting.
+- **The shell-without-chats regression trap** — a merged single-window shell shipped before multi-thread persistence + the chat list (Phase 3) silently deletes the app's only multitasking (two separate screens). §1.10 makes the ordering a hard gate; don't let schedule pressure invert it.
 - **Metering is a product/pricing decision, not just code** — the clean technical boundary (escalation) still needs business answers for credit weights and heavy-session handling.
 - **Context-carry fidelity across escalation** — photos are dropped today; the flattened diagnostic-history text must round-trip cleanly. Phase 1 de-risks this before the big merge.
 
@@ -184,6 +191,6 @@ Working defaults in **bold** — a fresh session should confirm these before bui
 
 ## 11. STATUS / NEXT STEP
 
-- **Done:** read-only architecture investigation (engine untouched); direction locked (§1); phasing owned (§7).
-- **Next:** founder ratifies §8 → begin **Phase 1** (fix the lossy escalation + full context carry). Do **not** start any server/prompt work until Phases 1–3 contracts are settled; Phase 4 is the only fence-adjacent change and is gated last.
+- **Done:** read-only architecture investigation (engine untouched); direction locked (§1); phasing owned (§7); **Phase 0 complete — founder ratified all §8 decisions and added the persistent-chats requirement (2026-07-01).**
+- **Next:** begin **Phase 1** (fix the lossy escalation + full context carry). Do **not** start any server/prompt work until Phases 1–4 contracts are settled; Phase 5 is the only fence-adjacent change and is gated last. **The unified shell (Phase 4) must not ship before persistent chats (Phase 3) — hard gate.**
 - **Standing rule for every phase:** run `node server/scripts/verifyAssessPrompt.js` (must PASS), keep the four safeguards intact, keep soft-validators non-throwing, and never route the live/capture path through the overridable context VIN.
