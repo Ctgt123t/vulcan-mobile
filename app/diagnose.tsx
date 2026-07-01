@@ -1771,6 +1771,15 @@ export default function Screen() {
         const b64 = await readPhotoBase64(lastCarriedPhoto.image.uri);
         if (b64) {
           first.image = { ...lastCarriedPhoto.image };
+          // Same-photo labeling (on-device finding): without this note the
+          // thread's shape reads as a photo SEQUENCE (a mid-history
+          // "[photo attached]" placeholder + an image on the complaint), and
+          // the brain narrated a comparison to a "previous" photo it never
+          // saw. The note lives in the PERSISTED content deliberately — on
+          // later turns this image also degrades to a placeholder, so history
+          // shows two markers for one photo; a persistent caption keeps both
+          // self-explaining (incl. after resume). Text-only; pipeline intact.
+          first.content = `${first.content}\n\n(Photo re-attached from earlier in this conversation — same photo, not a new one.)`;
           pendingPhotoBase64Ref.current = b64;
         }
       }
