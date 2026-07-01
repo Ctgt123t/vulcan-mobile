@@ -77,7 +77,12 @@ import {
   hasFindingOptions,
   readFindingOptions,
 } from "../lib/findingOptions";
-import { persistPhoto, pickAndResize, withoutBase64 } from "../lib/photoEvidence";
+import {
+  persistPhoto,
+  pickAndResize,
+  readPhotoBase64,
+  withoutBase64,
+} from "../lib/photoEvidence";
 import { buildDiagnosticSnapshot } from "../lib/diagnosticSnapshot";
 import {
   buildTurnHistory,
@@ -1746,6 +1751,30 @@ export default function Screen() {
     // user turn and the terminal-user guarantee is untouched.
     const carried = carriedThreadRef.current ?? [];
     carriedThreadRef.current = null;
+    // Phase-1 follow-up (carried-photo visibility): the diagnostic brain never
+    // saw an Ask-thread photo — bytes are transient, the carried image is
+    // uri-metadata only, so history serializes a DANGLING "[photo attached]"
+    // placeholder (the lean rule's carry-forward assumes the SAME brain saw the
+    // image once). Fix: make the COMPLAINT turn the attach turn for the MOST
+    // RECENT carried photo — re-read the bytes from the durable uri and prime
+    // the existing injection, so the proven photo-on-intake path sends the
+    // vision block exactly once on the first diagnostic turn; later turns
+    // revert to placeholders (lean rule intact; base64 never persisted). A
+    // staged intake photo WINS (fresher, deliberate) — the carried photo then
+    // stays a placeholder. Earlier carried photos stay placeholders. A read
+    // failure (purged/reinstalled file) skips cleanly to today's behavior.
+    if (!photo) {
+      const lastCarriedPhoto = [...carried]
+        .reverse()
+        .find((m) => m.role === "user" && m.image);
+      if (lastCarriedPhoto?.image) {
+        const b64 = await readPhotoBase64(lastCarriedPhoto.image.uri);
+        if (b64) {
+          first.image = { ...lastCarriedPhoto.image };
+          pendingPhotoBase64Ref.current = b64;
+        }
+      }
+    }
     const seeded = [...carried, first];
     setMessages(seeded);
     messagesRef.current = seeded;

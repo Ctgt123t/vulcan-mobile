@@ -135,6 +135,23 @@ export async function persistPhoto(srcUri: string): Promise<string> {
   }
 }
 
+// Re-read a persisted photo's bytes as base64 (merge-plan Phase-1 follow-up:
+// re-attaching a carried Ask photo so the DIAGNOSTIC brain sees it once — the
+// lean rule's carry-forward only works when the SAME brain saw the image, and
+// across the Ask→Diagnose boundary it hasn't). Fail-soft: null on any error
+// (missing/purged file, unreadable uri) — the caller skips the attach and the
+// turn degrades to the placeholder. Lazy native, node-safe at import.
+export async function readPhotoBase64(uri: string): Promise<string | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const FileSystem = require("expo-file-system/legacy");
+    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+    return typeof b64 === "string" && b64.length > 0 ? b64 : null;
+  } catch {
+    return null;
+  }
+}
+
 // Strip the transient base64 from an attachment before persisting it to the
 // case envelope (we never store image bytes — only the local URI reference).
 export function withoutBase64(image: ImageAttachment): ImageAttachment {
