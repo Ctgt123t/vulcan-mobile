@@ -216,6 +216,14 @@ flow drives the card.
 
 **Deploying changes — Claude Code's responsibility:** When a task involves backend/server changes, Claude Code must commit and push to GitHub `main` as the final step so Railway redeploys — this is not the user's job to do manually. Backend changes do NOT reach the live server via OTA updates (`eas update` only ships the mobile JS bundle to devices; server code only deploys when pushed to GitHub). A task that changes both mobile and server code requires BOTH an `eas update` (for mobile) AND a `git push` (for server) — these are always separate steps and both must be completed. Never consider a task with server changes finished until the push to GitHub is done. Always confirm to the user that both the OTA update and the GitHub push were completed.
 
+**Default deploy policy (standing rule, founder-set 2026-07-01):** after a phase/change is committed and its gates pass, automatically commit → push to GitHub (`main`) → deploy by the channel matching what changed, without waiting for per-change approval:
+
+- Mobile JS/TS change → `git push` + `eas update` (OTA, `preview` channel).
+- Server change → `git push` (Railway auto-deploys).
+- Both changed → do both.
+
+Commit is always separate from deploy. EXCEPTION: native changes (new native deps, icon/version-bump, anything requiring `eas build`) are NOT auto-deployed — they require explicit founder approval and are bundled into a deliberate native build. Still push those commits to GitHub. Also stop-and-report before anything that spends money or is otherwise risky, per existing discipline.
+
 ## Known Platform Issues
 
 ### iOS startup crash — reanimated v4 / worklets babel plugin (RESOLVED)
