@@ -1,7 +1,5 @@
 import type {
-  AssistantTurn,
   ChatMessage,
-  DiagnoseResponse,
   DiagramLookupResult,
   DtcDefinition,
   Recall,
@@ -141,68 +139,10 @@ export async function decodeVin(vin: string): Promise<VinDecoded> {
   };
 }
 
-export async function diagnose(
-  vehicle: VehicleInfo,
-  messages: ChatMessage[],
-  recalls: Recall[] = [],
-  tsbs: Tsb[] = [],
-  sessionId?: string | null,
-): Promise<{ turn: AssistantTurn; cost: ApiCostData | null }> {
-  if (!BASE_URL || BASE_URL.length === 0) {
-    throw new DiagnoseError(
-      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
-    );
-  }
-
-  const url = `${BASE_URL}/api/diagnose`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "ngrok-skip-browser-warning": "true",
-  };
-  const bodyStr = JSON.stringify({
-    vehicle,
-    messages: truncateForApi(messages),
-    recalls,
-    tsbs,
-    sessionId: sessionId ?? null,
-  });
-
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body: bodyStr });
-  } catch {
-    throw new DiagnoseError(
-      "Network error. Check your connection and try again.",
-    );
-  }
-
-  let raw: string;
-  try {
-    raw = await res.text();
-  } catch {
-    throw new DiagnoseError(`Couldn't read server response (${res.status}).`);
-  }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new DiagnoseError(
-      `Server returned an unexpected response (${res.status}).`,
-    );
-  }
-
-  if (!res.ok) {
-    const msg =
-      json && typeof json === "object" && "error" in json
-        ? String((json as { error: unknown }).error)
-        : `Request failed (${res.status}).`;
-    throw new DiagnoseError(msg);
-  }
-
-  const resp = json as DiagnoseResponse & { cost?: ApiCostData | null };
-  return { turn: resp.turn, cost: resp.cost ?? null };
-}
+// (Post-merge cleanup, 2026-07-02: the diagnose() client — the retired direct
+// /api/diagnose call — was removed with its last dead caller in chat.tsx. The
+// server endpoint remains; the thread runs on diagnoseTurn(). DiagnoseError
+// stays — it's the shared error type for ask()/decode paths.)
 
 export async function ask(
   messages: ChatMessage[],
@@ -303,84 +243,9 @@ export async function diagramLookup(
   }
 }
 
-export class AssessError extends Error {}
-
-export interface AssessResult {
-  assessment: DiagnosticAssessment;
-  cost: ApiCostData | null;
-}
-
-export async function assess(
-  vehicle: VehicleInfo,
-  vin: string | null,
-  mileage: string,
-  complaint: string,
-  snapshot: DiagnosticSnapshot,
-  recalls: Recall[] = [],
-  tsbs: Tsb[] = [],
-  sessionId?: string | null,
-): Promise<AssessResult> {
-  if (!BASE_URL || BASE_URL.length === 0) {
-    throw new AssessError(
-      "Backend URL is not configured. Set EXPO_PUBLIC_API_BASE_URL and restart Expo.",
-    );
-  }
-
-  const url = `${BASE_URL}/api/assess`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "ngrok-skip-browser-warning": "true",
-  };
-  const bodyStr = JSON.stringify({
-    vehicle,
-    vin,
-    mileage,
-    complaint,
-    snapshot,
-    recalls,
-    tsbs,
-    sessionId: sessionId ?? null,
-  });
-
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body: bodyStr });
-  } catch {
-    throw new AssessError(
-      "Network error. Check your connection and try again.",
-    );
-  }
-
-  let raw: string;
-  try {
-    raw = await res.text();
-  } catch {
-    throw new AssessError(`Couldn't read server response (${res.status}).`);
-  }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new AssessError(
-      `Server returned an unexpected response (${res.status}).`,
-    );
-  }
-
-  if (!res.ok) {
-    const msg =
-      json && typeof json === "object" && "error" in json
-        ? String((json as { error: unknown }).error)
-        : `Request failed (${res.status}).`;
-    throw new AssessError(msg);
-  }
-
-  const result = json as { assessment: DiagnosticAssessment; cost?: ApiCostData | null };
-  return {
-    assessment: result.assessment,
-    cost: result.cost ?? null,
-  };
-}
+// (Post-merge cleanup, 2026-07-02: the assess() client + AssessError — the
+// retired SB4 parallel /api/assess fire — were removed with their last dead
+// caller in chat.tsx. The server endpoint remains.)
 
 export class EvidenceUpdateError extends Error {}
 

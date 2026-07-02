@@ -32,22 +32,17 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.actions}>
-            {/* Phase 4 (unified shell): both chat tiles land on /chat — the
-                Ask tile starts LIGHT, the Diagnose tile starts at the intake.
-                One thread; light escalates in place via "Diagnose this". */}
+            {/* Post-merge cleanup: ONE chat entry. Ask starts light and
+                deepens via "Diagnose this" (always available, even on an
+                empty thread — the direct-diagnosis path). Diagnosis is also
+                reachable via the OBD2 screen's "Escalate to Diagnosis" and
+                case resume (Chats / auto-prompt), which enter /chat at the
+                intake directly. */}
             <ActionTile
               icon="chatbubbles-outline"
               title="Ask Vulcan"
-              subtitle="Ask anything automotive — escalate to a diagnosis any time"
+              subtitle="Ask anything automotive — escalate to a full diagnosis any time"
               onPress={() => router.push("/chat")}
-            />
-            <ActionTile
-              icon="pulse-outline"
-              title="Diagnose"
-              subtitle="Guided diagnosis — uses live OBD2 data when connected"
-              onPress={() =>
-                router.push({ pathname: "/chat", params: { mode: "diagnose" } })
-              }
             />
             <ActionTile
               icon="clipboard-outline"
@@ -90,21 +85,6 @@ export default function HomeScreen() {
                   <Text style={styles.utilityText}>Connect a device</Text>
                 </View>
               )}
-            </Pressable>
-            <Pressable
-              style={styles.utilityLink}
-              onPress={() => router.push("/chats")}
-              accessibilityRole="button"
-              accessibilityLabel="Chats — resume a conversation"
-            >
-              <View style={styles.utilityRow}>
-                <Ionicons
-                  name="albums-outline"
-                  size={14}
-                  color={colors.muted}
-                />
-                <Text style={styles.utilityText}>Chats</Text>
-              </View>
             </Pressable>
             <Pressable
               style={styles.utilityLink}

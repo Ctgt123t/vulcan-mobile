@@ -40,15 +40,12 @@ import DataBadge from "../components/assessment/DataBadge";
 import { useObd2 } from "../contexts/Obd2Context";
 import { EMPTY_VEHICLE, useVehicle } from "../contexts/VehicleContext";
 import {
-  AssessError,
   DiagnoseError,
   DiagnoseTurnError,
   EvidenceUpdateError,
   VinDecodeError,
   ask,
-  assess,
   decodeVin,
-  diagnose,
   diagnoseTurn,
   evidenceUpdate,
   isLikelyVin,
@@ -93,7 +90,6 @@ import {
   type HistoryAssessment,
   type HistoryCapture,
 } from "../lib/turnHistory";
-import { consumeHandoff } from "../lib/handoff";
 import { setDiagnoseSessionActive } from "../lib/activeDiagnoseSession";
 import { diagnosticLogger } from "../lib/diagnosticLogger";
 import {
@@ -114,7 +110,6 @@ import {
   type EvidenceCaptureEntry,
   type SavedAssessmentEntry,
   makeCaseId,
-  sanitizeMessages,
   vehicleLabel,
 } from "../lib/diagnosticCasesCore";
 import {
@@ -544,91 +539,52 @@ export default function Screen() {
   }, [phase]);
 
   // Mount-time intake entry. ONE effect handles all non-resume entry paths in
-  // sequence (no inter-effect ordering/consume races): OBD2 escalation, then an
-  // Ask→Diagnose handoff, then — if neither applies — a fresh start. The
-  // fresh-start branch closes the previous-vehicle leak: a brand-new diagnosis
-  // opened while DISCONNECTED begins with empty fields (mirroring
-  // resetSession's disconnected branch) instead of inheriting the persisted
-  // global vehicle. When CONNECTED, the auto-VIN vehicle is kept (the
-  // legitimate persist case); a resume is handled entirely by the resume effect
-  // (guarded out here); cross-mode carryover stays explicit via the handoff.
+  // sequence (no inter-effect ordering/consume races): OBD2 escalation, then —
+  // if it doesn't apply — a fresh start. The fresh-start branch closes the
+  // previous-vehicle leak: a brand-new diagnosis opened while DISCONNECTED
+  // begins with empty fields (mirroring resetSession's disconnected branch)
+  // instead of inheriting the persisted global vehicle. When CONNECTED, the
+  // auto-VIN vehicle is kept (the legitimate persist case); a resume is
+  // handled entirely by the resume effect (guarded out here).
+  // (Post-merge cleanup: the old AsyncStorage Ask→Diagnose handoff branch is
+  // GONE — the shell escalates in-memory via escalateToDiagnosis, and
+  // lib/handoff.ts was deleted with its last writer. A pre-shell stale
+  // handoff key left in AsyncStorage is simply never read again — safer than
+  // applying a days-old prefill.)
   useEffect(() => {
-    if (resumeIdAtMount) return; // resuming → the resume effect drains handoffs
+    if (resumeIdAtMount) return; // resuming → the resume effect drains escalations
     // Unified shell: a LIGHT entry must not drain the OBD2 escalation (it
-    // belongs to a diagnose-mode entry), must not consume a legacy handoff,
-    // and must NOT clear the global vehicle (Ask never did).
+    // belongs to a diagnose-mode entry) and must NOT clear the global vehicle
+    // (Ask never did).
     if (!enteredAtIntakeRef.current) return;
-    let active = true;
-    (async () => {
-      // 1. OBD2 escalation (in-memory, consume-once). Sets the complaint to the
-      //    scanned codes; the vehicle is the connected one, left as-is.
-      const esc = consumeObd2DiagnoseEscalation();
-      if (esc) {
-        entrySourceRef.current = "obd2";
-        const dtcLine =
-          esc.dtcs.length > 0
-            ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
-            : "";
-        const permLine =
-          esc.permanentDtcs.length > 0
-            ? `Permanent codes (survived last clear): ${esc.permanentDtcs.join(", ")}.`
-            : "";
-        const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
-        if (combined) setSymptom(combined);
-        return; // explicit entry — do not clear
-      }
-      // 2. Ask→Diagnose handoff (AsyncStorage, consume). Prefills vehicle +
-      //    complaint; vehicle pushes to context so recall/TSB lookups fire.
-      const h = await consumeHandoff("to_diagnose");
-      if (!active) return;
-      if (h) {
-        entrySourceRef.current = "ask";
-        if (h.vehicle) {
-          setVehicleManually(
-            { ...EMPTY_VEHICLE, ...h.vehicle },
-            h.vin ?? null,
-          ).catch(() => {});
-        }
-        if (h.vin) setVin(h.vin);
-        // Merge-plan Phase 1: stash the carried Ask thread (tolerant read —
-        // same sanitizer as the case migrator; base64 never restored, unknown
-        // fields dropped). Trim leading assistant turns so the seeded thread
-        // starts on a user turn — preserves endOnUserTurn's can't-empty
-        // invariant and the API's user-first ordering.
-        const carried = sanitizeMessages(h.messages);
-        while (carried.length > 0 && carried[0].role === "assistant") {
-          carried.shift();
-        }
-        carriedThreadRef.current = carried.length > 0 ? carried : null;
-        const dtcLine =
-          h.dtcs && h.dtcs.length > 0
-            ? `OBD2 scan — stored codes: ${h.dtcs.join(", ")}.`
-            : "";
-        const permLine =
-          h.permanentDtcs && h.permanentDtcs.length > 0
-            ? `Permanent codes (survived last clear): ${h.permanentDtcs.join(", ")}.`
-            : "";
-        const combined = [dtcLine, permLine, h.symptom]
-          .filter((s) => s)
-          .join("\n\n");
-        if (combined) setSymptom(combined);
-        return; // explicit entry — do not clear
-      }
-      // 3. Genuinely fresh intake. When DISCONNECTED, start empty (same clears
-      //    as resetSession's disconnected branch) so the previous vehicle
-      //    doesn't leak in. When CONNECTED, keep the auto-VIN vehicle.
-      if (!isConnected) {
-        setVin("");
-        setDecoded(false);
-        setDecodeError(null);
-        setManualOpen(false);
-        lastDecodedRef.current = "";
-        clearVehicle().catch(() => {});
-      }
-    })();
-    return () => {
-      active = false;
-    };
+    // 1. OBD2 escalation (in-memory, consume-once). Sets the complaint to the
+    //    scanned codes; the vehicle is the connected one, left as-is.
+    const esc = consumeObd2DiagnoseEscalation();
+    if (esc) {
+      entrySourceRef.current = "obd2";
+      const dtcLine =
+        esc.dtcs.length > 0
+          ? `OBD2 scan — stored codes: ${esc.dtcs.join(", ")}.`
+          : "";
+      const permLine =
+        esc.permanentDtcs.length > 0
+          ? `Permanent codes (survived last clear): ${esc.permanentDtcs.join(", ")}.`
+          : "";
+      const combined = [dtcLine, permLine].filter((s) => s).join("\n\n");
+      if (combined) setSymptom(combined);
+      return; // explicit entry — do not clear
+    }
+    // 2. Genuinely fresh intake. When DISCONNECTED, start empty (same clears
+    //    as resetSession's disconnected branch) so the previous vehicle
+    //    doesn't leak in. When CONNECTED, keep the auto-VIN vehicle.
+    if (!isConnected) {
+      setVin("");
+      setDecoded(false);
+      setDecodeError(null);
+      setManualOpen(false);
+      lastDecodedRef.current = "";
+      clearVehicle().catch(() => {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -652,7 +608,6 @@ export default function Screen() {
   async function attemptResume(resumeId: string): Promise<void> {
     const saved = await loadCase(resumeId);
     consumeObd2DiagnoseEscalation();
-    consumeHandoff("to_diagnose").catch(() => {});
     carriedThreadRef.current = null; // resume wins over a stale carried thread
     if (!saved) {
       // Gone / unreadable (e.g. a future-version body after a rollback).
@@ -1124,84 +1079,8 @@ export default function Screen() {
     );
   }
 
-  // DEAD (SB4): the thread no longer fires /api/assess directly — the unified
-  // brain (runDiagnoseTurn) emits assessments. Kept until the focused dead-code
-  // cleanup pass (with the unused assess() client); not called from anywhere.
-  async function runAssessment(afterMessageIndex: number, complaintText: string) {
-    const id = ++assessmentIdRef.current;
-    const withRunning: AssessmentEntry[] = [
-      ...assessmentsRef.current,
-      { id, afterMessageIndex, slot: { status: "running" } },
-    ];
-    setAssessments(withRunning);
-    assessmentsRef.current = withRunning;
-    // Running slots are intentionally not persisted (an in-flight call can't
-    // survive a process death), so no saveCase() here.
-
-    const handoff = getObd2DiagnoseHandoff();
-    const descriptors =
-      handoff.selectedDescriptors.length > 0
-        ? handoff.selectedDescriptors
-        : obd2.getSelectedPids();
-    const ringBuffer = obd2.captureSnapshot(5000);
-    const snapshot = buildDiagnosticSnapshot(
-      ringBuffer,
-      descriptors,
-      condition,
-      handoff.dtcs,
-      handoff.pendingDtcs,
-      handoff.permanentDtcs,
-      handoff.freezeFrame,
-    );
-
-    try {
-      const result = await assess(
-        vehicle,
-        vin.trim() || null,
-        vehicle.mileage,
-        complaintText,
-        snapshot,
-        recalls,
-        tsbs,
-        diagnosticLogger.getCurrentSessionId(),
-      );
-      diagnosticLogger.log({
-        type: "assessment",
-        vehicle: vehicle.year
-          ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
-          : undefined,
-        assessment: result.assessment,
-        operatingCondition: condition,
-        apiCost: result.cost,
-      });
-      const next = assessmentsRef.current.map((a) =>
-        a.id === id
-          ? {
-              ...a,
-              slot: { status: "done" as const, assessment: result.assessment },
-            }
-          : a,
-      );
-      setAssessments(next);
-      assessmentsRef.current = next;
-      saveCase({ assessments: next });
-    } catch (err) {
-      const msg =
-        err instanceof AssessError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Assessment failed.";
-      const next = assessmentsRef.current.map((a) =>
-        a.id === id
-          ? { ...a, slot: { status: "error" as const, message: msg } }
-          : a,
-      );
-      setAssessments(next);
-      assessmentsRef.current = next;
-      saveCase({ assessments: next });
-    }
-  }
+  // (Post-merge cleanup: the dead-marked runAssessment() — the retired SB4
+  // parallel /api/assess fire — was removed along with the assess() client.)
 
   // ---- Stage 2C-4: single-round evidence loop ----
   // MINIMAL wiring to run ONE capture round end-to-end. SUB-BATCH 2 replaces the
@@ -1772,46 +1651,8 @@ export default function Screen() {
     setVehicleManually({ ...vehicle, [field]: value }, vin || null).catch(() => {});
   }
 
-  // DEAD (SB4): the thread no longer fires /api/diagnose directly — the unified
-  // brain (runDiagnoseTurn) drives the conversation. Kept until the focused
-  // dead-code cleanup pass (with the unused diagnose() client); not called.
-  async function callApi(nextMessages: ChatMessage[]): Promise<void> {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await diagnose(
-        vehicle, nextMessages, recalls, tsbs,
-        diagnosticLogger.getCurrentSessionId(),
-      );
-      const appended: ChatMessage[] = [
-        ...nextMessages,
-        { role: "assistant", content: JSON.stringify(result.turn) },
-      ];
-      setMessages(appended);
-      messagesRef.current = appended;
-      // "Once per completed turn" save grain.
-      saveCase({ messages: appended });
-      if (result.cost) {
-        diagnosticLogger.log({
-          type: "diagnose_turn",
-          vehicle: vehicle.year
-            ? { year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vin.trim() || null }
-            : undefined,
-          callType: "diagnose",
-          diagnoseTurnKind: result.turn.kind,
-          apiCost: result.cost,
-        });
-      }
-    } catch (err) {
-      const msg =
-        err instanceof DiagnoseError
-          ? err.message
-          : "Unexpected error. Try again.";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // (Post-merge cleanup: the dead-marked callApi() — the retired direct
+  // /api/diagnose fire — was removed along with the diagnose() client.)
 
   // ---- Stage 2C-4 SB4: the UNIFIED diagnostic turn ----
   // ONE call per turn to the unified brain (/api/diagnose-turn) — replaces the
@@ -4153,20 +3994,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 15,
     letterSpacing: 0.3,
-  },
-  switchLink: {
-    minHeight: HIT_TARGET - 12,
-    alignSelf: "flex-end",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginRight: 8,
-    marginTop: 4,
-  },
-  switchLinkText: {
-    color: colors.accent,
-    fontSize: 12,
-    fontWeight: "600",
-    letterSpacing: 0.2,
   },
   composerWrap: {
     flexDirection: "column",

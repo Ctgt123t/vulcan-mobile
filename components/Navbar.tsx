@@ -6,7 +6,11 @@ import BrandMark from "./BrandMark";
 type Props = {
   showRecordsLink?: boolean;
   showBack?: boolean;
-  showSignOut?: boolean;
+  // Post-merge cleanup (2026-07-02): "Sign out" was removed from the header
+  // (re-added later inside a future Settings screen — auth is still the
+  // placeholder sign-in). Its slot now holds "Chats" (the unified thread
+  // list), promoted from the home footer.
+  showChatsLink?: boolean;
   // Home opt-in: flow over the atmospheric background (no fill/divider) and
   // render the actions as plain text links instead of filled chips. Other
   // screens omit this prop and keep the solid bar + chip buttons.
@@ -16,21 +20,10 @@ type Props = {
 export default function Navbar({
   showRecordsLink = true,
   showBack = false,
-  showSignOut = true,
+  showChatsLink = true,
   transparent = false,
 }: Props) {
   const router = useRouter();
-
-  function handleSignOut() {
-    // Reset the stack back to the sign-in screen. dismissAll pops any pushed
-    // screens; replace then swaps the root with "/" so back doesn't return
-    // here. PLACEHOLDER: real auth will also clear the session token.
-    const r = router as unknown as { dismissAll?: () => void };
-    if (typeof r.dismissAll === "function") {
-      r.dismissAll();
-    }
-    router.replace("/");
-  }
 
   return (
     <View style={[styles.navbar, transparent && styles.navbarTransparent]}>
@@ -66,20 +59,17 @@ export default function Navbar({
               </Text>
             </TouchableOpacity>
           )}
-          {showSignOut && (
+          {showChatsLink && (
             <TouchableOpacity
               style={transparent ? styles.linkBtn : styles.actionBtn}
-              onPress={handleSignOut}
+              onPress={() => router.push("/chats")}
               activeOpacity={0.7}
-              accessibilityLabel="Sign out"
+              accessibilityLabel="Chats — resume a conversation"
             >
               <Text
-                style={[
-                  styles.actionText,
-                  transparent ? styles.signOutLinkText : styles.signOutText,
-                ]}
+                style={[styles.actionText, transparent && styles.recordsLinkText]}
               >
-                Sign out
+                Chats
               </Text>
             </TouchableOpacity>
           )}
@@ -164,9 +154,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.3,
   },
-  signOutText: {
-    color: colors.muted,
-  },
   // Home variant: plain text links (no fill/border).
   linkBtn: {
     minHeight: HIT_TARGET - 12,
@@ -177,8 +164,5 @@ const styles = StyleSheet.create({
   },
   recordsLinkText: {
     color: "#AEB5BD", // light steel (per v2 home mock)
-  },
-  signOutLinkText: {
-    color: "#71777E", // muted (per v2 home mock)
   },
 });

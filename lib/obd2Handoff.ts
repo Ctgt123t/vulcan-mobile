@@ -11,9 +11,9 @@ import type { FreezeFrame, PidDescriptor } from "./obd2";
 //     old escalation.
 // Deliberately NOT persisted: the payload is only meaningful with a live
 // adapter connection and a warm ring buffer, so surviving an app restart
-// would arm the assessment path with stale data. (The AsyncStorage-based
-// lib/handoff.ts channel remains the right tool for the Ask ↔ Diagnose
-// handoffs, where surviving a restart is correct.)
+// would arm the assessment path with stale data. (The old AsyncStorage-based
+// lib/handoff.ts Ask↔Diagnose channel was deleted in the post-merge cleanup —
+// the unified shell escalates in-memory within one screen.)
 
 export interface Obd2DiagnoseHandoff {
   selectedDescriptors: PidDescriptor[];
