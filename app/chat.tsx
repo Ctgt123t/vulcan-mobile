@@ -914,9 +914,42 @@ export default function Screen() {
     setPhase("intake");
   }
 
+  // Light-chat vehicle affordance (shell checklist fix): tapping the vehicle
+  // bar's vehicle region offers change (the existing AddVehicleModal) or
+  // clear. GROUND-TRUTH RULE: while live-connected, the connected vehicle
+  // wins and is NOT casually swappable — the tap explains instead of
+  // offering, matching how resetSession treats a live connection.
+  function handleLightVehiclePress(): void {
+    if (isConnected) {
+      Alert.alert(
+        "Connected vehicle",
+        "This chat is using the vehicle from the live OBD2 connection. Disconnect the adapter to change or clear it.",
+      );
+      return;
+    }
+    const name =
+      [vehicle.year, vehicle.make, vehicle.model]
+        .filter((s) => s && s.trim().length > 0)
+        .join(" ") || "Current vehicle";
+    Alert.alert("Vehicle for this chat", name, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Clear vehicle",
+        style: "destructive",
+        onPress: () => {
+          clearVehicle().catch(() => {});
+        },
+      },
+      {
+        text: "Change vehicle",
+        onPress: () => setVehicleModalOpen(true),
+      },
+    ]);
+  }
+
   // "New chat" from light mode: fresh light thread (the previous one stays in
   // the chats list). Keeps the vehicle context (starting a new question about
-  // the same car is the common case; the vehicle bar can clear it).
+  // the same car is the common case; the vehicle bar can change/clear it).
   function startNewLightChat(): void {
     setMessages([]);
     messagesRef.current = [];
@@ -2776,6 +2809,9 @@ export default function Screen() {
             vehicle={vehicle}
             onReset={phase === "light" ? startNewLightChat : resetSession}
             resetLabel={phase === "light" ? "New chat" : "New diagnosis"}
+            onPressVehicle={
+              phase === "light" ? handleLightVehiclePress : undefined
+            }
           />
         )}
         <View style={styles.diagramBarRow}>

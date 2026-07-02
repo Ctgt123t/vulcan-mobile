@@ -8,10 +8,16 @@ export default function VehicleBar({
   // Phase 4 (unified shell): the light phase relabels the action ("New chat")
   // — defaulted so every existing call site renders exactly as before.
   resetLabel = "New diagnosis",
+  // Light-chat vehicle affordance (shell checklist fix): when provided, the
+  // vehicle info region becomes tappable (change/clear the chat's vehicle)
+  // and shows a subtle disclosure hint. Absent (every diagnostic call site)
+  // → plain non-interactive View, exactly as before.
+  onPressVehicle,
 }: {
   vehicle: VehicleInfo;
   onReset: () => void;
   resetLabel?: string;
+  onPressVehicle?: () => void;
 }) {
   const name = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
     .filter((s) => s && s.length > 0)
@@ -19,27 +25,44 @@ export default function VehicleBar({
 
   const hasEngine = !!vehicle.engineType && vehicle.engineType.length > 0;
 
+  const info = (
+    <>
+      <Text style={styles.name} numberOfLines={1}>
+        {name}
+      </Text>
+      {hasEngine ? (
+        <>
+          <Text style={styles.sep}>·</Text>
+          <Text style={styles.meta} numberOfLines={1}>
+            {vehicle.engineType}
+          </Text>
+        </>
+      ) : null}
+      <Text style={styles.sep}>·</Text>
+      {/* Mileage is data → IBM Plex Mono. */}
+      <Text style={styles.metaMono} numberOfLines={1}>
+        {vehicle.mileage} mi
+      </Text>
+      {onPressVehicle ? <Text style={styles.editHint}>▾</Text> : null}
+    </>
+  );
+
   return (
     <View style={styles.bar}>
       <View style={styles.inner}>
-        <View style={styles.info}>
-          <Text style={styles.name} numberOfLines={1}>
-            {name}
-          </Text>
-          {hasEngine ? (
-            <>
-              <Text style={styles.sep}>·</Text>
-              <Text style={styles.meta} numberOfLines={1}>
-                {vehicle.engineType}
-              </Text>
-            </>
-          ) : null}
-          <Text style={styles.sep}>·</Text>
-          {/* Mileage is data → IBM Plex Mono. */}
-          <Text style={styles.metaMono} numberOfLines={1}>
-            {vehicle.mileage} mi
-          </Text>
-        </View>
+        {onPressVehicle ? (
+          <TouchableOpacity
+            style={styles.info}
+            onPress={onPressVehicle}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Change or clear the vehicle for this chat"
+          >
+            {info}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.info}>{info}</View>
+        )}
         <TouchableOpacity
           style={styles.reset}
           onPress={onReset}
@@ -96,6 +119,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: fonts.mono,
     flexShrink: 1,
+  },
+  // The tappable-vehicle disclosure hint (light chat only).
+  editHint: {
+    color: colors.faint,
+    fontSize: 10,
+    marginLeft: 4,
   },
   // v2 ghost/steel button.
   reset: {
