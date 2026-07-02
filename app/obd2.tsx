@@ -597,7 +597,8 @@ export default function Obd2Screen() {
       permanentDtcs,
       freezeFrame,
     });
-    router.push("/diagnose");
+    // Phase 4: the diagnostic screen lives at /chat (mode=diagnose → intake).
+    router.push({ pathname: "/chat", params: { mode: "diagnose" } });
   }
 
   const visibleObd = devices.filter((d) => d.likelyObd);

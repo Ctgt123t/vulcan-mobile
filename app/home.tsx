@@ -32,17 +32,22 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.actions}>
+            {/* Phase 4 (unified shell): both chat tiles land on /chat — the
+                Ask tile starts LIGHT, the Diagnose tile starts at the intake.
+                One thread; light escalates in place via "Diagnose this". */}
             <ActionTile
               icon="chatbubbles-outline"
               title="Ask Vulcan"
-              subtitle="Ask anything automotive"
-              onPress={() => router.push("/ask")}
+              subtitle="Ask anything automotive — escalate to a diagnosis any time"
+              onPress={() => router.push("/chat")}
             />
             <ActionTile
               icon="pulse-outline"
               title="Diagnose"
               subtitle="Guided diagnosis — uses live OBD2 data when connected"
-              onPress={() => router.push("/diagnose")}
+              onPress={() =>
+                router.push({ pathname: "/chat", params: { mode: "diagnose" } })
+              }
             />
             <ActionTile
               icon="clipboard-outline"
@@ -85,6 +90,21 @@ export default function HomeScreen() {
                   <Text style={styles.utilityText}>Connect a device</Text>
                 </View>
               )}
+            </Pressable>
+            <Pressable
+              style={styles.utilityLink}
+              onPress={() => router.push("/chats")}
+              accessibilityRole="button"
+              accessibilityLabel="Chats — resume a conversation"
+            >
+              <View style={styles.utilityRow}>
+                <Ionicons
+                  name="albums-outline"
+                  size={14}
+                  color={colors.muted}
+                />
+                <Text style={styles.utilityText}>Chats</Text>
+              </View>
             </Pressable>
             <Pressable
               style={styles.utilityLink}

@@ -57,7 +57,7 @@ export default function CaseResumePrompt() {
                 text: "Resume",
                 onPress: () =>
                   router.navigate({
-                    pathname: "/diagnose",
+                    pathname: "/chat",
                     params: { resume: m.id },
                   }),
               },
@@ -73,8 +73,8 @@ export default function CaseResumePrompt() {
                 text: "View cases",
                 onPress: () =>
                   router.navigate({
-                    pathname: "/diagnose",
-                    params: { focusVin: vin },
+                    pathname: "/chat",
+                    params: { mode: "diagnose", focusVin: vin },
                   }),
               },
             ],

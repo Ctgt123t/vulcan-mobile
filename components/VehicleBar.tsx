@@ -5,9 +5,13 @@ import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 export default function VehicleBar({
   vehicle,
   onReset,
+  // Phase 4 (unified shell): the light phase relabels the action ("New chat")
+  // — defaulted so every existing call site renders exactly as before.
+  resetLabel = "New diagnosis",
 }: {
   vehicle: VehicleInfo;
   onReset: () => void;
+  resetLabel?: string;
 }) {
   const name = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim]
     .filter((s) => s && s.length > 0)
@@ -40,9 +44,9 @@ export default function VehicleBar({
           style={styles.reset}
           onPress={onReset}
           activeOpacity={0.7}
-          accessibilityLabel="Start a new diagnosis"
+          accessibilityLabel={resetLabel}
         >
-          <Text style={styles.resetText}>New diagnosis</Text>
+          <Text style={styles.resetText}>{resetLabel}</Text>
         </TouchableOpacity>
       </View>
     </View>
