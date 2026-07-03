@@ -25,7 +25,7 @@ import {
   lookupFuse,
   formatFuseContextBlock,
 } from "./vehicleSpecs.js";
-import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
+import { diagramLookup, DIAGRAM_TYPES, sanitizeSubject } from "./diagramLookup.js";
 
 // Iteration cap on the tool loop. Env-configurable so the forced-text fallback
 // path (cap reached while Claude still wants a tool) can be exercised against
@@ -200,14 +200,20 @@ export const DIAGRAM_LOOKUP_TOOL_NAME = "diagram_lookup";
 export const diagramLookupTool = {
   name: DIAGRAM_LOOKUP_TOOL_NAME,
   description:
-    "Find and SHOW the technician a real fuse-box, wiring, or component (serpentine/accessory belt) diagram for their current vehicle, pulled from the open web with a link to the source — the same as Googling \"<year> <make> <model> fuse box diagram\" but surfaced inside the app. Call this whenever the technician asks to SEE or FIND a diagram (\"show me the fuse box diagram\", \"where's the X fuse\", \"belt routing diagram\", \"wiring diagram for …\"). The vehicle is supplied automatically; you only choose the diagram_type. The images are displayed to the technician DIRECTLY by the app — you do NOT and CANNOT see them. Never read, describe, summarize, or infer a fuse/circuit/component assignment from the diagram image, and never state an exact assignment as a confirmed fact for this vehicle unless it was given to you as verified data. You MAY still offer commonly-known general guidance as a LIKELY value for the technician to confirm against the printed legend — clearly hedged (e.g. \"on this generation it's commonly around #X, a ~20A fuse in the under-hood box — verify against your legend\"), never asserted as a confirmed number.",
+    "Find and SHOW the technician a real diagram of ANY automotive system or assembly on their current vehicle — a fuse/relay box, serpentine/accessory belt routing (component), any other named assembly or system via diagram_type \"parts\" plus a subject (e.g. \"oil pan\", \"cooling system\", \"front suspension\", \"drivetrain\"), or wiring (search links) — pulled from the open web with a link to the source, surfaced inside the app. Call this whenever the technician asks to SEE or FIND a diagram (\"show me the fuse box diagram\", \"belt routing diagram\", \"diagram of the oil pan\", \"wiring diagram for …\"). The vehicle is supplied automatically; you only choose the diagram_type (and, for parts, the subject). The images are displayed to the technician DIRECTLY by the app — you do NOT and CANNOT see them. Never read, describe, summarize, or infer a fuse/circuit/component assignment from the diagram image, and never state an exact assignment as a confirmed fact for this vehicle unless it was given to you as verified data. You MAY still offer commonly-known general guidance as a LIKELY value for the technician to confirm against the printed legend — clearly hedged (e.g. \"on this generation it's commonly around #X, a ~20A fuse in the under-hood box — verify against your legend\"), never asserted as a confirmed number.",
   input_schema: {
     type: "object",
     properties: {
       diagram_type: {
         type: "string",
         enum: DIAGRAM_TYPES,
-        description: "fuse (fuse/relay box), wiring (electrical), or component (serpentine/accessory belt routing).",
+        description:
+          "fuse (fuse/relay box), component (serpentine/accessory belt routing), parts (ANY other named assembly/system — requires `subject`), or wiring (electrical — returns search links).",
+      },
+      subject: {
+        type: "string",
+        description:
+          "REQUIRED when diagram_type is \"parts\": the assembly or system the technician wants to see, in plain words (e.g. \"oil pan\", \"cooling system\", \"front suspension\", \"exhaust system\"). Omit for the other types.",
       },
     },
     required: ["diagram_type"],
@@ -218,6 +224,15 @@ export async function handleDiagramLookup(input, ctx) {
   const type = DIAGRAM_TYPES.includes(input?.diagram_type) ? input.diagram_type : null;
   if (!type) {
     return { text: `No valid diagram_type. Valid: ${DIAGRAM_TYPES.join(", ")}.` };
+  }
+  const subject = typeof input?.subject === "string" ? input.subject : "";
+  if (type === "parts" && sanitizeSubject(subject).length === 0) {
+    return {
+      text:
+        'A "parts" diagram lookup needs a subject — the assembly or system in plain ' +
+        'words (e.g. "oil pan", "cooling system", "front suspension"). Call ' +
+        'diagram_lookup again with diagram_type "parts" and a subject.',
+    };
   }
   const vehicle = ctx?.vehicle;
   const hasVehicle =
@@ -230,16 +245,17 @@ export async function handleDiagramLookup(input, ctx) {
     };
   }
 
-  const result = await diagramLookup(vehicle, type); // fail-soft; never throws
+  const result = await diagramLookup(vehicle, type, subject); // fail-soft; never throws
   // Surface the real results to the endpoint -> the client renders them.
   ctx.diagrams = result;
 
   const label = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+  const typeLabel = type === "parts" ? `"${sanitizeSubject(subject)}" parts` : type;
   const n = result.images.length;
   if (n > 0) {
     return {
       text:
-        `Displayed ${n} real ${type} diagram image(s) for the ${label} to the technician, ` +
+        `Displayed ${n} real ${typeLabel} diagram image(s) for the ${label} to the technician, ` +
         `each with its source link, plus a "search the web" link. The technician views the ` +
         `images directly — do NOT read, describe, summarize, or infer a fuse/circuit/component ` +
         `assignment from the image, and do NOT state an exact assignment as a confirmed fact for ` +
@@ -252,7 +268,7 @@ export async function handleDiagramLookup(input, ctx) {
   }
   return {
     text:
-      `No year/generation-verified ${type} diagram could be confirmed for the ${label}, so ` +
+      `No year/generation-verified ${typeLabel} diagram could be confirmed for the ${label}, so ` +
       `(to avoid showing a wrong-generation diagram) a "search the web" link was shown instead. ` +
       `Do NOT invent or describe a diagram. Tell the technician to tap the "search the web" link ` +
       `to look for it themselves.`,
@@ -404,4 +420,128 @@ export async function runAskToolLoop({
     toolInvoked: ctx.toolInvoked,
     iterations,
   };
+}
+
+// ---- The unified-turn loop (merge-plan Phase 5) ------------------------------
+//
+// /api/diagnose-turn's execute-then-continue loop. Unlike runAskToolLoop (which
+// ends on a TEXT response), a unified turn ALWAYS ends on a MOVE tool call:
+// tool_choice "any" every round, and the loop separates RETRIEVAL tools
+// (spec_lookup / diagram_lookup — run the handler, feed the result back,
+// re-call) from TERMINAL move tools (ask_followup_question /
+// emit_diagnostic_assessment / provide_diagnosis — return to the endpoint,
+// which dispatches exactly as before).
+//
+// Deliberately EXTENSIBLE (terminal-tool-names semantics): nothing in the loop
+// names a specific tool. Registering another retrieval tool is "append to
+// retrievalTools + handlers" (dtc_lookup later); another move tool is "append
+// to moveTools". Option B's tool-loop turn can build on this unchanged.
+//
+// Termination is guaranteed: up to `maxRetrievalRounds` retrieval rounds, then
+// ONE forced-move call carrying ONLY the move tools (tool_choice "any"), so the
+// model cannot retrieve forever and must commit to exactly one move. If a
+// response carries BOTH a move tool and a retrieval call, the MOVE WINS — the
+// turn is committed, the stray retrieval is logged and not executed.
+//
+// Same injected-callback testability contract as runAskToolLoop
+// (scripts/turnToolLoopTest.js is the zero-cost gate).
+//
+// Returns { toolUse: {name, input} | null, cost, retrievalInvoked, iterations }.
+// toolUse is null only if the model returned no tool_use at all (the endpoint
+// 502s, same as today).
+export async function runTurnToolLoop({
+  createMessage,
+  logCost,
+  model,
+  systemBlocks,
+  messages,
+  moveTools,
+  retrievalTools,
+  handlers,
+  ctx,
+  maxRetrievalRounds = 2,
+  maxTokens,
+}) {
+  const terminalNames = new Set(moveTools.map((t) => t.name));
+  const allTools = [...moveTools, ...retrievalTools];
+  const convo = messages.map((m) => ({ role: m.role, content: m.content }));
+  const cost = emptyCost(model);
+  let iterations = 0;
+
+  const pickTerminal = (response) => {
+    const uses = (response?.content || []).filter((b) => b.type === "tool_use");
+    const terminal = uses.find((b) => terminalNames.has(b.name));
+    if (terminal && uses.length > 1) {
+      console.log(
+        `[turn-loop] move tool "${terminal.name}" returned alongside ${uses.length - 1} other call(s) — move wins, extras ignored.`,
+      );
+    }
+    return { uses, terminal };
+  };
+
+  for (let round = 0; round <= maxRetrievalRounds; round++) {
+    // The last permitted call withholds the retrieval tools entirely so the
+    // model MUST commit to a move (the forced-move final call).
+    const forced = round === maxRetrievalRounds;
+    iterations++;
+    const response = await createMessage({
+      model,
+      max_tokens: maxTokens,
+      system: systemBlocks,
+      messages: convo,
+      tools: forced ? moveTools : allTools,
+      tool_choice: { type: "any" },
+    });
+    addCost(cost, logCost(response.usage));
+
+    const { uses, terminal } = pickTerminal(response);
+    if (terminal) {
+      return {
+        toolUse: { name: terminal.name, input: terminal.input },
+        cost,
+        retrievalInvoked: ctx.toolInvoked === true,
+        iterations,
+      };
+    }
+    if (uses.length === 0) {
+      // tool_choice "any" should make this unreachable; fail like today (502).
+      return { toolUse: null, cost, retrievalInvoked: ctx.toolInvoked === true, iterations };
+    }
+    if (forced) {
+      // Defensive: a forced-move call can only return move tools (they're the
+      // only tools offered), so this is unreachable — but never loop past it.
+      return { toolUse: null, cost, retrievalInvoked: ctx.toolInvoked === true, iterations };
+    }
+
+    // Retrieval round: dispatch every requested retrieval tool, feed the
+    // results back, and re-call. Same fail-soft dispatch as runAskToolLoop —
+    // an unknown tool or a throwing handler becomes an is_error tool_result,
+    // never a 500.
+    ctx.toolInvoked = true;
+    convo.push({ role: "assistant", content: response.content });
+    const toolResults = [];
+    for (const block of uses) {
+      const handler = handlers[block.name];
+      let result;
+      try {
+        if (!handler) {
+          result = { text: `Unknown tool "${block.name}".`, isError: true };
+        } else {
+          result = await handler(block.input, ctx);
+        }
+      } catch (err) {
+        result = { text: `Tool "${block.name}" failed: ${err.message}`, isError: true };
+      }
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: result.text,
+        ...(result.isError ? { is_error: true } : {}),
+      });
+    }
+    convo.push({ role: "user", content: toolResults });
+  }
+
+  // Unreachable (the forced round returns above), kept for safety.
+  return { toolUse: null, cost, retrievalInvoked: ctx.toolInvoked === true, iterations };
 }

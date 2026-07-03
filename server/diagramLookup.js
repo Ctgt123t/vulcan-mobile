@@ -35,12 +35,48 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // transient in-memory only (Brave ToS — 
 export const ATTRIBUTION = "Powered by Brave";
 
 // Which types surface images, and how each query is phrased.
+// "parts" (A+ build, 2026-07-02): ANY named assembly/system diagram ("oil pan",
+// "cooling system", "front suspension") via a REQUIRED free-text subject. This
+// broadens what is SEARCHED, not what is TRUSTED: filtering runs the same
+// NARROW high-precision component rule (dedicated diagram hosts + year-keyed
+// OEM catalogs, yearVerified mandatory — the §3 guard, unchanged and absolute).
+// The three tuned types keep byte-for-byte behavior. Wiring/schematic-shaped
+// subjects route to the links-only path (same rationale as the wiring type).
 export const TYPE_CONFIG = {
   fuse:      { images: true,  mode: "fuse",      phrase: "fuse box diagram" },
   component: { images: true,  mode: "component", phrase: "serpentine belt diagram" },
   wiring:    { images: false, mode: "links",     phrase: "wiring diagram" },
+  parts:     { images: true,  mode: "component", phrase: null /* subject-driven */ },
 };
 export const DIAGRAM_TYPES = Object.keys(TYPE_CONFIG);
+
+// ---- "parts" subject handling ----------------------------------------------
+// Free text from the model, so sanitize hard before it reaches a query URL:
+// lowercase, whitelist [a-z0-9 -], collapse whitespace, cap length. Returns ""
+// when nothing usable survives (the caller falls to links-only).
+export const SUBJECT_MAX_LEN = 40;
+export function sanitizeSubject(subject) {
+  return String(subject || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 -]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, SUBJECT_MAX_LEN)
+    .trim();
+}
+
+// Wiring/schematic-shaped subjects go links-only — open-web image quality and
+// provenance for schematics is poor (the wiring-type probe finding applies to
+// the subject route too; never a lower bar via the parts door).
+export function isWiringShapedSubject(subject) {
+  return /\b(wiring|schematic|circuit|electrical|harness|pinout)\b/i.test(subject);
+}
+
+// A "parts" lookup can surface IMAGES only with a usable, non-wiring subject.
+export function partsSubjectUsable(subject) {
+  const s = sanitizeSubject(subject);
+  return s.length > 0 && !isWiringShapedSubject(s);
+}
 
 // ---- host / title classification (tuned across the probe passes) -----------
 const DENY_HOSTS = [
@@ -139,13 +175,22 @@ export function filterResults(rawResults, vehicle, mode) {
 }
 
 // ---- query + fallback link -------------------------------------------------
-export function buildQuery(vehicle, type) {
+// `subject` applies only to type "parts" (sanitized here; ignored elsewhere).
+export function buildQuery(vehicle, type, subject) {
+  if (type === "parts") {
+    const subj = sanitizeSubject(subject);
+    return `${vehicle.year} ${vehicle.make} ${vehicle.model} ${subj} diagram`
+      .replace(/\s+/g, " ")
+      .trim();
+  }
   const cfg = TYPE_CONFIG[type] || { phrase: "diagram" };
   return `${vehicle.year} ${vehicle.make} ${vehicle.model} ${cfg.phrase}`.trim();
 }
 // Universal fallback: a normal browser image-search the tech taps to open.
-export function buildWebSearchUrl(vehicle, type) {
-  return `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(buildQuery(vehicle, type))}`;
+// Subject-specific for "parts" — an upgrade over a flat refusal: even a
+// links-only miss hands the tech a query already scoped to their assembly.
+export function buildWebSearchUrl(vehicle, type, subject) {
+  return `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(buildQuery(vehicle, type, subject))}`;
 }
 
 // ---- transient in-memory cache (Brave ToS: no persistent storage) ----------
@@ -160,16 +205,21 @@ function cacheSet(key, value) { _cache.set(key, { value, expires: Date.now() + C
 
 // ---- main ------------------------------------------------------------------
 // Returns { type, images: [...], webSearchUrl, attribution, supported }.
-// Never throws. `supported` = whether this type surfaces images at all.
-export async function diagramLookup(vehicle, type) {
+// Never throws. `supported` = whether this request surfaces images at all.
+// `subject` applies only to type "parts" (required there — empty/wiring-shaped
+// subjects go links-only).
+export async function diagramLookup(vehicle, type, subject) {
   const cfg = TYPE_CONFIG[type];
-  const webSearchUrl = buildWebSearchUrl(vehicle, type);
-  const base = { type, images: [], webSearchUrl, attribution: ATTRIBUTION, supported: Boolean(cfg && cfg.images) };
+  const webSearchUrl = buildWebSearchUrl(vehicle, type, subject);
+  const imagesPossible =
+    Boolean(cfg && cfg.images) && (type !== "parts" || partsSubjectUsable(subject));
+  const base = { type, images: [], webSearchUrl, attribution: ATTRIBUTION, supported: imagesPossible };
 
-  // links-only types (wiring / unknown) — no image call.
-  if (!cfg || !cfg.images) return base;
+  // links-only requests (wiring / unknown / unusable parts subject) — no image call.
+  if (!imagesPossible) return base;
 
-  const key = `${type}|${vehicle.year}|${String(vehicle.make).toLowerCase()}|${String(vehicle.model).toLowerCase()}`;
+  const subjKey = type === "parts" ? `|${sanitizeSubject(subject)}` : "";
+  const key = `${type}${subjKey}|${vehicle.year}|${String(vehicle.make).toLowerCase()}|${String(vehicle.model).toLowerCase()}`;
   const cached = cacheGet(key);
   if (cached) return { ...base, images: cached };
 
@@ -177,7 +227,7 @@ export async function diagramLookup(vehicle, type) {
   if (!apiKey) return base; // fail-soft: no key -> links-only
 
   try {
-    const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(buildQuery(vehicle, type))}&count=${RAW_COUNT}&safesearch=strict&country=us`;
+    const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(buildQuery(vehicle, type, subject))}&count=${RAW_COUNT}&safesearch=strict&country=us`;
     const res = await fetch(url, {
       headers: { Accept: "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": apiKey },
     });

@@ -45,6 +45,7 @@ import {
   ASK_TOOLS,
   ASK_TOOL_HANDLERS,
   runAskToolLoop,
+  runTurnToolLoop,
 } from "./askToolLoop.js";
 import { diagramLookup, DIAGRAM_TYPES } from "./diagramLookup.js";
 import { initDb, query, isDbReady } from "./db.js";
@@ -486,7 +487,11 @@ app.get("/api/models", async (req, res) => {
 // to links-only (the webSearchUrl fallback), so this endpoint can't 500 on a
 // retrieval failure. Reads nothing protected; spends only on supported types.
 app.post("/api/diagram-lookup", async (req, res) => {
-  const { vehicle, type } = req.body || {};
+  // `subject` is additive (the "parts" type) — stale bundles never send it and
+  // are unaffected. The endpoint itself is retained one generation for stale
+  // bundles (the in-app Find-a-diagram button was removed in the A+ build; the
+  // diagram_lookup tool path is the live consumer).
+  const { vehicle, type, subject } = req.body || {};
   if (!vehicle || typeof vehicle !== "object" || !vehicle.year || !vehicle.make || !vehicle.model) {
     return res.status(400).json({ error: "Missing or invalid 'vehicle' (year, make, model)." });
   }
@@ -494,7 +499,7 @@ app.post("/api/diagram-lookup", async (req, res) => {
     return res.status(400).json({ error: "Missing 'type'." });
   }
   try {
-    const result = await diagramLookup(vehicle, type); // never throws
+    const result = await diagramLookup(vehicle, type, subject); // never throws
     return res.json(result);
   } catch (err) {
     // Defensive: should be unreachable (diagramLookup is fail-soft), but never
@@ -1440,6 +1445,11 @@ const ASSESS_TOOL = {
           required: ["point", "supports"],
         },
       },
+      spoken_summary: {
+        type: "string",
+        description:
+          "OPTIONAL. Natural colleague-style prose — how you would SAY this assessment out loud to the technician (the app shows this as your chat message and folds the structured fields behind a details view). 2–6 plain sentences narrating the SAME move as the structured fields, and NEVER exceeding them: no more certainty than the confidence enum you set (STRONGLY_SUPPORTED is the ceiling — never 'confirmed'/'certain'/'definitely'), no numeric factory specification that was not provided as verified data (those route to unverified_specs_needed and the prose says the value needs verifying), never a recall presented as evidence, never engine-off freeze-frame default values cited as a reading. Plain speech only — no headings, no lists, no field names.",
+      },
       relevant_recall_campaigns: {
         type: "array",
         items: { type: "string" },
@@ -1539,6 +1549,40 @@ function softValidateAssessmentPlan(assessment) {
     console.warn(
       `[assess] soft-validate of capture_plan failed: ${e?.message ?? e}`,
     );
+  }
+  return assessment;
+}
+
+// ---- Soft-validator + tripwire for the A+ voice field (spoken_summary) ----
+//
+// spoken_summary is ADDITIVE NARRATION on top of the structured assessment; a
+// missing/malformed value is DROPPED (fail-soft, never thrown) so the client
+// falls back to the structured-card rendering. The tripwire is LOG-ONLY: it
+// scans the prose for confidence claims above the schema ceiling (the enum
+// hard-caps structured confidence at STRONGLY_SUPPORTED; the voice section +
+// schema description bind the prose to the same ceiling). False positives are
+// acceptable — it flags for review; it never blocks, edits, or 500s.
+const VOICE_OVERCLAIM_RE =
+  /\b(confirmed|definitely|certainly|certain that|without a doubt|no doubt|guaranteed|100\s*%|positive that)\b/i;
+function softValidateSpokenSummary(assessment) {
+  try {
+    const v = assessment?.spoken_summary;
+    if (v === undefined) return assessment;
+    if (typeof v !== "string" || v.trim().length === 0) {
+      console.warn(
+        "[assess] malformed spoken_summary dropped (fail-soft → structured-card rendering).",
+      );
+      delete assessment.spoken_summary;
+      return assessment;
+    }
+    if (VOICE_OVERCLAIM_RE.test(v)) {
+      console.warn(
+        `[assess] spoken_summary TRIPWIRE (log-only): confidence-overclaim wording detected: ` +
+          `"${v.slice(0, 160)}"`,
+      );
+    }
+  } catch (e) {
+    console.warn(`[assess] soft-validate of spoken_summary failed: ${e?.message ?? e}`);
   }
   return assessment;
 }
@@ -1753,9 +1797,10 @@ async function runStructuredAssessment({
   // Soft-validate the 2C-1 monitoring plan: drop any missing/malformed
   // capture_plan (fail-soft → Stage-1 prose fallback), never throw. Then
   // soft-validate the Stage-3 finding_options (drop a malformed block → plain
-  // inspection). Both mutate-in-place + return the assessment; both never throw.
-  const assessment = softValidateFindingOptions(
-    softValidateAssessmentPlan(toolUse.input),
+  // inspection) and the A+ spoken_summary (drop malformed → card rendering).
+  // All mutate-in-place + return the assessment; all never throw.
+  const assessment = softValidateSpokenSummary(
+    softValidateFindingOptions(softValidateAssessmentPlan(toolUse.input)),
   );
   return { ok: true, assessment, cost: costData ?? null };
 }
@@ -2105,34 +2150,60 @@ app.post("/api/diagnose-turn", async (req, res) => {
   });
 
   try {
-    const response = await callAnthropicWithRetry(() =>
-      client.messages.create({
-        model: DIAGNOSE_MODEL,
-        max_tokens: 8192,
-        system: systemBlocks,
-        tools: UNIFIED_TURN_TOOLS,
-        tool_choice: { type: "any" },
-        messages: buildMessages(vehicle, messages),
-      }),
-    );
-
-    const costData = logApiCost(response.usage, DIAGNOSE_MODEL, {
-      sessionId: typeof sessionId === "string" ? sessionId : null,
-      callType: "diagnose-turn",
-      caseId: typeof caseId === "string" ? caseId : null,
+    // Merge-plan Phase 5: the unified turn now runs an execute-then-continue
+    // retrieval loop (runTurnToolLoop) instead of a single call. spec_lookup /
+    // diagram_lookup results feed back mid-turn; the brain still commits to
+    // exactly ONE move tool (retrieval rounds capped at 2, then a forced-move
+    // call carrying only the move tools). Each underlying call logs its cost
+    // individually (callType "diagnose-turn" + caseId); the response returns
+    // ONE summed cost (the /api/ask discipline).
+    const loopCtx = { vehicle, toolInvoked: false };
+    const loopSessionId = typeof sessionId === "string" ? sessionId : null;
+    const loopCaseId = typeof caseId === "string" ? caseId : null;
+    const { toolUse, cost, retrievalInvoked, iterations } = await runTurnToolLoop({
+      createMessage: (params) =>
+        callAnthropicWithRetry(() => client.messages.create(params)),
+      logCost: (usage) =>
+        logApiCost(usage, DIAGNOSE_MODEL, {
+          sessionId: loopSessionId,
+          callType: "diagnose-turn",
+          caseId: loopCaseId,
+        }),
+      model: DIAGNOSE_MODEL,
+      maxTokens: 8192,
+      systemBlocks,
+      messages: buildMessages(vehicle, messages),
+      moveTools: UNIFIED_TURN_TOOLS,
+      retrievalTools: ASK_TOOLS,
+      handlers: ASK_TOOL_HANDLERS,
+      ctx: loopCtx,
     });
 
-    const toolUse = response.content.find((b) => b.type === "tool_use");
+    if (retrievalInvoked) {
+      console.log(
+        `[diagnose-turn] retrieval fired (iterations=${iterations}, diagrams=${loopCtx.diagrams ? "yes" : "no"})`,
+      );
+    }
+    const costData = cost.cost.total > 0 ? cost : null;
+
     if (!toolUse) {
       return res.status(502).json({
         error: "Model did not return a turn. Try again.",
       });
     }
 
+    // Diagram results ride back ONLY on conversational turns (question /
+    // diagnosis — the same surfaces /api/ask uses). On an assessment move
+    // there is no conversational surface this turn: drop-with-log, no schema
+    // change (the prompt tells the brain to look diagrams up on ask/conclude
+    // turns).
+    const diagrams = loopCtx.diagrams ?? null;
+
     if (toolUse.name === "ask_followup_question") {
       return res.json({
         turn: { kind: "question", question: toolUse.input.question },
-        cost: costData ?? null,
+        cost: costData,
+        diagrams,
       });
     }
     if (toolUse.name === "emit_diagnostic_assessment") {
@@ -2140,19 +2211,26 @@ app.post("/api/diagnose-turn", async (req, res) => {
       // as /api/assess. A DATA_CAPTURE next_step here IS the "request a capture"
       // move; the phone runs it and this assessment becomes the evidence-update
       // priorAssessment. softValidateFindingOptions then drops a malformed
-      // Stage-3 finding_options block (→ plain inspection). Both never throw.
-      const assessment = softValidateFindingOptions(
-        softValidateAssessmentPlan(toolUse.input),
+      // Stage-3 finding_options block (→ plain inspection); softValidateSpokenSummary
+      // drops a malformed A+ voice field (→ card rendering). None ever throw.
+      const assessment = softValidateSpokenSummary(
+        softValidateFindingOptions(softValidateAssessmentPlan(toolUse.input)),
       );
+      if (diagrams) {
+        console.log(
+          "[diagnose-turn] diagram results dropped (assessment move — no conversational surface this turn)",
+        );
+      }
       return res.json({
         turn: { kind: "assessment", assessment },
-        cost: costData ?? null,
+        cost: costData,
       });
     }
     if (toolUse.name === "provide_diagnosis") {
       return res.json({
         turn: { kind: "diagnosis", diagnosis: toolUse.input },
-        cost: costData ?? null,
+        cost: costData,
+        diagrams,
       });
     }
 

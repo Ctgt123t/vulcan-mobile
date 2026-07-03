@@ -14,7 +14,8 @@
     "import:nhtsa-makes": "node scripts/importNhtsaMakes.js",
     "extract:pdf": "node scripts/extractFromPdf.js",
     "test:ask-loop": "node scripts/askToolLoopTest.js",
-    "test:ask-loop:integration": "node scripts/askToolLoopIntegrationTest.js"
+    "test:ask-loop:integration": "node scripts/askToolLoopIntegrationTest.js",
+    "test:turn-loop": "node scripts/turnToolLoopTest.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
