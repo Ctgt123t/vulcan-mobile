@@ -211,37 +211,11 @@ export async function ask(
   return { text: resp.text ?? "", cost: resp.cost ?? null, diagrams: resp.diagrams ?? null };
 }
 
-// Direct diagram lookup (the mid-diagnosis "Find a diagram" affordance hits this
-// straight, NOT through the diagnosis brain). Fail-soft on the client too: any
-// error degrades to a links-only result with a prebuilt web-search URL so the
-// UI never dead-ends.
-export async function diagramLookup(
-  vehicle: VehicleInfo,
-  type: "fuse" | "wiring" | "component",
-): Promise<DiagramLookupResult> {
-  const fallback: DiagramLookupResult = {
-    type,
-    images: [],
-    webSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(
-      `${vehicle.year} ${vehicle.make} ${vehicle.model} ${type} diagram`,
-    )}`,
-    attribution: "Powered by Brave",
-    supported: type === "fuse" || type === "component",
-  };
-  if (!BASE_URL || BASE_URL.length === 0) return fallback;
-  try {
-    const res = await fetch(`${BASE_URL}/api/diagram-lookup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
-      body: JSON.stringify({ vehicle, type }),
-    });
-    if (!res.ok) return fallback;
-    const json = (await res.json()) as DiagramLookupResult;
-    return json && Array.isArray(json.images) ? json : fallback;
-  } catch {
-    return fallback;
-  }
-}
+// (A+ build, 2026-07-02: the diagramLookup() client — the direct "Find a
+// diagram" modal call — was removed with the modal. Diagrams now reach the
+// diagnostic thread through the brain's diagram_lookup tool (they ride the
+// /api/diagnose-turn and /api/ask responses). The server endpoint
+// /api/diagram-lookup remains one generation for stale bundles.)
 
 // (Post-merge cleanup, 2026-07-02: the assess() client + AssessError — the
 // retired SB4 parallel /api/assess fire — were removed with their last dead
@@ -420,7 +394,7 @@ export async function diagnoseTurn(params: {
   }
 
   const resp = json as DiagnoseTurnResponse;
-  return { turn: resp.turn, cost: resp.cost ?? null };
+  return { turn: resp.turn, cost: resp.cost ?? null, diagrams: resp.diagrams ?? null };
 }
 
 // Merge-plan Phase 2 (metering): mark the escalation event — one flat

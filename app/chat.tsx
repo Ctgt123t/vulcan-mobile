@@ -9,7 +9,6 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,7 +21,6 @@ import AddVehicleModal from "../components/AddVehicleModal";
 import DiagnosisActions from "../components/DiagnosisActions";
 import DiagramResults from "../components/DiagramResults";
 import { VehiclePickerRow } from "../components/VehiclePicker";
-import FindDiagramModal from "../components/FindDiagramModal";
 import Navbar from "../components/Navbar";
 import PhotoThumb from "../components/PhotoThumb";
 import RecallList from "../components/RecallList";
@@ -32,7 +30,7 @@ import VehicleBar from "../components/VehicleBar";
 import VinScanner from "../components/VinScanner";
 import Background from "../components/ui/Background";
 import GlassCard from "../components/ui/GlassCard";
-import { NextStepBlock } from "../components/assessment/parts";
+import { Drawer, NextStepBlock, VerifyCue } from "../components/assessment/parts";
 import CaptureCard from "../components/assessment/CaptureCard";
 import FindingCard from "../components/assessment/FindingCard";
 import ConditionSelector from "../components/assessment/ConditionSelector";
@@ -134,6 +132,7 @@ import { HIT_TARGET, colors, fonts, radii } from "../lib/theme";
 import type {
   AssistantTurn,
   ChatMessage,
+  DiagramLookupResult,
   FinalDiagnosis,
   ImageAttachment,
   VehicleInfo,
@@ -303,9 +302,8 @@ export default function Screen() {
   const [intakePhoto, setIntakePhoto] = useState<ImageAttachment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // "Find a diagram" surface — opens a modal that hits POST /api/diagram-lookup
-  // directly (NOT the diagnosis brain). Additive; nothing else depends on it.
-  const [diagramModalOpen, setDiagramModalOpen] = useState(false);
+  // (A+ build: the "Find a diagram" button + modal were removed — diagrams now
+  // reach the thread through the brain's diagram_lookup tool on both channels.)
   // PULL_CODES (Item B): the assessment entry whose brain-requested code re-pull
   // is in flight (adapter is being read). Drives the in-progress card state; null
   // when no pull is running. One pull at a time.
@@ -500,6 +498,10 @@ export default function Screen() {
   const [decodeError, setDecodeError] = useState<string | null>(null);
   const [decoded, setDecoded] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  // Part B (A+ confirm-beat intake): when the vehicle is already known
+  // (context/VIN/escalation prefill), the VIN + manual-entry card collapses to
+  // a one-line summary; this opens the full editor back up.
+  const [editVehicleOpen, setEditVehicleOpen] = useState(false);
   const lastDecodedRef = useRef<string>("");
 
   const [confirmedDone, setConfirmedDone] = useState(false);
@@ -1063,7 +1065,12 @@ export default function Screen() {
       complaint: symptom.trim(),
       mileage: vehicle.mileage,
       operatingCondition: condition,
-      messages: msgs,
+      // Phase 5: diagram payloads never persist (Brave ToS — transient only).
+      // Stripped at WRITE here; the case migrator's sanitizeMessages also
+      // strips at LOAD (same write-AND-load discipline as light threads).
+      messages: msgs.map((m) =>
+        m.diagrams ? { role: m.role, content: m.content, ...(m.image ? { image: m.image } : {}) } : m,
+      ),
       assessments: savedAssessments,
       linkedRecordIds: meta.linkedRecordIds,
       loggerSessionIds: meta.loggerSessionIds,
@@ -1669,7 +1676,10 @@ export default function Screen() {
   // append an assistant ChatMessage (AssistantTurn JSON, as today); assessment
   // appends a done AssessmentEntry (a DATA_CAPTURE one arms the existing Start
   // gate). No card / anchored-slot / keyboard changes.
-  function dispatchTurn(turn: DiagnoseTurn): void {
+  // Phase 5: `diagrams` (the brain's diagram_lookup results this turn) attach to
+  // the appended assistant message IN-MEMORY ONLY — saveCase strips them at
+  // write and the case migrator strips them at load (Brave ToS: transient).
+  function dispatchTurn(turn: DiagnoseTurn, diagrams?: DiagramLookupResult | null): void {
     if (turn.kind === "assessment") {
       const id = ++assessmentIdRef.current;
       const afterMessageIndex = Math.max(messagesRef.current.length - 1, 0);
@@ -1702,10 +1712,12 @@ export default function Screen() {
       turn.kind === "question"
         ? { kind: "question", question: turn.question, diagnosis: null }
         : { kind: "diagnosis", question: null, diagnosis: turn.diagnosis };
-    const appended: ChatMessage[] = [
-      ...messagesRef.current,
-      { role: "assistant", content: JSON.stringify(assistantTurn) },
-    ];
+    const assistantMsg: ChatMessage = {
+      role: "assistant",
+      content: JSON.stringify(assistantTurn),
+    };
+    if (diagrams) assistantMsg.diagrams = diagrams; // in-memory only (stripped at save)
+    const appended: ChatMessage[] = [...messagesRef.current, assistantMsg];
     setMessages(appended);
     messagesRef.current = appended;
     saveCase({ messages: appended });
@@ -1810,7 +1822,7 @@ export default function Screen() {
         sessionId: diagnosticLogger.getCurrentSessionId(),
         caseId: caseMetaRef.current?.id ?? null,
       });
-      dispatchTurn(result.turn);
+      dispatchTurn(result.turn, result.diagrams);
       if (result.cost) {
         diagnosticLogger.log({
           type: "diagnose_turn",
@@ -1837,12 +1849,15 @@ export default function Screen() {
     }
   }
 
+  // Part B (A+): mileage is no longer a hard gate — it's a light optional
+  // field, and the brain asks for it conversationally when it matters (the
+  // server already renders a missing mileage as "Not provided"). Vehicle
+  // identity + complaint remain required (the engine's context contract).
   function intakeValid(): boolean {
     return (
       vehicle.year.trim().length > 0 &&
       vehicle.make.trim().length > 0 &&
       vehicle.model.trim().length > 0 &&
-      vehicle.mileage.trim().length > 0 &&
       symptom.trim().length > 0
     );
   }
@@ -2240,6 +2255,13 @@ export default function Screen() {
   }
 
   if (phase === "intake") {
+    // Part B (A+): the confirm beat. With a known vehicle the form collapses
+    // to a summary + prefilled complaint — one tap when everything carried in.
+    const vehicleKnown =
+      vehicle.year.trim().length > 0 &&
+      vehicle.make.trim().length > 0 &&
+      vehicle.model.trim().length > 0;
+    const showVehicleEditor = !vehicleKnown || editVehicleOpen;
     return (
       <Background>
         <SafeAreaView style={styles.safeTransparent} edges={["top", "left", "right"]}>
@@ -2264,8 +2286,9 @@ export default function Screen() {
           >
             <Text style={styles.h1}>Diagnose</Text>
             <Text style={styles.subtitle}>
-              Scan the VIN on the driver&apos;s door jamb, connect an OBD2
-              adapter to read it automatically, or enter it manually.
+              {vehicleKnown
+                ? "Confirm the vehicle and complaint, then start."
+                : "Scan the VIN on the driver's door jamb, connect an OBD2 adapter to read it automatically, or enter it manually."}
             </Text>
 
             {cases.length > 0 && (
@@ -2356,65 +2379,146 @@ export default function Screen() {
             )}
 
             <View style={styles.card}>
-              <Text style={styles.label}>VIN</Text>
-              <View style={styles.vinRow}>
-                <TextInput
-                  style={[styles.input, styles.vinInput]}
-                  value={vin}
-                  onChangeText={(v) =>
-                    setVin(v.replace(/[^A-Za-z0-9]/g, "").toUpperCase())
-                  }
-                  placeholder="1HGBH41JXMN109186"
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  maxLength={17}
-                />
-                <TouchableOpacity
-                  style={styles.scanBtn}
-                  onPress={() => setScannerOpen(true)}
-                  activeOpacity={0.85}
-                  accessibilityLabel="Scan VIN with camera"
-                >
-                  <Ionicons name="camera-outline" size={16} color={colors.bg} />
-                  <Text style={styles.scanBtnText}>Scan</Text>
-                </TouchableOpacity>
-              </View>
-
-              {decoding && (
-                <View style={styles.statusRow}>
-                  <ActivityIndicator size="small" color={colors.accent} />
-                  <Text style={styles.statusText}>Decoding VIN…</Text>
+              {/* Part B: known vehicle → compact confirm summary; the full
+                  VIN/manual editor stays one tap away ("Change"). Unknown
+                  vehicle (fresh direct entry) → the full editor as before. */}
+              {!showVehicleEditor && (
+                <View style={styles.singleField}>
+                  <Text style={styles.label}>VEHICLE</Text>
+                  <View style={styles.vehicleConfirmRow}>
+                    <View style={styles.flex}>
+                      <Text style={styles.decodedLine}>
+                        {[vehicle.year, vehicle.make, vehicle.model]
+                          .filter((s) => s && s.length > 0)
+                          .join(" ")}
+                      </Text>
+                      {vehicle.trim ? (
+                        <Text style={styles.decodedSub}>Trim: {vehicle.trim}</Text>
+                      ) : null}
+                      {vehicle.engineType ? (
+                        <Text style={styles.decodedSub}>
+                          Engine: {vehicle.engineType}
+                        </Text>
+                      ) : null}
+                      {vin.trim().length > 0 ? (
+                        <Text style={styles.decodedSub}>VIN: {vin.trim()}</Text>
+                      ) : null}
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setEditVehicleOpen(true)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Change vehicle"
+                      hitSlop={8}
+                    >
+                      <Text style={styles.disclosureText}>Change</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
 
-              {decodeError && !decoding && (
-                <View style={[styles.errorBox, styles.errorBoxTight]}>
-                  <Text style={styles.errorText}>{decodeError}</Text>
-                </View>
-              )}
+              {showVehicleEditor && (
+                <>
+                  <Text style={styles.label}>VIN</Text>
+                  <View style={styles.vinRow}>
+                    <TextInput
+                      style={[styles.input, styles.vinInput]}
+                      value={vin}
+                      onChangeText={(v) =>
+                        setVin(v.replace(/[^A-Za-z0-9]/g, "").toUpperCase())
+                      }
+                      placeholder="1HGBH41JXMN109186"
+                      placeholderTextColor={colors.muted}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      maxLength={17}
+                    />
+                    <TouchableOpacity
+                      style={styles.scanBtn}
+                      onPress={() => setScannerOpen(true)}
+                      activeOpacity={0.85}
+                      accessibilityLabel="Scan VIN with camera"
+                    >
+                      <Ionicons name="camera-outline" size={16} color={colors.bg} />
+                      <Text style={styles.scanBtnText}>Scan</Text>
+                    </TouchableOpacity>
+                  </View>
 
-              {decoded && !decoding && (
-                <View style={styles.decodedBox}>
-                  <Text style={styles.decodedLabel}>DECODED</Text>
-                  <Text style={styles.decodedLine}>
-                    {[vehicle.year, vehicle.make, vehicle.model]
-                      .filter((s) => s && s.length > 0)
-                      .join(" ") || "(no values returned)"}
-                  </Text>
-                  {vehicle.trim ? (
-                    <Text style={styles.decodedSub}>Trim: {vehicle.trim}</Text>
-                  ) : null}
-                  {vehicle.engineType ? (
-                    <Text style={styles.decodedSub}>
-                      Engine: {vehicle.engineType}
+                  {decoding && (
+                    <View style={styles.statusRow}>
+                      <ActivityIndicator size="small" color={colors.accent} />
+                      <Text style={styles.statusText}>Decoding VIN…</Text>
+                    </View>
+                  )}
+
+                  {decodeError && !decoding && (
+                    <View style={[styles.errorBox, styles.errorBoxTight]}>
+                      <Text style={styles.errorText}>{decodeError}</Text>
+                    </View>
+                  )}
+
+                  {decoded && !decoding && (
+                    <View style={styles.decodedBox}>
+                      <Text style={styles.decodedLabel}>DECODED</Text>
+                      <Text style={styles.decodedLine}>
+                        {[vehicle.year, vehicle.make, vehicle.model]
+                          .filter((s) => s && s.length > 0)
+                          .join(" ") || "(no values returned)"}
+                      </Text>
+                      {vehicle.trim ? (
+                        <Text style={styles.decodedSub}>Trim: {vehicle.trim}</Text>
+                      ) : null}
+                      {vehicle.engineType ? (
+                        <Text style={styles.decodedSub}>
+                          Engine: {vehicle.engineType}
+                        </Text>
+                      ) : null}
+                    </View>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.disclosureBtn}
+                    onPress={() => setManualOpen((m) => !m)}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Toggle manual vehicle entry"
+                  >
+                    <Text style={styles.disclosureText}>
+                      {manualOpen ? "▾  " : "▸  "}Enter vehicle info manually
+                      instead
                     </Text>
-                  ) : null}
-                </View>
+                  </TouchableOpacity>
+
+                  {manualOpen && (
+                    <View style={styles.manualBox}>
+                      <VehiclePickerRow
+                        year={vehicle.year}
+                        make={vehicle.make}
+                        model={vehicle.model}
+                        onYear={(v) => updateVehicle("year", v)}
+                        onMake={(v) => updateVehicle("make", v)}
+                        onModel={(v) => updateVehicle("model", v)}
+                      />
+                      <View style={styles.row2}>
+                        <Field
+                          label="Trim Level"
+                          value={vehicle.trim ?? ""}
+                          onChangeText={(v) => updateVehicle("trim", v)}
+                          placeholder="LE, XSE, TRD"
+                        />
+                        <Field
+                          label="Engine Type"
+                          value={vehicle.engineType ?? ""}
+                          onChangeText={(v) => updateVehicle("engineType", v)}
+                          placeholder="2.5L 4-cyl, 3.5L V6"
+                        />
+                      </View>
+                    </View>
+                  )}
+                </>
               )}
 
               <View style={styles.singleField}>
-                <Text style={styles.label}>MILEAGE</Text>
+                <Text style={styles.label}>MILEAGE (OPTIONAL)</Text>
                 <TextInput
                   style={styles.input}
                   value={vehicle.mileage}
@@ -2424,45 +2528,6 @@ export default function Screen() {
                   keyboardType="number-pad"
                 />
               </View>
-
-              <TouchableOpacity
-                style={styles.disclosureBtn}
-                onPress={() => setManualOpen((m) => !m)}
-                activeOpacity={0.7}
-                accessibilityLabel="Toggle manual vehicle entry"
-              >
-                <Text style={styles.disclosureText}>
-                  {manualOpen ? "▾  " : "▸  "}Enter vehicle info manually
-                  instead
-                </Text>
-              </TouchableOpacity>
-
-              {manualOpen && (
-                <View style={styles.manualBox}>
-                  <VehiclePickerRow
-                    year={vehicle.year}
-                    make={vehicle.make}
-                    model={vehicle.model}
-                    onYear={(v) => updateVehicle("year", v)}
-                    onMake={(v) => updateVehicle("make", v)}
-                    onModel={(v) => updateVehicle("model", v)}
-                  />
-                  <View style={styles.row2}>
-                    <Field
-                      label="Trim Level"
-                      value={vehicle.trim ?? ""}
-                      onChangeText={(v) => updateVehicle("trim", v)}
-                      placeholder="LE, XSE, TRD"
-                    />
-                    <Field
-                      label="Engine Type"
-                      value={vehicle.engineType ?? ""}
-                      onChangeText={(v) => updateVehicle("engineType", v)}
-                      placeholder="2.5L 4-cyl, 3.5L V6"
-                    />
-                  </View>
-                </View>
-              )}
 
               {isConnected && (
                 <View style={styles.singleField}>
@@ -2655,22 +2720,7 @@ export default function Screen() {
             }
           />
         )}
-        <View style={styles.diagramBarRow}>
-          <Pressable
-            style={styles.findDiagramBtn}
-            onPress={() => setDiagramModalOpen(true)}
-            accessibilityRole="button"
-          >
-            <Text style={styles.findDiagramText}>🗺  Find a diagram</Text>
-          </Pressable>
-        </View>
       </View>
-
-      <FindDiagramModal
-        visible={diagramModalOpen}
-        vehicle={vehicle}
-        onClose={() => setDiagramModalOpen(false)}
-      />
 
       <AddVehicleModal
         visible={vehicleModalOpen}
@@ -3106,6 +3156,9 @@ function MessageRow({ message }: { message: ChatMessage }) {
         <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
         <View style={[styles.bubble, styles.bubbleAssistant]}>
           <Text style={styles.bubbleText}>{turn.question}</Text>
+          {/* Phase 5: brain-retrieved diagrams ride conversational turns
+              (in-memory only — stripped at save/load, Brave ToS). */}
+          {message.diagrams && <DiagramResults result={message.diagrams} />}
         </View>
       </View>
     );
@@ -3115,6 +3168,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
     <View style={styles.assistantTurn}>
       <Text style={styles.assistantLabel}>DIAGNOSTIC ASSISTANT</Text>
       <Results data={turn.diagnosis} />
+      {message.diagrams && <DiagramResults result={message.diagrams} />}
     </View>
   );
 }
@@ -3187,9 +3241,30 @@ function AssessmentThreadCard({
         })()
       : null;
 
+  // A+ voice: when the brain narrated this assessment (spoken_summary), the
+  // prose IS the message — rendered as a normal assistant bubble — and the
+  // structured card folds behind a "Details" disclosure. The disclosure toggle
+  // carries the VERIFY cue when unverified specs exist, so the safety flag
+  // stays surface-visible even with the card folded. Absent/empty voice
+  // (older cases, /api/assess-era saves, or a turn the brain omitted it) ⇒
+  // today's card renders exactly as before. Action affordances (Start
+  // monitoring, finding buttons, code pull) stay OUTSIDE the disclosure.
+  const voice =
+    entry.slot.status === "done" &&
+    typeof entry.slot.assessment.spoken_summary === "string" &&
+    entry.slot.assessment.spoken_summary.trim().length > 0
+      ? entry.slot.assessment.spoken_summary.trim()
+      : null;
+  const voiceHasSpecs =
+    voice !== null &&
+    entry.slot.status === "done" &&
+    (entry.slot.assessment.unverified_specs_needed ?? []).length > 0;
+
   return (
     <View style={styles.assessmentWrap}>
-      <Text style={styles.assistantLabel}>STRUCTURED ASSESSMENT</Text>
+      <Text style={styles.assistantLabel}>
+        {voice ? "DIAGNOSTIC ASSISTANT" : "STRUCTURED ASSESSMENT"}
+      </Text>
       {entry.slot.status === "running" && (
         <View style={[styles.bubble, styles.bubbleAssistant]}>
           <View style={styles.loadingRow}>
@@ -3200,9 +3275,17 @@ function AssessmentThreadCard({
           </View>
         </View>
       )}
-      {entry.slot.status === "done" && (
-        <NextStepBlock assessment={entry.slot.assessment} />
-      )}
+      {entry.slot.status === "done" &&
+        (voice ? (
+          <View style={[styles.bubble, styles.bubbleAssistant]}>
+            <Text style={styles.bubbleText}>{voice}</Text>
+            <Drawer label="Details" cue={voiceHasSpecs ? <VerifyCue /> : undefined}>
+              <NextStepBlock assessment={entry.slot.assessment} />
+            </Drawer>
+          </View>
+        ) : (
+          <NextStepBlock assessment={entry.slot.assessment} />
+        ))}
       {entry.slot.status === "error" && (
         <View style={[styles.errorBox, styles.assessmentErrorBox]}>
           <Text style={styles.errorText}>
@@ -3509,6 +3592,12 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 13,
     marginTop: 2,
+  },
+  // Part B confirm beat: the known-vehicle summary row (summary + "Change").
+  vehicleConfirmRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
   },
   disclosureBtn: {
     marginTop: 14,
@@ -3997,24 +4086,6 @@ const styles = StyleSheet.create({
   },
   composerWrap: {
     flexDirection: "column",
-  },
-  diagramBarRow: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingBottom: 6,
-  },
-  findDiagramBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: colors.steelChip,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.steelChipBorder,
-  },
-  findDiagramText: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: "600",
   },
   answerRow: {
     flexDirection: "row",

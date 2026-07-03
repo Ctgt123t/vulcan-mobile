@@ -7,7 +7,7 @@
 // and Stage 3 (adaptive stance switching) without structural changes here.
 // ============================================================================
 
-import type { FinalDiagnosis } from "./types";
+import type { DiagramLookupResult, FinalDiagnosis } from "./types";
 
 // Operating condition declared by the technician before triggering assessment.
 // This is intentionally a human declaration, not a phone inference — the tech
@@ -250,6 +250,16 @@ export interface DiagnosticAssessment {
   data_ceiling_note: string; // empty string = no ceiling noted
   unverified_specs_needed: UnverifiedSpec[];
   decisive_reasons?: DecisiveReason[]; // optional, max 3 — unified turn only
+  // A+ voice (2026-07-02): natural colleague-style prose narrating this
+  // assessment — rendered as the assistant chat bubble, with the structured
+  // card folded behind a details disclosure. OPTIONAL + additive (server
+  // drops a malformed value fail-soft; /api/assess's frozen prompt never asks
+  // for it; older saved cases lack it) — absent ⇒ the card renders as before.
+  // SAFETY: narration only — it must never exceed the structured fields (the
+  // confidence enum stays the ceiling; unverified numbers stay in
+  // unverified_specs_needed). Bound by the UNIFIED_VOICE_SECTION prompt + the
+  // schema description + a server-side log-only tripwire.
+  spoken_summary?: string;
   // Post-diagnosis advisory (NOT evidence): populated by the unified brain ONLY
   // when this assessment IS the conclusion, so a conclusion reached via the
   // assessment path can still surface relevant recalls/TSBs (parity with
@@ -306,4 +316,9 @@ export type DiagnoseTurn =
 export interface DiagnoseTurnResponse {
   turn: DiagnoseTurn;
   cost: ApiCostData | null;
+  // Merge-plan Phase 5: real diagram results the diagram_lookup tool surfaced
+  // during this turn's retrieval loop. Present ONLY on conversational turns
+  // (question / diagnosis — the server drops-with-log on an assessment move).
+  // In-memory only on the client (never persisted — Brave ToS), same as Ask.
+  diagrams?: DiagramLookupResult | null;
 }
